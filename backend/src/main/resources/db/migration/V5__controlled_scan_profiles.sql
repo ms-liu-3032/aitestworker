@@ -1,0 +1,42 @@
+CREATE TABLE page_scan_profile (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    project_id BIGINT NOT NULL,
+    source_key VARCHAR(64) NOT NULL,
+    source_label VARCHAR(128) NOT NULL,
+    page_label VARCHAR(255) NOT NULL,
+    page_url VARCHAR(1024) NOT NULL,
+    route_path VARCHAR(512) NOT NULL,
+    page_title VARCHAR(512),
+    breadcrumb_path VARCHAR(512),
+    headings_json LONGTEXT,
+    field_labels_json LONGTEXT,
+    action_labels_json LONGTEXT,
+    dialog_titles_json LONGTEXT,
+    body_preview LONGTEXT,
+    status VARCHAR(32) NOT NULL DEFAULT 'ACTIVE',
+    created_by BIGINT,
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL,
+    INDEX idx_page_scan_project_route (project_id, route_path(255)),
+    UNIQUE KEY uk_page_scan_profile (project_id, source_key, route_path(255))
+);
+
+CREATE TABLE controlled_scan_job (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    project_id BIGINT NOT NULL,
+    job_name VARCHAR(255) NOT NULL,
+    source_keys_json TEXT NOT NULL,
+    model_config_id BIGINT,
+    status VARCHAR(32) NOT NULL,
+    prompt_snapshot LONGTEXT,
+    output_summary LONGTEXT,
+    profile_count INT NOT NULL DEFAULT 0,
+    error_message TEXT,
+    created_by BIGINT,
+    started_at DATETIME,
+    finished_at DATETIME,
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL,
+    INDEX idx_controlled_scan_project (project_id),
+    INDEX idx_controlled_scan_status (status)
+);

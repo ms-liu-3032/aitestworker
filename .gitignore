@@ -1,0 +1,9 @@
+.DS_Store
+
+backend/target/
+frontend-react/node_modules/
+frontend-react/dist/
+
+.local/
+release/
+*.log

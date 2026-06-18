@@ -1,0 +1,16 @@
+package com.company.aitest.generation.session;
+
+public enum UserIntent {
+    SUBMIT_REQUIREMENT,
+    CHOOSE_TOM_MODE,
+    SUPPLEMENT_REQUIREMENT,
+    REANALYZE_REQUIREMENT,
+    CONFIRM_ANALYSIS,
+    SKIP_CONFIRMATION,
+    GENERATE_CASES,
+    EDIT_CASES,
+    SAVE_DRAFT,
+    SUBMIT_FORMAL,
+    EXPORT_CASES,
+    UNKNOWN
+}
