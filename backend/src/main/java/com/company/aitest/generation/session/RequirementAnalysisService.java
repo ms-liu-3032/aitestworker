@@ -218,9 +218,17 @@ public class RequirementAnalysisService {
         }
         int newSubVersion = currentSubVersion + 1;
 
-        // 3. Build semantic context
+        // 3. Build semantic context — 合并上一版需求、本次补充、已有澄清答案
+        StringBuilder semanticInput = new StringBuilder();
+        semanticInput.append(previousAnalysis.requirementText() != null ? previousAnalysis.requirementText() : "");
+        semanticInput.append("\n").append(supplementContent);
+        if (previousAnalysis.clarificationAnswers() != null
+                && !previousAnalysis.clarificationAnswers().isBlank()
+                && !"[]".equals(previousAnalysis.clarificationAnswers())) {
+            semanticInput.append("\n").append(previousAnalysis.clarificationAnswers());
+        }
         ProjectSemanticContextService.BuildResult semanticContext =
-                buildSemanticEvidence(projectId, previousAnalysis.requirementText());
+                buildSemanticEvidence(projectId, semanticInput.toString().trim());
 
         // 4. Ensure internal task exists
         Long taskId = session.executionTaskId();
@@ -587,16 +595,30 @@ public class RequirementAnalysisService {
 
         if (analysisTitles.isEmpty()) return;
 
-        // 2. 查询已生成用例的 sourceTestPoint（从 source_refs_json 中提取）
+        // 2. 查询当前分析版本的草稿的 sourceTestPoint（兼容多种来源字段）
+        // 按 analysis_version 过滤，避免历史草稿误判覆盖
         List<String> generatedTitles = jdbc.sql(
-                "SELECT source_refs_json FROM test_case_draft WHERE session_id = :sid")
+                "SELECT source_refs_json, case_status FROM test_case_draft WHERE session_id = :sid AND analysis_version = :aver")
                 .param("sid", sessionId)
+                .param("aver", analysis.version())
                 .query((rs, rowNum) -> {
+                    String status = rs.getString("case_status");
+                    if ("DEPRECATED".equals(status)) return "";
                     String json = rs.getString("source_refs_json");
                     if (json == null || json.isBlank()) return "";
                     try {
                         var ref = objectMapper.readTree(json);
-                        return ref.has("sourceTestPoint") ? ref.get("sourceTestPoint").asText("") : "";
+                        // 兼容三种字段路径
+                        String tp = ref.has("sourceTestPoint") ? ref.get("sourceTestPoint").asText("") : "";
+                        if (tp.isBlank() && ref.has("generatorRefs")) {
+                            var genRefs = ref.get("generatorRefs");
+                            if (genRefs.has("sourceTestPoint")) tp = genRefs.get("sourceTestPoint").asText("");
+                        }
+                        if (tp.isBlank() && ref.has("sourceTestPoints")) {
+                            var tps = ref.get("sourceTestPoints");
+                            if (tps.isArray() && tps.size() > 0) tp = tps.get(0).asText("");
+                        }
+                        return tp;
                     } catch (Exception e) { return ""; }
                 })
                 .list().stream().filter(t -> !t.isBlank()).toList();
@@ -706,18 +728,24 @@ public class RequirementAnalysisService {
             int idx = existingDrafts + 1;
             for (Map<String, Object> row : rows) {
                 String caseNo = "TC-" + sessionId + "-NEW-" + idx++;
+                String sourceTestPoint = strVal(row, "title", "新用例");
+                String sourceRefsJson = "{\"sourceTestPoint\":\"" + sourceTestPoint.replace("\"", "\\\"") + "\",\"generatorRefs\":{\"sourceTestPoint\":\"" + sourceTestPoint.replace("\"", "\\\"") + "\"}}";
                 jdbcTemplate.update("""
-                        INSERT INTO test_case_draft(session_id, case_no, case_title, module_name, precondition,
-                            steps, expected_result, priority, case_type, case_status, created_at, updated_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'FUNCTIONAL', 'DRAFT', ?, ?)
-                        """, sessionId, caseNo,
+                        INSERT INTO test_case_draft(session_id, analysis_id, analysis_version,
+                            case_no, case_title, module_name, precondition,
+                            steps, expected_result, priority, case_type, case_status,
+                            source_refs_json, quality_status, created_by, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'FUNCTIONAL', 'DRAFT', ?, 'LOW_EVIDENCE', ?, ?, ?)
+                        """, sessionId, analysis.id(), analysis.version(),
+                        caseNo,
                         strVal(row, "caseTitle", "新用例"),
                         strVal(row, "moduleName", "默认模块"),
                         strVal(row, "precondition", ""),
                         strVal(row, "steps", ""),
                         strVal(row, "expectedResult", ""),
                         strVal(row, "priority", "P2"),
-                        now, now);
+                        sourceRefsJson,
+                        user.id(), now, now);
             }
             log.info("自动为 {} 个新测试点生成了 {} 条用例", newCases.size(), rows.size());
         } catch (Exception e) {
@@ -803,15 +831,34 @@ public class RequirementAnalysisService {
         return list.get(0);
     }
 
-    private String buildAnalysisSystemPrompt() {
+    String buildAnalysisSystemPrompt() {
         return """
                 你是一个资深测试分析师。你的任务是分析用户需求并输出结构化的分析结果。
+
+                分析必须按以下顺序进行：
+                1. 先理解需求（理解业务目标、用户角色、核心流程）
+                2. 再做风险扫描（识别评审前需确认的问题、异常场景、边界条件）
+                3. 再判断哪些必须现在澄清（只有阻断准确分析的问题才进入澄清）
+                4. 最后拆测试点（按需求类型选拆解骨架，不要全部混成功能点列表）
 
                 请返回以下 JSON 格式（不要返回其他内容，只返回 JSON）：
                 {
                   "analysis": {
                     "requirement_understanding": "对需求的理解总结",
                     "business_domain": "业务领域",
+                    "requirement_type": "RULE/FORM/UI/STATE/DATA/MIXED",
+                    "input_sources": ["PRD_TEXT/PRD_FILE/BLUEPRINT/PROTO_OR_DESIGN/TOM/VERBAL/UNKNOWN"],
+                    "input_source_notes": "对输入源的具体说明",
+                    "review_risk_questions": [
+                      {
+                        "question": "评审前建议确认的问题",
+                        "reason": "为什么要问",
+                        "impact": "不确认会影响什么",
+                        "source_basis": ["引用的 TOM/页面/业务包/轨迹依据"]
+                      }
+                    ],
+                    "risk_scenarios": ["异常/状态/数据/权限/幂等等风险场景"],
+                    "boundary_conditions": ["时间/数量/金额/状态/重复操作/并发边界"],
                     "affected_modules": ["受影响模块"],
                     "affected_pages": ["受影响页面"],
                     "affected_fields": ["受影响字段"],
@@ -826,6 +873,8 @@ public class RequirementAnalysisService {
                       "title": "测试点标题",
                       "description": "测试点描述",
                       "test_dimension": "测试维度",
+                      "point_type": "MAIN_FLOW/BRANCH/BOUNDARY/EXCEPTION/STATE/DATA/AUTH/CONCURRENCY/IDEMPOTENT",
+                      "priority_hint": "CORE/EXTENDED/RISK",
                       "related_module": "关联模块",
                       "related_page": "关联页面",
                       "related_flow": "关联流程",
@@ -862,10 +911,31 @@ public class RequirementAnalysisService {
                 2. 如果信息不足，必须在 clarification_questions 中提出反问
                 3. clarification_questions 是需要用户回答的反问，必须独立返回，不能只放在测试点或右侧补充信息里
                 4. uncertain_items 是分析风险或假设，不得用来替代 clarification_questions
-                5. 测试点只是分析结果，不是最终用例
-                6. 必须优先使用“项目证据上下文”中的 TOM、页面画像、业务包、轨迹摘要作为 source_basis
-                7. 没有证据支持的内容必须标记 needs_confirmation=true 和 coverage_status=LOW_EVIDENCE，不允许伪装成已确认事实
-                8. 测试点之间不要混合多个业务目标；每个测试点只描述一个可验证目标
+                5. review_risk_questions 是评审/分析阶段的风险确认问题，与 clarification_questions 分离输出
+                6. 如果某个风险问题足以阻断准确分析，应同时进入 clarification_questions
+                7. 测试点只是分析结果，不是最终用例
+                8. 必须优先使用"项目证据上下文"中的 TOM、页面画像、业务包、轨迹摘要作为 source_basis
+                9. 没有证据支持的内容必须标记 needs_confirmation=true 和 coverage_status=LOW_EVIDENCE，不允许伪装成已确认事实
+                10. 测试点之间不要混合多个业务目标；每个测试点只描述一个可验证目标
+                11. 原型/页面上已有控件，不等于本次新增测试范围
+                12. 测试点要按 requirement_type 选拆解骨架：
+                    - RULE 型重点覆盖条件组合、边界值、互斥规则
+                    - FORM 型重点覆盖字段校验、必填、联动、提交
+                    - UI 型重点覆盖交互流程、状态切换、响应式
+                    - STATE 型重点覆盖状态流转、异常恢复、并发
+                    - DATA 型重点覆盖一致性、并发、幂等、数据量
+                    - MIXED 型按涉及的主要类型组合拆解
+                13. 必须识别 input_sources（输入源类型），至少区分：
+                    - PRD_TEXT：纯文本需求描述
+                    - PRD_FILE：PRD 文件附件
+                    - BLUEPRINT：蓝湖/原型/设计稿链接或截图
+                    - PROTO_OR_DESIGN：高保真原型或 UI 设计稿
+                    - TOM：仅来自 TOM 模型
+                    - VERBAL：口头描述/会议纪要
+                    - UNKNOWN：无法判断
+                14. 当 input_sources 包含 BLUEPRINT 或 PROTO_OR_DESIGN 时，必须在 review_risk_questions 中追加：
+                    "原型/设计稿控件存在不等于本次新增测试范围，需确认具体需求变更点"
+                15. review_risk_questions 中的问题必须标注 source_basis（引用 TOM/页面/业务包/轨迹依据），不允许无依据的风险问题
                 """;
     }
 
@@ -1037,6 +1107,22 @@ public class RequirementAnalysisService {
             root.put("clarification_questions", questions);
         }
         root.put("uncertain_items", uncertainItems);
+
+        // 兜底补全新字段，避免前端解析失败
+        // 如果 analysis 子对象已有这些字段，复制到根级别
+        @SuppressWarnings("unchecked")
+        Map<String, Object> analysisMap = root.get("analysis") instanceof Map ? (Map<String, Object>) root.get("analysis") : null;
+        root.putIfAbsent("requirement_type",
+                analysisMap != null && analysisMap.containsKey("requirement_type") ? analysisMap.get("requirement_type") : "MIXED");
+        root.putIfAbsent("input_sources",
+                analysisMap != null && analysisMap.containsKey("input_sources") ? analysisMap.get("input_sources") : List.of("UNKNOWN"));
+        root.putIfAbsent("review_risk_questions",
+                analysisMap != null && analysisMap.containsKey("review_risk_questions") ? analysisMap.get("review_risk_questions") : List.of());
+        root.putIfAbsent("risk_scenarios",
+                analysisMap != null && analysisMap.containsKey("risk_scenarios") ? analysisMap.get("risk_scenarios") : List.of());
+        root.putIfAbsent("boundary_conditions",
+                analysisMap != null && analysisMap.containsKey("boundary_conditions") ? analysisMap.get("boundary_conditions") : List.of());
+
         String json = toJson(root);
         return json == null ? analysisResult : json;
     }
@@ -1066,6 +1152,8 @@ public class RequirementAnalysisService {
                 ));
             }
             row.putIfAbsent("coverage_status", coverageStatus);
+            row.putIfAbsent("point_type", "MAIN_FLOW");
+            row.putIfAbsent("priority_hint", "CORE");
             if (!unsupportedItems.isEmpty()) {
                 row.putIfAbsent("unsupported_items", unsupportedItems);
                 row.put("needs_confirmation", true);

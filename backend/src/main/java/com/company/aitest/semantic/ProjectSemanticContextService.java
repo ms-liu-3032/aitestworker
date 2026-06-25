@@ -209,13 +209,15 @@ public class ProjectSemanticContextService {
         }
 
         if (scored.isEmpty()) {
-            return candidates.stream()
+            // 兜底分支也要有 TOM 配额保护
+            List<SemanticSignal> fallback = candidates.stream()
                     .sorted(Comparator.comparing(SemanticSignal::updatedAt, Comparator.nullsLast(Comparator.reverseOrder())))
                     .limit(Math.max(1, Math.min(maxSignals, 6)))
                     .toList();
+            return ensureTomQuota(fallback, candidates, maxSignals);
         }
 
-        return scored.stream()
+        List<SemanticSignal> ranked = scored.stream()
                 .sorted(Comparator
                         .comparingDouble(ScoredSignal::score).reversed()
                         .thenComparing(item -> item.signal().updatedAt(), Comparator.nullsLast(Comparator.reverseOrder())))
@@ -223,6 +225,56 @@ public class ProjectSemanticContextService {
                 .distinct()
                 .limit(maxSignals)
                 .toList();
+
+        return ensureTomQuota(ranked, candidates, maxSignals);
+    }
+
+    /**
+     * 确保结果列表中至少包含 1 个 TOM:系统 和 1 个 TOM:项目。
+     * 如果列表已满但缺少某类 TOM，替换尾部的非 TOM 低优先级项。
+     */
+    private List<SemanticSignal> ensureTomQuota(List<SemanticSignal> ranked, List<SemanticSignal> allCandidates, int maxSignals) {
+        List<SemanticSignal> result = new ArrayList<>(ranked);
+        boolean hasSystemTom = result.stream().anyMatch(s -> s.category() != null && s.category().startsWith("TOM:系统"));
+        boolean hasProjectTom = result.stream().anyMatch(s -> s.category() != null && s.category().startsWith("TOM:项目"));
+
+        if (hasSystemTom && hasProjectTom) return result;
+
+        // 按 scoreBoost 排序获取候选 TOM
+        List<SemanticSignal> tomCandidates = allCandidates.stream()
+                .filter(s -> s.category() != null && s.category().startsWith("TOM:"))
+                .sorted(Comparator
+                        .comparingDouble(SemanticSignal::scoreBoost).reversed()
+                        .thenComparing(s -> s.updatedAt(), Comparator.nullsLast(Comparator.reverseOrder())))
+                .toList();
+        Set<String> existingTitles = result.stream().map(SemanticSignal::title).collect(java.util.stream.Collectors.toSet());
+
+        for (SemanticSignal tom : tomCandidates) {
+            if (hasSystemTom && hasProjectTom) break;
+            if (existingTitles.contains(tom.title())) continue;
+
+            boolean needed = (!hasSystemTom && tom.category().startsWith("TOM:系统"))
+                    || (!hasProjectTom && tom.category().startsWith("TOM:项目"));
+            if (!needed) continue;
+
+            if (result.size() < maxSignals) {
+                // 列表未满，直接追加
+                result.add(tom);
+            } else {
+                // 列表已满，替换尾部第一个非 TOM 项
+                for (int i = result.size() - 1; i >= 0; i--) {
+                    SemanticSignal tail = result.get(i);
+                    if (tail.category() == null || !tail.category().startsWith("TOM:")) {
+                        result.set(i, tom);
+                        break;
+                    }
+                }
+            }
+
+            if (tom.category().startsWith("TOM:系统")) hasSystemTom = true;
+            if (tom.category().startsWith("TOM:项目")) hasProjectTom = true;
+        }
+        return result;
     }
 
     String buildPromptSection(List<SemanticSignal> signals) {

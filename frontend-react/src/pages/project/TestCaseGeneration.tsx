@@ -163,7 +163,7 @@ function ClarificationQuestions({
   );
 }
 
-function AnalysisMessageContent({ analysis }: { analysis: RequirementAnalysis }) {
+export function AnalysisMessageContent({ analysis }: { analysis: RequirementAnalysis }) {
   const result = safeJsonParse<{
     requirement_understanding?: string;
     affected_modules?: string[];
@@ -174,6 +174,9 @@ function AnalysisMessageContent({ analysis }: { analysis: RequirementAnalysis })
     conflicts?: string[];
     uncertain_items?: string[];
     clarification_questions?: { question?: string; reason?: string; impact?: string }[];
+    review_risk_questions?: { question?: string; reason?: string; impact?: string }[];
+    risk_scenarios?: string[];
+    boundary_conditions?: string[];
   }>(analysis.analysisResult);
   const questions = result?.clarification_questions
     ?? safeJsonParse<any[]>(analysis.clarificationQuestions)
@@ -208,6 +211,21 @@ function AnalysisMessageContent({ analysis }: { analysis: RequirementAnalysis })
           </div>
         </div>
       )}
+      {/* 评审前需确认问题 */}
+      {result?.review_risk_questions && result.review_risk_questions.length > 0 && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50/70 p-2">
+          <div className="font-semibold text-[11px] text-amber-700 mb-1">【评审前需确认问题】</div>
+          <div className="space-y-1.5">
+            {result.review_risk_questions.map((q, idx) => (
+              <div key={idx} className="text-xs text-gray-700">
+                <div className="break-words font-medium">- {q.question}</div>
+                {q.reason && <div className="ml-3 text-gray-500">原因：{q.reason}</div>}
+                {q.impact && <div className="ml-3 text-gray-500">影响：{q.impact}</div>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
       <ClarificationQuestions questions={questions} title="需要澄清" />
       {result?.uncertain_items && result.uncertain_items.length > 0 && (
         <div>
@@ -235,7 +253,7 @@ function AnalysisMessageContent({ analysis }: { analysis: RequirementAnalysis })
   );
 }
 
-function AnalysisPanel({ analyses, latestAnalysis }: { analyses: RequirementAnalysis[]; latestAnalysis: RequirementAnalysis }) {
+export function AnalysisPanel({ analyses, latestAnalysis }: { analyses: RequirementAnalysis[]; latestAnalysis: RequirementAnalysis }) {
   const [expandedVersions, setExpandedVersions] = useState<Set<number>>(new Set([latestAnalysis.version]));
 
   const toggleVersion = (version: number) => {
@@ -249,73 +267,112 @@ function AnalysisPanel({ analyses, latestAnalysis }: { analyses: RequirementAnal
 
   const renderAnalysis = (a: RequirementAnalysis) => {
     const result = safeJsonParse<{
-      analysis?: {
-        requirement_understanding?: string;
-        business_domain?: string;
-        affected_modules?: string[];
-        affected_pages?: string[];
-        affected_fields?: string[];
-        affected_flows?: string[];
-        affected_roles?: string[];
-        conflicts?: string[];
-        uncertain_items?: string[];
-        out_of_scope?: string[];
-        evidence_summary?: {
-          evidence_count?: number;
-          confidence_label?: string;
-          tom_node_refs?: string[];
-          page_refs?: string[];
-          business_pack_refs?: string[];
-          trace_refs?: string[];
-          source_basis?: string[];
-          unsupported_items?: string[];
-        };
-        clarification_questions?: { question?: string; reason?: string; impact?: string }[];
+      requirement_understanding?: string;
+      business_domain?: string;
+      requirement_type?: string;
+      input_sources?: string[];
+      input_source_notes?: string;
+      affected_modules?: string[];
+      affected_pages?: string[];
+      affected_fields?: string[];
+      affected_flows?: string[];
+      affected_roles?: string[];
+      conflicts?: string[];
+      uncertain_items?: string[];
+      out_of_scope?: string[];
+      review_risk_questions?: { question?: string; reason?: string; impact?: string }[];
+      risk_scenarios?: string[];
+      boundary_conditions?: string[];
+      evidence_summary?: {
+        evidence_count?: number;
+        confidence_label?: string;
+        tom_node_refs?: string[];
+        page_refs?: string[];
+        business_pack_refs?: string[];
+        trace_refs?: string[];
+        source_basis?: string[];
+        unsupported_items?: string[];
       };
+      clarification_questions?: { question?: string; reason?: string; impact?: string }[];
+      assumptions?: { assumption?: string; reason?: string }[];
       test_points?: {
         title?: string;
         description?: string;
+        point_type?: string;
+        priority_hint?: string;
         test_dimension?: string;
-        related_module?: string;
-        related_page?: string;
-        related_flow?: string;
-        source_basis?: string[];
-        source_refs?: {
-          tom_node_refs?: string[];
-          page_refs?: string[];
-          business_pack_refs?: string[];
-          trace_refs?: string[];
-        };
-        coverage_status?: string;
-        unsupported_items?: string[];
-        confidence?: number;
-        needs_confirmation?: boolean;
       }[];
-      clarification_questions?: { question?: string; reason?: string; impact?: string }[];
-      assumptions?: { assumption?: string; reason?: string }[];
     }>(a.analysisResult);
 
-    const analysisBlock = result?.analysis;
-    const evidenceSummary = analysisBlock?.evidence_summary;
+    const evidenceSummary = result?.evidence_summary;
     const testPoints = result?.test_points ?? safeJsonParse<any[]>(a.testPoints) ?? [];
     const questions = result?.clarification_questions
-      ?? analysisBlock?.clarification_questions
       ?? safeJsonParse<any[]>(a.clarificationQuestions)
       ?? [];
     const assumptions = result?.assumptions ?? safeJsonParse<any[]>(a.assumptions) ?? [];
 
     return (
       <div className="space-y-4">
-        {analysisBlock?.requirement_understanding && (
+        {result?.requirement_understanding && (
           <div>
             <div className="text-[11px] font-medium text-gray-500 mb-1">需求理解</div>
-            <div className="break-words text-xs leading-relaxed text-gray-800">{analysisBlock.requirement_understanding}</div>
+            <div className="break-words text-xs leading-relaxed text-gray-800">{result.requirement_understanding}</div>
           </div>
         )}
-        {analysisBlock?.business_domain && (
+        {result?.business_domain && (
           <div>
             <div className="text-[11px] font-medium text-gray-500 mb-1">业务领域</div>
-            <div className="break-words text-xs text-gray-800">{analysisBlock.business_domain}</div>
+            <div className="break-words text-xs text-gray-800">{result.business_domain}</div>
+          </div>
+        )}
+        {result?.requirement_type && (
+          <div>
+            <div className="text-[11px] font-medium text-gray-500 mb-1">需求类型</div>
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700">{result.requirement_type}</span>
+          </div>
+        )}
+        {result?.input_sources && result.input_sources.length > 0 && (
+          <div>
+            <div className="text-[11px] font-medium text-gray-500 mb-1">输入来源</div>
+            <div className="flex flex-wrap gap-1">
+              {result.input_sources.map((src, idx) => (
+                <span key={idx} className="text-[10px] px-1.5 py-0.5 rounded bg-teal-50 text-teal-700">{src}</span>
+              ))}
+            </div>
+            {result.input_source_notes && (
+              <div className="mt-1 text-xs text-gray-500">{result.input_source_notes}</div>
+            )}
+          </div>
+        )}
+        {/* 评审前需确认问题 */}
+        {result?.review_risk_questions && result.review_risk_questions.length > 0 && (
+          <div className="rounded-lg border border-amber-200 bg-amber-50/70 p-2">
+            <div className="text-[11px] font-semibold text-amber-700 mb-1">评审前需确认问题</div>
+            <div className="space-y-1.5">
+              {result.review_risk_questions.map((q, idx) => (
+                <div key={idx} className="text-xs text-gray-700">
+                  <div className="break-words font-medium">{q.question}</div>
+                  {q.reason && <div className="ml-3 text-gray-500">原因：{q.reason}</div>}
+                  {q.impact && <div className="ml-3 text-gray-500">影响：{q.impact}</div>}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+        {result?.risk_scenarios && result.risk_scenarios.length > 0 && (
+          <div>
+            <div className="text-[11px] font-medium text-gray-500 mb-1">风险场景</div>
+            <div className="space-y-0.5">{result.risk_scenarios.map((s, idx) => (
+              <div key={idx} className="text-xs text-gray-700 break-words">- {s}</div>
+            ))}</div>
+          </div>
+        )}
+        {result?.boundary_conditions && result.boundary_conditions.length > 0 && (
+          <div>
+            <div className="text-[11px] font-medium text-gray-500 mb-1">边界条件</div>
+            <div className="space-y-0.5">{result.boundary_conditions.map((c, idx) => (
+              <div key={idx} className="text-xs text-gray-700 break-words">- {c}</div>
+            ))}</div>
           </div>
         )}
         <ClarificationQuestions questions={questions} />
@@ -343,10 +400,10 @@ function AnalysisPanel({ analyses, latestAnalysis }: { analyses: RequirementAnal
             </div>
           </div>
         )}
-        {analysisBlock && (
+        {result && (
           <div className="grid grid-cols-1 gap-2">
             {(['affected_modules', 'affected_pages', 'affected_fields', 'affected_flows', 'affected_roles'] as const).map(key => {
-              const items = analysisBlock[key];
+              const items = result[key];
               if (!items || items.length === 0) return null;
               const labels: Record<string, string> = {
                 affected_modules: '受影响模块', affected_pages: '受影响页面',
@@ -369,7 +426,19 @@ function AnalysisPanel({ analyses, latestAnalysis }: { analyses: RequirementAnal
             <div className="space-y-2">
               {testPoints.map((tp, idx) => (
                 <div key={idx} className="text-xs text-gray-700 rounded-lg border border-gray-100 p-2">
-                  <div className="break-words font-medium">{tp.title || `测试点 ${idx + 1}`}</div>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="break-words font-medium">{tp.title || `测试点 ${idx + 1}`}</span>
+                    {tp.point_type && (
+                      <span className="text-[9px] px-1 py-0.5 rounded bg-violet-50 text-violet-600">{tp.point_type}</span>
+                    )}
+                    {tp.priority_hint && (
+                      <span className={`text-[9px] px-1 py-0.5 rounded ${
+                        tp.priority_hint === 'RISK' ? 'bg-red-50 text-red-600' :
+                        tp.priority_hint === 'EXTENDED' ? 'bg-blue-50 text-blue-600' :
+                        'bg-green-50 text-green-600'
+                      }`}>{tp.priority_hint}</span>
+                    )}
+                  </div>
                   {tp.description && (
                     <div className="mt-0.5 break-words text-gray-500 line-clamp-2">{tp.description}</div>
                   )}

@@ -68,7 +68,7 @@ class BusinessPackSemanticContextTest {
 
     @Test
     void extractKeywords_handlesChinese() {
-        var keywords = service.extractKeywords("订单管理页面测试");
+        var keywords = service.extractKeywords("审批管理页面测试");
         assertFalse(keywords.isEmpty());
     }
 

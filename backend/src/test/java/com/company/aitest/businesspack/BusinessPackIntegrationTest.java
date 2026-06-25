@@ -3,11 +3,15 @@ package com.company.aitest.businesspack;
 import static org.junit.jupiter.api.Assertions.*;
 
 import java.util.List;
+import java.util.UUID;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
@@ -19,11 +23,50 @@ import org.springframework.transaction.annotation.Transactional;
 @Transactional
 class BusinessPackIntegrationTest {
 
+    private static final long PROJECT_ID = 3001L;
+    private static final String TEST_DB_NAME = "aitestworker_bp_" + UUID.randomUUID().toString().replace("-", "");
+
+    @DynamicPropertySource
+    static void configureDatabase(DynamicPropertyRegistry registry) {
+        String jdbcUrl = "jdbc:mysql://localhost:3306/" + TEST_DB_NAME
+                + "?createDatabaseIfNotExist=true&useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai";
+        registry.add("spring.datasource.url", () -> jdbcUrl);
+        registry.add("spring.flyway.url", () -> jdbcUrl);
+        registry.add("spring.datasource.username", () -> "root");
+        registry.add("spring.datasource.password", () -> "root");
+        registry.add("spring.flyway.user", () -> "root");
+        registry.add("spring.flyway.password", () -> "root");
+    }
+
     @Autowired
     private BusinessPackService businessPackService;
 
     @Autowired
     private JdbcTemplate jdbcTemplate;
+
+    @BeforeEach
+    void seedProjectAssets() {
+        jdbcTemplate.update("""
+                INSERT INTO project(id, project_name, description, status, created_by, created_at, updated_at)
+                VALUES (?, ?, ?, 'ACTIVE', 1, NOW(), NOW())
+                ON DUPLICATE KEY UPDATE project_name = VALUES(project_name), updated_at = VALUES(updated_at)
+                """, PROJECT_ID, "审批流测试项目", "用于 business pack 集成测试");
+
+        jdbcTemplate.update("""
+                INSERT INTO test_object_model(
+                    project_id, scope, model_type, name, description, properties_json,
+                    source_type, source_ref_id, source_context, business_domain, priority,
+                    source_doc, source_section, source_page, evidence_text, cross_validation_json,
+                    confidence, status, requires_human_confirm, validity_label, created_by,
+                    created_at, updated_at
+                ) VALUES (
+                    ?, 'PROJECT', 'FLOW', '报销审批流程', '员工提交后进入主管审批',
+                    NULL, 'MANUAL_SECTION', NULL, '集成测试种子数据', '审批流', 'MEDIUM',
+                    'integration-test', 'seed', NULL, NULL, NULL,
+                    0.95, 'ACTIVE', 0, 'HIGH', 1, NOW(), NOW()
+                )
+                """, PROJECT_ID);
+    }
 
     @Test
     void refreshForProject_handlesNonExistentProject() {
@@ -33,10 +76,8 @@ class BusinessPackIntegrationTest {
 
     @Test
     void refreshForProject_withExistingProject() {
-        Long projectId = createProjectWithActiveTom();
-
-        businessPackService.refreshForProject(projectId);
-        var packs = businessPackService.listPacks(projectId, null);
+        businessPackService.refreshForProject(PROJECT_ID);
+        var packs = businessPackService.listPacks(PROJECT_ID, null);
         assertFalse(packs.isEmpty(), "refreshForProject 应该创建业务包");
         assertTrue(packs.size() > 0, "至少应该创建一个业务包");
 
@@ -47,10 +88,8 @@ class BusinessPackIntegrationTest {
 
     @Test
     void refreshForProject_createsBindings() {
-        Long projectId = createProjectWithActiveTom();
-
-        businessPackService.refreshForProject(projectId);
-        var packs = businessPackService.listPacks(projectId, null);
+        businessPackService.refreshForProject(PROJECT_ID);
+        var packs = businessPackService.listPacks(PROJECT_ID, null);
         if (!packs.isEmpty()) {
             var firstPack = packs.get(0);
             var tomBindings = businessPackService.listTomBindings(firstPack.id());
@@ -60,42 +99,20 @@ class BusinessPackIntegrationTest {
 
     @Test
     void inferRelations_worksWithMultiplePacks() {
-        Long projectId = createProjectWithActiveTom();
-
-        businessPackService.refreshForProject(projectId);
-        int created = businessPackService.inferRelations(projectId);
+        businessPackService.refreshForProject(PROJECT_ID);
+        int created = businessPackService.inferRelations(PROJECT_ID);
         assertTrue(created >= 0, "inferRelations 不应该返回负数");
     }
 
     @Test
     void getAvailableTransitions_worksForAllStatuses() {
-        Long projectId = createProjectWithActiveTom();
-        businessPackService.refreshForProject(projectId);
-
-        var packs = businessPackService.listPacks(projectId, null);
+        businessPackService.refreshForProject(PROJECT_ID);
+        var packs = businessPackService.listPacks(PROJECT_ID, null);
         if (!packs.isEmpty()) {
             var pack = packs.get(0);
             var transitions = businessPackService.getAvailableTransitions(pack.id());
             assertNotNull(transitions);
             assertFalse(transitions.isEmpty(), "应该有可用的转换");
         }
-    }
-
-    private Long createProjectWithActiveTom() {
-        jdbcTemplate.update("""
-                INSERT INTO project(project_name, description, status, created_by, created_at, updated_at)
-                VALUES ('开源验证项目', 'business_pack 集成测试项目', 'ACTIVE', 1, NOW(), NOW())
-                """);
-        Long projectId = jdbcTemplate.queryForObject("SELECT LAST_INSERT_ID()", Long.class);
-
-        jdbcTemplate.update("""
-                INSERT INTO test_object_model(project_id, scope, model_type, name, description,
-                    source_type, source_context, confidence, status, requires_human_confirm,
-                    created_by, business_domain)
-                VALUES (?, 'PROJECT', 'FLOW', '审批提交流程', '用户提交单据后进入审批',
-                    'MANUAL_SECTION', '集成测试种子数据', 0.90, 'ACTIVE', 0, 1, '审批流')
-                """, projectId);
-
-        return projectId;
     }
 }

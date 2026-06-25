@@ -411,7 +411,7 @@ class BusinessPackServiceTest {
     void extractRoutePrefix_extractsFirstSegment() throws Exception {
         var method = BusinessPackService.class.getDeclaredMethod("extractRoutePrefix", String.class);
         method.setAccessible(true);
-        assertEquals("order", method.invoke(service, "/order/list"));
+        assertEquals("approval", method.invoke(service, "/approval/list"));
         assertEquals("meeting", method.invoke(service, "/api/meeting/detail"));
         assertEquals("users", method.invoke(service, "/admin/users"));
         assertEquals("crm", method.invoke(service, "/web/crm/customer"));

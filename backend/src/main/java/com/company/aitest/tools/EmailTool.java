@@ -17,8 +17,9 @@ public class EmailTool implements TestTool {
     public ToolGenerateResponse generate(ToolGenerateRequest request) {
         String domain = request.option("domain", "example.com").replace("@", "");
         List<String> results = new ArrayList<>();
+        long batchSeed = System.currentTimeMillis();
         for (int i = 0; i < request.normalizedCount(); i++) {
-            results.add("test" + System.currentTimeMillis() + RandomData.between(100, 999) + "@" + domain);
+            results.add("test" + batchSeed + String.format("%03d", i) + "@" + domain);
         }
         return new ToolGenerateResponse(toolCode(), results, Map.of("domain", domain));
     }

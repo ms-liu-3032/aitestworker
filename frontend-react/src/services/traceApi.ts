@@ -338,6 +338,16 @@ export function stopGroup(groupId: number) {
   return api(`/api/trace/groups/${groupId}/stop`, { method: 'POST' })
 }
 
+export interface TraceScanResult {
+  profileCount: number
+  eventCount: number
+  scannedPages: string[]
+}
+
+export function scanFromTrace(groupId: number) {
+  return api<TraceScanResult>(`/api/trace/groups/${groupId}/scan`, { method: 'POST' })
+}
+
 export function createSession(groupId: number, body: { profileId: number; sessionName: string; browserType?: string; browserExecutablePath?: string }) {
   return api<BrowserTraceSession>(`/api/trace/groups/${groupId}/sessions`, { method: 'POST', body: JSON.stringify(body) })
 }

@@ -136,4 +136,22 @@ class GenerationSessionControllerTest {
         assertEquals(3, response.data().get(0).analysisVersion());
         verify(sessionService).get(eq(100L), eq(200L), any(CurrentUser.class));
     }
+
+    @Test
+    void generateIncremental_throwsWhenSelectedDraftIdsIsNull() {
+        Map<String, Object> body = Map.of();
+        assertThrows(BusinessException.class, () -> controller.generateIncremental(100L, 200L, body, auth));
+    }
+
+    @Test
+    void generateIncremental_throwsWhenSelectedDraftIdsIsNotArray() {
+        Map<String, Object> body = Map.of("selectedDraftIds", "not_array");
+        assertThrows(BusinessException.class, () -> controller.generateIncremental(100L, 200L, body, auth));
+    }
+
+    @Test
+    void generateIncremental_throwsWhenSelectedDraftIdsContainsInvalidElements() {
+        Map<String, Object> body = Map.of("selectedDraftIds", java.util.List.of("abc", "1.5"));
+        assertThrows(BusinessException.class, () -> controller.generateIncremental(100L, 200L, body, auth));
+    }
 }

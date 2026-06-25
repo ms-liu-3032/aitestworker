@@ -2,6 +2,7 @@ package com.company.aitest.generation.session;
 
 import java.io.IOException;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -237,12 +238,35 @@ public class GenerationSessionController {
         CurrentUser user = (CurrentUser) auth.getPrincipal();
         ensureSessionAccess(projectId, sessionId, user);
 
-        @SuppressWarnings("unchecked")
-        List<Number> rawIds = (List<Number>) body.get("selectedDraftIds");
-        if (rawIds == null || rawIds.isEmpty()) {
-            throw new BusinessException("请至少选择一个用例");
+        Object rawValue = body.get("selectedDraftIds");
+        if (rawValue == null) {
+            throw new BusinessException("selectedDraftIds 不能为空");
         }
-        List<Integer> selectedDraftIds = rawIds.stream().map(Number::intValue).toList();
+        if (!(rawValue instanceof List)) {
+            throw new BusinessException("selectedDraftIds 必须是数组");
+        }
+        @SuppressWarnings("unchecked")
+        List<Object> rawList = (List<Object>) rawValue;
+        List<Integer> selectedDraftIds = new ArrayList<>();
+        for (int i = 0; i < rawList.size(); i++) {
+            Object item = rawList.get(i);
+            if (item instanceof Number num) {
+                int val = num.intValue();
+                if (val > 0) selectedDraftIds.add(val);
+            } else {
+                throw new BusinessException("selectedDraftIds 第 " + (i + 1) + " 个元素不是有效数字");
+            }
+        }
+        if (selectedDraftIds.isEmpty()) {
+            throw new BusinessException("请至少选择一个有效的用例");
+        }
+
+        // 校验所选草稿属于当前 session
+        int owned = jdbc.sql("SELECT COUNT(*) FROM test_case_draft WHERE session_id = :sid AND id IN (:ids)")
+                .param("sid", sessionId).param("ids", selectedDraftIds).query(Integer.class).single();
+        if (owned != selectedDraftIds.size()) {
+            throw new BusinessException("部分用例不属于当前会话");
+        }
 
         analysisService.incrementalGenerate(sessionId, selectedDraftIds, user);
 

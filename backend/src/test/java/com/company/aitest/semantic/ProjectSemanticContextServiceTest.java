@@ -39,18 +39,18 @@ class ProjectSemanticContextServiceTest {
     @Test
     void rankSignals_shouldPreferRouteMatchedPageSignals() {
         var matchedPage = new ProjectSemanticContextService.SemanticSignal(
-                "页面画像", "自助服务", "字段：预约时间、离开时间", "/selfbooking", 1.0, LocalDateTime.now());
+                "页面画像", "自助预约", "字段：来访时间、离开时间", "/selfbooking", 1.0, LocalDateTime.now());
         var unmatchedTom = new ProjectSemanticContextService.SemanticSignal(
                 "TOM", "审批记录", "类型：PAGE；审批记录页", null, 1.2, LocalDateTime.now());
 
         List<ProjectSemanticContextService.SemanticSignal> ranked = service.rankSignals(
                 List.of(unmatchedTom, matchedPage),
-                Set.of("预约时间"),
+                Set.of("来访时间"),
                 Set.of("/selfbooking"),
                 5);
 
         assertEquals("页面画像", ranked.get(0).category());
-        assertEquals("自助服务", ranked.get(0).title());
+        assertEquals("自助预约", ranked.get(0).title());
     }
 
     @Test
@@ -110,5 +110,50 @@ class ProjectSemanticContextServiceTest {
         assertEquals(0, result.termCount());
         verify(jdbcTemplate).update(anyString(), eq(9L), eq(0), eq(0), anyString(), any(), any(), any());
         verify(jdbcTemplate).update("delete from semantic_pack_item where pack_id = ?", 7L);
+    }
+
+    @Test
+    void rankSignals_shouldReplaceNonTomItemsWhenFullAndMissingTomQuota() {
+        // maxSignals=2，已满但缺少 TOM:系统 和 TOM:项目
+        var page1 = new ProjectSemanticContextService.SemanticSignal(
+                "页面画像", "页面A", "desc", null, 1.0, LocalDateTime.now());
+        var page2 = new ProjectSemanticContextService.SemanticSignal(
+                "页面画像", "页面B", "desc", null, 0.9, LocalDateTime.now());
+        var sysTom = new ProjectSemanticContextService.SemanticSignal(
+                "TOM:系统", "系统TOM", "desc", null, 0.5, LocalDateTime.now());
+        var projTom = new ProjectSemanticContextService.SemanticSignal(
+                "TOM:项目", "项目TOM", "desc", null, 0.5, LocalDateTime.now());
+
+        List<ProjectSemanticContextService.SemanticSignal> ranked = service.rankSignals(
+                List.of(page1, page2, sysTom, projTom),
+                Set.of("不匹配的关键词"),
+                Set.of(),
+                2);
+
+        assertEquals(2, ranked.size());
+        boolean hasSystem = ranked.stream().anyMatch(s -> s.category().startsWith("TOM:系统"));
+        boolean hasProject = ranked.stream().anyMatch(s -> s.category().startsWith("TOM:项目"));
+        assertTrue(hasSystem, "结果应包含系统 TOM（替换策略）");
+        assertTrue(hasProject, "结果应包含项目 TOM（替换策略）");
+    }
+
+    @Test
+    void rankSignals_shouldFallbackWithTomQuotaWhenNoKeywordsMatch() {
+        // scored 为空（无关键词命中），兜底分支也要有 TOM 配额
+        var sysTom = new ProjectSemanticContextService.SemanticSignal(
+                "TOM:系统", "系统TOM", "desc", null, 0.5, LocalDateTime.now());
+        var projTom = new ProjectSemanticContextService.SemanticSignal(
+                "TOM:项目", "项目TOM", "desc", null, 0.5, LocalDateTime.now());
+
+        List<ProjectSemanticContextService.SemanticSignal> ranked = service.rankSignals(
+                List.of(sysTom, projTom),
+                Set.of("完全不匹配"),
+                Set.of(),
+                6);
+
+        boolean hasSystem = ranked.stream().anyMatch(s -> s.category().startsWith("TOM:系统"));
+        boolean hasProject = ranked.stream().anyMatch(s -> s.category().startsWith("TOM:项目"));
+        assertTrue(hasSystem, "兜底分支也应保留系统 TOM");
+        assertTrue(hasProject, "兜底分支也应保留项目 TOM");
     }
 }

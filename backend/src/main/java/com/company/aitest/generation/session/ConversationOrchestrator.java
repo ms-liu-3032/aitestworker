@@ -317,6 +317,11 @@ public class ConversationOrchestrator {
                     root.get("conflicts").forEach(c -> sb.append("- ").append(c.asText()).append("\n"));
                     sb.append("\n");
                 }
+                // 评审前需确认问题（在影响范围之后、需要澄清之前）
+                if (root.has("review_risk_questions") && root.get("review_risk_questions").isArray()
+                        && root.get("review_risk_questions").size() > 0) {
+                    appendReviewRiskQuestions(sb, root.get("review_risk_questions"));
+                }
                 if (root.has("clarification_questions") && root.get("clarification_questions").isArray()
                         && root.get("clarification_questions").size() > 0) {
                     appendClarificationQuestions(sb, root.get("clarification_questions"));
@@ -349,6 +354,16 @@ public class ConversationOrchestrator {
                         sb.append(i + 1).append(". ").append(tp.has("title") ? tp.get("title").asText() : "?");
                         if (tp.has("description")) sb.append(" — ").append(tp.get("description").asText());
                         sb.append("\n");
+                        // 展示 point_type 和 priority_hint
+                        String pointType = tp.has("point_type") ? tp.get("point_type").asText("") : "";
+                        String priorityHint = tp.has("priority_hint") ? tp.get("priority_hint").asText("") : "";
+                        if (!pointType.isBlank() || !priorityHint.isBlank()) {
+                            sb.append("   [");
+                            if (!pointType.isBlank()) sb.append(pointType);
+                            if (!pointType.isBlank() && !priorityHint.isBlank()) sb.append("/");
+                            if (!priorityHint.isBlank()) sb.append(priorityHint);
+                            sb.append("]\n");
+                        }
                     }
                     sb.append("\n");
                 }
@@ -360,6 +375,23 @@ public class ConversationOrchestrator {
         }
 
         return sb.toString().trim();
+    }
+
+    private void appendReviewRiskQuestions(StringBuilder sb, JsonNode questions) {
+        sb.append("【评审前需确认问题】\n");
+        for (int i = 0; i < questions.size(); i++) {
+            JsonNode q = questions.get(i);
+            String question = q.has("question") ? q.get("question").asText("") : "";
+            if (question.isBlank()) continue;
+            sb.append("- ").append(question).append("\n");
+            if (q.has("reason") && !q.get("reason").asText("").isBlank()) {
+                sb.append("  原因：").append(q.get("reason").asText()).append("\n");
+            }
+            if (q.has("impact") && !q.get("impact").asText("").isBlank()) {
+                sb.append("  影响：").append(q.get("impact").asText()).append("\n");
+            }
+        }
+        sb.append("\n");
     }
 
     private void appendClarificationQuestions(StringBuilder sb, JsonNode questions) {
