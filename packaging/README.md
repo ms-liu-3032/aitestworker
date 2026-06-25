@@ -21,30 +21,28 @@
 
 默认输出到：
 
-```text
-./release
-```
+`release/`
 
 ## 打包顺序
 
 ### 服务端
 
 ```bash
-cd <repo-root>
+cd ..
 ./packaging/build-server-package.sh
 ```
 
 ### 客户端
 
 ```bash
-cd <repo-root>
+cd ..
 ./packaging/build-client-package.sh
 ```
 
 ### 客户端（Windows）
 
 ```bash
-cd <repo-root>
+cd ..
 ./packaging/build-client-package-windows.sh
 ```
 

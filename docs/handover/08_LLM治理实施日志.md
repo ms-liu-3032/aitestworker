@@ -264,7 +264,7 @@
 
 - ✅ RAG 检索带权限/作用域/状态/弃用过滤
 - ✅ Context Manifest 真实入库并关联到 llm_invocation_log
-- ✅ Trust level 权重排序生效（SYSTEM_RULE > PROJECT_APPROVED > EXTERNAL_DOC > HISTORICAL_CASE > TRACE_CONFIRMED > USER_DRAFT > AI_GENERATED）
+- ✅ Trust level 权重排序生效（SYSTEM_RULE > PROJECT_APPROVED > YUQUE_DOC > HISTORICAL_CASE > TRACE_CONFIRMED > USER_DRAFT > AI_GENERATED）
 - ✅ 弃用资产默认排除（DB + RetrievalPolicy 双约束）
 - ✅ 缓存 key 黑名单 CR 守卫
 - ✅ LlmCacheKey 工具就位（待 Sprint 3+ 接入 Redis 时使用）

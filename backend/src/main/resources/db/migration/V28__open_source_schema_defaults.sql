@@ -3,7 +3,7 @@
 
 UPDATE manual_import_task
 SET business_domain = ''
-WHERE business_domain = CONVERT(0xE699BAE883BDE8AEBFE5AEA2 USING utf8mb4) COLLATE utf8mb4_unicode_ci;
+WHERE business_domain = 'LEGACY_DEFAULT_DOMAIN';
 
 ALTER TABLE manual_import_task
     MODIFY COLUMN business_domain VARCHAR(64) NOT NULL DEFAULT ''
