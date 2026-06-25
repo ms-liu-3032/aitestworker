@@ -14,12 +14,15 @@ import java.util.concurrent.CompletableFuture;
 
 import com.company.aitest.common.CurrentUser;
 import com.company.aitest.scan.ControlledScanService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
 
 @Service
 public class TraceAutoScanService {
+    private static final Logger log = LoggerFactory.getLogger(TraceAutoScanService.class);
     static final String TRACE_AUTO_SCAN_SOURCE_KEY = "TRACE_AUTO_SCAN";
     static final String TRACE_AUTO_SCAN_SOURCE_LABEL = "轨迹自动补扫";
 
@@ -37,6 +40,49 @@ public class TraceAutoScanService {
         }
         CompletableFuture.runAsync(() -> runSessionAutoScan(session, user))
                 .exceptionally(ex -> null);
+    }
+
+    /**
+     * 从轨迹组的所有会话中扫描学习，生成页面画像。
+     * 返回扫描结果供前端展示。
+     */
+    public ScanResult scanFromGroup(Long projectId, Long groupId, CurrentUser user) {
+        // 1. 加载该组所有会话的事件
+        List<Long> sessionIds = jdbc.sql(
+                "SELECT id FROM browser_trace_session WHERE trace_group_id = :groupId")
+                .param("groupId", groupId).query(Long.class).list();
+
+        List<TraceEventSnapshot> allEvents = new ArrayList<>();
+        for (Long sessionId : sessionIds) {
+            allEvents.addAll(loadSessionEvents(sessionId, user));
+        }
+
+        if (allEvents.isEmpty()) {
+            return new ScanResult(0, 0, List.of());
+        }
+
+        // 2. 构建页面画像草稿
+        List<ControlledScanService.PageProfileDraft> drafts = buildDraftsFromEvents(allEvents);
+        if (drafts.isEmpty()) {
+            return new ScanResult(0, allEvents.size(), List.of());
+        }
+
+        // 3. Upsert 页面画像
+        int profileCount = controlledScanService.upsertProfiles(projectId, drafts, user);
+
+        // 4. 收集扫描到的页面列表
+        List<String> scannedPages = drafts.stream()
+                .map(ControlledScanService.PageProfileDraft::pageLabel)
+                .distinct()
+                .toList();
+
+        log.info("轨迹组 {} 扫描完成：{} 事件 → {} 页面画像 → {} 页面",
+                groupId, allEvents.size(), drafts.size(), scannedPages.size());
+
+        return new ScanResult(profileCount, allEvents.size(), scannedPages);
+    }
+
+    static record ScanResult(int profileCount, int eventCount, List<String> scannedPages) {
     }
 
     void runSessionAutoScan(BrowserTraceSessionRecord session, CurrentUser user) {

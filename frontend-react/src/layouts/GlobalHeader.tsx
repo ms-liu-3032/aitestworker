@@ -84,7 +84,7 @@ export default function GlobalHeader() {
               </svg>
             </button>
             {workspaceOpen && (
-              <div className="absolute left-0 top-full mt-1 w-56 bg-white rounded-xl shadow-lg border border-gray-200 py-1 z-50">
+              <div className="fixed left-0 top-14 w-56 bg-white rounded-b-xl shadow-lg border border-gray-200 py-1 z-[60]">
                 <div className="px-3 py-1.5 text-[11px] uppercase tracking-wider text-gray-400 font-semibold">工作空间</div>
                 <button
                   onClick={() => { navigate('/'); setWorkspaceOpen(false); }}
@@ -119,7 +119,7 @@ export default function GlobalHeader() {
               </svg>
             </button>
             {adminOpen && (
-              <div className="absolute left-0 top-full mt-1 w-56 bg-white rounded-xl shadow-lg border border-gray-200 py-1 z-50">
+              <div className="fixed left-0 top-14 w-56 bg-white rounded-b-xl shadow-lg border border-gray-200 py-1 z-[60]">
                 <div className="px-3 py-1.5 text-[11px] uppercase tracking-wider text-gray-400 font-semibold">管理后台</div>
                 <button
                   onClick={() => { navigate('/admin'); setAdminOpen(false); }}
@@ -167,7 +167,7 @@ export default function GlobalHeader() {
               </span>
             </div>
             {collectorExpanded && (
-              <div className="absolute right-0 top-full mt-2 w-72 bg-white rounded-xl shadow-lg border border-gray-200 py-2 z-50">
+              <div className="fixed right-0 top-14 w-72 bg-white rounded-b-xl shadow-lg border border-gray-200 py-2 z-[60]">
                 <div className="px-3 py-1.5 text-[11px] uppercase tracking-wider text-gray-400 font-semibold">
                   采集器状态
                 </div>
@@ -207,7 +207,7 @@ export default function GlobalHeader() {
               {(user?.displayName || user?.username || '用').charAt(0)}
             </button>
             {userMenuOpen && (
-              <div className="absolute right-0 top-full mt-2 w-48 bg-white rounded-xl shadow-lg border border-gray-200 py-1 z-50">
+              <div className="fixed right-0 top-14 w-48 bg-white rounded-b-xl shadow-lg border border-gray-200 py-1 z-[60]">
                 <div className="px-3 py-2 border-b border-gray-100">
                   <div className="truncate text-sm font-medium text-gray-900">{user?.displayName || user?.username}</div>
                   <div className="truncate text-xs text-gray-500">{user?.roleCode}</div>

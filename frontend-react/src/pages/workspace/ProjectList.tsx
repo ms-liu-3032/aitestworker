@@ -89,7 +89,7 @@ export default function ProjectList() {
   ];
 
   return (
-    <div className="mx-auto max-w-[1200px] px-4 py-6 animate-fade-in sm:px-6">
+    <div className="mx-auto max-w-[1200px] px-4 pt-14 pb-6 animate-fade-in sm:px-6">
       {/* 顶部操作栏 */}
       <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div className="min-w-0">

@@ -1,0 +1,28 @@
+{
+  "name": "local-browser-worker",
+  "version": "0.1.0",
+  "description": "AI Test Worker - 本地浏览器测试执行轨迹采集器",
+  "private": true,
+  "bin": {
+    "ai-test-worker": "./dist/cli/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "clean": "rm -rf dist",
+    "prebuild": "npm run clean",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "commander": "^12.1.0",
+    "playwright-core": "^1.60.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "typescript": "^5.5.0",
+    "vitest": "^2.1.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

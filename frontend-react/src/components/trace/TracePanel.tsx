@@ -42,6 +42,7 @@ import {
   rejectCorrection as apiRejectCorrection,
   batchSaveEvents,
   batchSaveNetworks,
+  scanFromTrace,
   type WorkerHealth,
   type BrowserProfile,
   type BrowserTraceGroup,
@@ -306,6 +307,7 @@ export default function TracePanel({ projectId }: { projectId: number }) {
   const [detailTab, setDetailTab] = useState<'overview' | 'sessions' | 'issues' | 'assets' | 'templates'>('overview');
   const [groupSummaries, setGroupSummaries] = useState<TraceSummary[]>([]);
   const [cleanSteps, setCleanSteps] = useState<CleanStepView[]>([]);
+  const [scanningGroupId, setScanningGroupId] = useState<number | null>(null);
   const [groupSkills, setGroupSkills] = useState<TestSkillTemplate[]>([]);
   const [groupTools, setGroupTools] = useState<TestToolTemplate[]>([]);
   const [groupCorrections, setGroupCorrections] = useState<TraceCorrectionSuggestion[]>([]);
@@ -943,6 +945,26 @@ export default function TracePanel({ projectId }: { projectId: number }) {
     finally { setDeletingGroup(false); }
   };
 
+  const handleScanGroup = async (groupId: number) => {
+    setScanningGroupId(groupId);
+    try {
+      const result = await scanFromTrace(groupId);
+      const pages = result.scannedPages.length;
+      const profiles = result.profileCount;
+      const events = result.eventCount;
+      showToast(`扫描完成：${events} 条事件 → ${profiles} 条页面画像（${pages} 个页面）`);
+      // 刷新页面画像列表
+      if (projectId) {
+        const updated = await listProfiles(Number(projectId));
+        setProfiles(updated);
+      }
+    } catch (e: any) {
+      showToast(e.message || '扫描失败', 'error');
+    } finally {
+      setScanningGroupId(null);
+    }
+  };
+
   // ===== Bind code =====
   const handleCreateBindCode = async () => {
     setCreatingBindCode(true);
@@ -1293,7 +1315,7 @@ export default function TracePanel({ projectId }: { projectId: number }) {
                       <div className="text-sm font-medium text-gray-900 break-words">{profile.profileName}</div>
                       <div className="mt-1 text-xs text-gray-500 font-mono leading-5 break-all">{profile.targetHost || '无目标地址'}</div>
                     </div>
-                    <div className="flex w-full flex-wrap items-center gap-2 opacity-100 transition-opacity sm:w-auto sm:flex-nowrap sm:justify-end sm:opacity-40 sm:group-hover:opacity-100">
+                    <div className="flex flex-wrap items-center gap-2 opacity-100 transition-opacity sm:justify-end sm:opacity-40 sm:group-hover:opacity-100">
                       {isProfileRecording(profile.id) ? (
                         <button
                           onClick={() => stopCapture(profile)}
@@ -1404,11 +1426,20 @@ export default function TracePanel({ projectId }: { projectId: number }) {
                   {/* Expanded Detail */}
                   {expandedGroupId === group.id && groupDetail && (
                     <div className="px-4 pb-4 bg-gray-50">
-                      <SegmentedControl
-                        options={detailTabOptions}
-                        value={detailTab}
-                        onChange={v => setDetailTab(v as any)}
-                      />
+                      <div className="flex items-center gap-2 mt-3">
+                        <SegmentedControl
+                          options={detailTabOptions}
+                          value={detailTab}
+                          onChange={v => setDetailTab(v as any)}
+                        />
+                        <button
+                          onClick={(e) => { e.stopPropagation(); handleScanGroup(group.id); }}
+                          disabled={scanningGroupId === group.id}
+                          className="ml-auto shrink-0 rounded-lg bg-purple-600 px-3 py-1 text-xs font-semibold text-white transition-colors hover:bg-purple-700 disabled:opacity-50"
+                        >
+                          {scanningGroupId === group.id ? '扫描中...' : '扫描学习'}
+                        </button>
+                      </div>
 
                       {/* Overview Tab */}
                       {detailTab === 'overview' && (

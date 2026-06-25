@@ -7,6 +7,7 @@ import java.util.List;
 import com.company.aitest.common.ApiResponse;
 import com.company.aitest.common.BusinessException;
 import com.company.aitest.common.CurrentUser;
+import com.company.aitest.trace.TraceAutoScanService.ScanResult;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
@@ -286,6 +287,17 @@ public class TraceRuntimeController {
     }
 
     public record BatchResult(int acceptedCount) {
+    }
+
+    // ---- 轨迹扫描学习 ----
+
+    @PostMapping("/groups/{groupId}/scan")
+    public ApiResponse<ScanResult> scanFromTrace(@PathVariable Long groupId,
+                                                  Authentication authentication) {
+        CurrentUser user = (CurrentUser) authentication.getPrincipal();
+        var group = groupService.getById(groupId, user);
+        ScanResult result = traceAutoScanService.scanFromGroup(group.projectId(), groupId, user);
+        return ApiResponse.ok(result);
     }
 
     public record UpdateSessionRequest(@NotBlank String sessionName) {

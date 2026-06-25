@@ -106,7 +106,7 @@ class TraceCorrectionSuggestionServiceTest {
                 "选择时间“20260604 10:15”"));
         assertFalse(service.isRiskyGenericStepRewrite(
                 "点击“新增”按钮",
-                "发起新增操作"));
+                "发起新增申请"));
     }
 
     @Test
@@ -188,7 +188,7 @@ class TraceCorrectionSuggestionServiceTest {
     @Test
     void applyLearnedPatternsToCleanSteps_shouldFillTemplateFromNeighborEventContext() {
         var steps = List.of(
-                new TraceStepNormalizer.CleanTraceStep(1, "默认身份", "CLICK", "点击“选择您的预约时间”按钮",
+                new TraceStepNormalizer.CleanTraceStep(1, "默认身份", "CLICK", "点击“选择您的来访时间”按钮",
                         "我的预约", "/vsk/vst/selfBooking/pcOpen", 1_000L),
                 new TraceStepNormalizer.CleanTraceStep(2, "默认身份", "CLICK", "点击“确定”按钮",
                         "我的预约", "/vsk/vst/selfBooking/pcOpen", 1_200L)
