@@ -3,7 +3,8 @@
 
 UPDATE manual_import_task
 SET business_domain = ''
-WHERE business_domain = 'LEGACY_DEFAULT_DOMAIN';
+WHERE business_domain IS NOT NULL
+  AND business_domain <> '';
 
 ALTER TABLE manual_import_task
     MODIFY COLUMN business_domain VARCHAR(64) NOT NULL DEFAULT ''

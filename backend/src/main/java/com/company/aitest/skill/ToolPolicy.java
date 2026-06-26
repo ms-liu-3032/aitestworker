@@ -11,7 +11,6 @@ public class ToolPolicy {
             Map.entry("RequirementTypeDetectSkill", List.of("LLM_ADAPTER")),
             Map.entry("RetrievalKeywordExtractSkill", List.of("LLM_ADAPTER")),
             Map.entry("RetrievalStrategySelectSkill", List.of("LLM_ADAPTER")),
-            Map.entry("YuqueKnowledgeRetrieveSkill", List.of("WEAVIATE_READ", "MYSQL_KNOWLEDGE_METADATA")),
             Map.entry("HistoricalCaseRetrieveSkill", List.of("MYSQL_READ", "WEAVIATE_READ")),
             Map.entry("GraphImpactAnalyzeSkill", List.of("NEO4J_READ")),
             Map.entry("ClarifyingQuestionGenerateSkill", List.of("LLM_ADAPTER")),

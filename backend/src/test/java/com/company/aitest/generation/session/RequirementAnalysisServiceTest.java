@@ -137,7 +137,7 @@ class RequirementAnalysisServiceTest {
     @Test
     void enrichAnalysisResultKeepsClarificationQuestionsSeparateFromUncertainItems() throws Exception {
         var service = new RequirementAnalysisService(
-                null, null, null, null, null, null, null, null, null, null, null
+                null, null, null, null, null, null, null, null, null, null, null, null
         );
         Method method = RequirementAnalysisService.class.getDeclaredMethod(
                 "enrichAnalysisResult",
@@ -149,7 +149,7 @@ class RequirementAnalysisServiceTest {
 
         String output = (String) method.invoke(
                 service,
-                "{\"requirement_understanding\":\"限制报销提交流程配置\"}",
+                "{\"requirement_understanding\":\"禁止外部访问配置\"}",
                 null,
                 """
                 [
@@ -176,7 +176,7 @@ class RequirementAnalysisServiceTest {
     @Test
     void evidenceSummaryCountsSystemTomSignalsAsTomRefs() throws Exception {
         var service = new RequirementAnalysisService(
-                null, null, null, null, null, null, null, null, null, null, null
+                null, null, null, null, null, null, null, null, null, null, null, null
         );
         Method method = RequirementAnalysisService.class.getDeclaredMethod(
                 "buildEvidenceSummary",
@@ -210,7 +210,7 @@ class RequirementAnalysisServiceTest {
         when(mappedSpec.list()).thenReturn(List.of());
 
         var service = new RequirementAnalysisService(
-                mockJdbc, null, null, null, null, null, null, null, null, null, null);
+                mockJdbc, null, null, null, null, null, null, null, null, null, null, null);
 
         // 当前分析 version=3，testPoints 含 "测试点A"
         var analysis = new RequirementAnalysisRecord(
@@ -290,7 +290,7 @@ class RequirementAnalysisServiceTest {
                 .thenThrow(new com.company.aitest.common.BusinessException("mock LLM"));
 
         var fullService = new RequirementAnalysisService(
-                mockJdbc, null, null, mockLlm, mockSession, null, null, null, null, null, mockSemantic);
+                mockJdbc, null, null, mockLlm, mockSession, null, null, null, null, null, mockSemantic, null);
 
         try {
             fullService.incrementalAnalyze(10L, "补充内容", user);
@@ -309,7 +309,7 @@ class RequirementAnalysisServiceTest {
     @Test
     void enrichAnalysisResultContainsReviewRiskQuestionsAndRiskFields() throws Exception {
         var service = new RequirementAnalysisService(
-                null, null, null, null, null, null, null, null, null, null, null
+                null, null, null, null, null, null, null, null, null, null, null, null
         );
         Method method = RequirementAnalysisService.class.getDeclaredMethod(
                 "enrichAnalysisResult", String.class,
@@ -349,7 +349,7 @@ class RequirementAnalysisServiceTest {
     @Test
     void enrichAnalysisResultProvidesDefaultsForNewFieldsWhenMissing() throws Exception {
         var service = new RequirementAnalysisService(
-                null, null, null, null, null, null, null, null, null, null, null
+                null, null, null, null, null, null, null, null, null, null, null, null
         );
         Method method = RequirementAnalysisService.class.getDeclaredMethod(
                 "enrichAnalysisResult", String.class,
@@ -373,7 +373,7 @@ class RequirementAnalysisServiceTest {
     @Test
     void enrichTestPointsSetsDefaultPointTypeAndPriorityHint() throws Exception {
         var service = new RequirementAnalysisService(
-                null, null, null, null, null, null, null, null, null, null, null
+                null, null, null, null, null, null, null, null, null, null, null, null
         );
         Method method = RequirementAnalysisService.class.getDeclaredMethod(
                 "enrichTestPoints", String.class,
@@ -393,7 +393,7 @@ class RequirementAnalysisServiceTest {
     @Test
     void buildAnalysisSystemPromptAcceptsRequirementType() {
         var service = new RequirementAnalysisService(
-                null, null, null, null, null, null, null, null, null, null, null
+                null, null, null, null, null, null, null, null, null, null, null, null
         );
         String prompt = service.buildAnalysisSystemPrompt();
         assertTrue(prompt.contains("requirement_type"));
@@ -415,7 +415,7 @@ class RequirementAnalysisServiceTest {
     @Test
     void enrichTestPointsPreservesExistingPointTypeAndPriorityHint() throws Exception {
         var service = new RequirementAnalysisService(
-                null, null, null, null, null, null, null, null, null, null, null
+                null, null, null, null, null, null, null, null, null, null, null, null
         );
         Method method = RequirementAnalysisService.class.getDeclaredMethod(
                 "enrichTestPoints", String.class,
@@ -435,7 +435,7 @@ class RequirementAnalysisServiceTest {
     @Test
     void buildAnalysisSystemPromptContainsTypeRoutingRules() {
         var service = new RequirementAnalysisService(
-                null, null, null, null, null, null, null, null, null, null, null
+                null, null, null, null, null, null, null, null, null, null, null, null
         );
         String prompt = service.buildAnalysisSystemPrompt();
         // 验证 prompt 包含按需求类型选拆解骨架的规则
@@ -456,7 +456,7 @@ class RequirementAnalysisServiceTest {
     @Test
     void buildAnalysisSystemPromptContainsInputSourceRules() {
         var service = new RequirementAnalysisService(
-                null, null, null, null, null, null, null, null, null, null, null
+                null, null, null, null, null, null, null, null, null, null, null, null
         );
         String prompt = service.buildAnalysisSystemPrompt();
         // 验证输入源识别相关规则
@@ -469,7 +469,7 @@ class RequirementAnalysisServiceTest {
     @Test
     void enrichAnalysisResultSeparatesEvidenceInsufficiencyFromRequirementNotDescribed() throws Exception {
         var service = new RequirementAnalysisService(
-                null, null, null, null, null, null, null, null, null, null, null
+                null, null, null, null, null, null, null, null, null, null, null, null
         );
         Method method = RequirementAnalysisService.class.getDeclaredMethod(
                 "enrichAnalysisResult", String.class,
@@ -493,7 +493,7 @@ class RequirementAnalysisServiceTest {
     @Test
     void enrichTestPointsPreservesExistingSourceBasisAndSourceRefs() throws Exception {
         var service = new RequirementAnalysisService(
-                null, null, null, null, null, null, null, null, null, null, null
+                null, null, null, null, null, null, null, null, null, null, null, null
         );
         Method method = RequirementAnalysisService.class.getDeclaredMethod(
                 "enrichTestPoints", String.class,
@@ -520,7 +520,7 @@ class RequirementAnalysisServiceTest {
     @Test
     void enrichAnalysisResultProvidesDefaultInputSourcesWhenMissing() throws Exception {
         var service = new RequirementAnalysisService(
-                null, null, null, null, null, null, null, null, null, null, null
+                null, null, null, null, null, null, null, null, null, null, null, null
         );
         Method method = RequirementAnalysisService.class.getDeclaredMethod(
                 "enrichAnalysisResult", String.class,
@@ -541,7 +541,7 @@ class RequirementAnalysisServiceTest {
     @Test
     void enrichAnalysisResultPreservesInputSourcesFromAnalysis() throws Exception {
         var service = new RequirementAnalysisService(
-                null, null, null, null, null, null, null, null, null, null, null
+                null, null, null, null, null, null, null, null, null, null, null, null
         );
         Method method = RequirementAnalysisService.class.getDeclaredMethod(
                 "enrichAnalysisResult", String.class,
@@ -569,7 +569,7 @@ class RequirementAnalysisServiceTest {
     @Test
     void buildAnalysisSystemPromptContainsInputSourceAndBlueprintRules() {
         var service = new RequirementAnalysisService(
-                null, null, null, null, null, null, null, null, null, null, null
+                null, null, null, null, null, null, null, null, null, null, null, null
         );
         String prompt = service.buildAnalysisSystemPrompt();
 

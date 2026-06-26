@@ -11,7 +11,7 @@ class IntentRecognizerTest {
     @Test
     void clarificationAnswerWithConfirmWordsIsSupplementInWaitingStage() {
         String answer = """
-                规则配置的具体入口需要确认：在审批管理中新增管理页面。
+                规则配置的具体入口需要确认：在系统设置中新增管理页面。
                 适用对象字段为单选。
                 批量配置不支持。
                 """;

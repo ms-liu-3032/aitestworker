@@ -1217,3 +1217,115 @@ export function archiveTraceRulePack(projectId: number, packId: number) {
 export function deleteTraceRulePack(projectId: number, packId: number) {
   return api<void>(`/api/projects/${projectId}/trace-rule-packs/${packId}`, { method: 'DELETE' })
 }
+
+// ===== Wiki API =====
+export interface WikiPack {
+  id: number
+  projectId: number
+  scope: string
+  name: string
+  status: string
+  reviewStatus: string
+  trustLevel: string | null
+  sourceType: string | null
+  description: string | null
+  createdBy: number | null
+  createdAt: string
+  updatedAt: string
+}
+
+export interface WikiEntry {
+  id: number
+  packId: number
+  entryType: string
+  title: string
+  content: string
+  keywordsJson: string | null
+  sourceRefsJson: string | null
+  reviewStatus: string
+  confidence: number | null
+  effectiveStatus: string
+  createdBy: number | null
+  createdAt: string
+  updatedAt: string
+}
+
+export function listWikiPacks(projectId: number) {
+  return api<WikiPack[]>(`/api/wiki/packs?projectId=${projectId}`)
+}
+
+export function createWikiPack(projectId: number, scope: string, name: string, description: string) {
+  return api<WikiPack>('/api/wiki/packs', { method: 'POST', body: JSON.stringify({ projectId, scope, name, description }) })
+}
+
+export function deleteWikiPack(packId: number) {
+  return api<void>(`/api/wiki/packs/${packId}`, { method: 'DELETE' })
+}
+
+export function listWikiEntries(packId: number) {
+  return api<WikiEntry[]>(`/api/wiki/packs/${packId}/entries`)
+}
+
+export function createWikiEntry(packId: number, entryType: string, title: string, content: string) {
+  return api<WikiEntry>(`/api/wiki/packs/${packId}/entries`, { method: 'POST', body: JSON.stringify({ entryType, title, content }) })
+}
+
+export function reviewWikiEntry(entryId: number, reviewStatus: string) {
+  return api<WikiEntry>(`/api/wiki/entries/${entryId}/review`, { method: 'PATCH', body: JSON.stringify({ reviewStatus }) })
+}
+
+// ===== Loop API =====
+export interface LoopEvent {
+  id: number
+  projectId: number
+  eventType: string
+  sourceStage: string | null
+  rawInput: string | null
+  normalizedIssue: string | null
+  suggestedAssetType: string | null
+  sourceRefsJson: string | null
+  status: string
+  createdBy: number | null
+  createdAt: string
+  updatedAt: string
+}
+
+export interface LoopCluster {
+  id: number
+  projectId: number
+  theme: string | null
+  eventCount: number
+  suggestedAction: string | null
+  targetAssetType: string | null
+  status: string
+  createdAt: string
+  updatedAt: string
+}
+
+export function getLoopStatus() {
+  return api<boolean>('/api/loop/status')
+}
+
+export function setLoopStatus(enabled: boolean) {
+  return api<void>('/api/loop/status', { method: 'POST', body: JSON.stringify({ enabled }) })
+}
+
+export function listLoopEvents(projectId: number) {
+  return api<LoopEvent[]>(`/api/loop/events?projectId=${projectId}`)
+}
+
+export function listLoopClusters(projectId: number) {
+  return api<LoopCluster[]>(`/api/loop/clusters?projectId=${projectId}`)
+}
+
+export function approveLoopCluster(clusterId: number) {
+  return api<LoopCluster>(`/api/loop/clusters/${clusterId}/status`, { method: 'PATCH', body: JSON.stringify({ status: 'APPROVED' }) })
+}
+
+export function rejectLoopCluster(clusterId: number) {
+  return api<LoopCluster>(`/api/loop/clusters/${clusterId}/status`, { method: 'PATCH', body: JSON.stringify({ status: 'REJECTED' }) })
+}
+
+export function consumeLoopCandidates(projectId: number) {
+  return api<{ candidatesGenerated: number }>(`/api/loop/consume?projectId=${projectId}`, { method: 'POST' })
+}

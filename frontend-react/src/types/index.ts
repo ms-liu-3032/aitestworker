@@ -48,6 +48,7 @@ export const PROJECT_NAV_ITEMS: ProjectNavItem[] = [
   { key: 'formal-cases', label: '正式用例库', icon: '✅' },
   { key: 'assets', label: '测试资产沉淀', icon: '💎' },
   { key: 'mini-tom', label: 'Mini-TOM', icon: '🧩' },
+  { key: 'wiki', label: '知识库', icon: '📚' },
   { key: 'tools', label: '测试小工具', icon: '🔧' },
   { key: 'settings', label: '项目设置', icon: '⚙️' },
 ];
@@ -61,4 +62,5 @@ export const ADMIN_NAV_ITEMS: AdminNavItem[] = [
   { key: 'assets', label: '正式测试资产库', icon: '📦' },
   { key: 'candidates', label: '候选资产审核', icon: '📝' },
   { key: 'scan', label: '系统配置', icon: '🔍' },
+  { key: 'loop', label: '学习回灌', icon: '🔄' },
 ];

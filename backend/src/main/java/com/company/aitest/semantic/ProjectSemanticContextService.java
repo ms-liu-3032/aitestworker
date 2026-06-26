@@ -481,7 +481,64 @@ public class ProjectSemanticContextService {
         candidates.addAll(loadSummarySignals(projectId));
         candidates.addAll(loadTermSignals(projectId));
         candidates.addAll(loadBusinessPackSignals(projectId));
+        candidates.addAll(loadWikiSignals(projectId));
+        candidates.addAll(loadLoopSignals(projectId));
         return deduplicateSignals(candidates);
+    }
+
+    /**
+     * 从 ACTIVE wiki_entry 中加载知识条目作为语义信号。
+     * 三层优先级：PROJECT > REUSABLE > SYSTEM。
+     */
+    private List<SemanticSignal> loadWikiSignals(Long projectId) {
+        return jdbcTemplate.query("""
+                SELECT we.entry_type, we.title, we.content, we.confidence, wp.scope
+                FROM wiki_entry we
+                JOIN wiki_pack wp ON we.pack_id = wp.id
+                WHERE wp.status = 'ACTIVE' AND we.effective_status = 'ACTIVE'
+                  AND (wp.project_id = ? OR wp.scope IN ('REUSABLE', 'SYSTEM'))
+                ORDER BY
+                    CASE wp.scope WHEN 'PROJECT' THEN 1 WHEN 'REUSABLE' THEN 2 WHEN 'SYSTEM' THEN 3 END,
+                    we.confidence DESC
+                LIMIT 30
+                """, (rs, rowNum) -> new SemanticSignal(
+                "Wiki:" + rs.getString("entry_type"),
+                safe(rs.getString("title")),
+                clip(firstNonBlank(rs.getString("content")), 140),
+                null,
+                rs.getBigDecimal("confidence").doubleValue() * 0.8,
+                null
+        ), projectId);
+    }
+
+    /**
+     * 从 Loop APPROVED 聚类中加载历史纠偏提示作为语义信号。
+     * 仅在 Loop 开启时生效，按 event_count 降序召回高频问题。
+     */
+    private List<SemanticSignal> loadLoopSignals(Long projectId) {
+        try {
+            Boolean loopEnabled = jdbcTemplate.queryForObject(
+                    "SELECT enabled FROM system_feature_toggle WHERE feature_key = 'LOOP_ENGINE'",
+                    Boolean.class);
+            if (!Boolean.TRUE.equals(loopEnabled)) return List.of();
+
+            return jdbcTemplate.query("""
+                    SELECT theme, event_count, suggested_action, target_asset_type
+                    FROM learning_loop_cluster
+                    WHERE project_id = ? AND status = 'APPROVED'
+                    ORDER BY event_count DESC
+                    LIMIT 10
+                    """, (rs, rowNum) -> new SemanticSignal(
+                    "Loop:" + safe(rs.getString("target_asset_type")),
+                    safe(rs.getString("theme")),
+                    clip(firstNonBlank(rs.getString("suggested_action")), 140),
+                    null,
+                    Math.min(1.0, rs.getInt("event_count") * 0.1),
+                    null
+            ), projectId);
+        } catch (Exception e) {
+            return List.of();
+        }
     }
 
     /**

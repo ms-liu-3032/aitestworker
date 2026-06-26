@@ -135,18 +135,8 @@ class P6E2EVerificationTest {
         LlmGateway mockLlm = org.mockito.Mockito.mock(LlmGateway.class);
         org.mockito.Mockito.when(mockLlm.invoke(org.mockito.ArgumentMatchers.any()))
                 .thenReturn(new LlmInvocationResponse(
-                        "test-request",
-                        llmResponse,
-                        0,
-                        0,
-                        0L,
-                        null,
-                        null,
-                        null,
-                        LlmInvocationStatus.OK,
-                        null,
-                        null
-                ));
+                        "test-request", llmResponse, 0, 0, 0L, null, null, null,
+                        LlmInvocationStatus.OK, null, null));
 
         // Mock services
         IntentRecognizer intentRecognizer = new IntentRecognizer();

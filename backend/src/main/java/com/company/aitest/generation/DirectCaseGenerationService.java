@@ -70,10 +70,12 @@ public class DirectCaseGenerationService {
     private final ObjectMapper objectMapper;
     private final MiniTomService miniTomService;
     private final ClarificationService clarificationService;
+    private final com.company.aitest.loop.LoopIntegrationService loopIntegrationService;
 
     public DirectCaseGenerationService(GenerationTaskService generationTaskService, LlmGateway llmGateway,
                                        JdbcTemplate jdbcTemplate, JdbcClient jdbc, TimeProvider timeProvider,
-                                       MiniTomService miniTomService, ClarificationService clarificationService) {
+                                       MiniTomService miniTomService, ClarificationService clarificationService,
+                                       com.company.aitest.loop.LoopIntegrationService loopIntegrationService) {
         this.generationTaskService = generationTaskService;
         this.llmGateway = llmGateway;
         this.jdbcTemplate = jdbcTemplate;
@@ -82,6 +84,7 @@ public class DirectCaseGenerationService {
         this.objectMapper = new ObjectMapper();
         this.miniTomService = miniTomService;
         this.clarificationService = clarificationService;
+        this.loopIntegrationService = loopIntegrationService;
     }
 
     public GenerateResult generateFromTask(Long projectId, Long taskId, CurrentUser user) {
@@ -165,6 +168,9 @@ public class DirectCaseGenerationService {
                 assumptions = objectMapper.readValue(task.assumptionsSnapshot(), new TypeReference<>() {});
             } catch (Exception ignored) {}
         }
+
+        loopIntegrationService.onGenerationCompleted(projectId, task.requirementText(), null, output, user);
+        loopIntegrationService.onChineseLocalizationCheck(projectId, output, "CASE_GENERATION", user);
 
         return new GenerateResult(task.id(), output, saved, tomHitCount, false, List.of(), assumptions);
     }

@@ -83,6 +83,7 @@ public class TraceSummaryService {
     private final TraceCorrectionSuggestionService correctionService;
     private final ProjectSemanticContextService semanticContextService;
     private final List<TraceRulePack> traceRulePacks;
+    private final com.company.aitest.loop.LoopIntegrationService loopIntegrationService;
 
     public TraceSummaryService(JdbcClient jdbc, JdbcTemplate jdbcTemplate, TimeProvider timeProvider,
                                TraceDataService traceDataService, BrowserTraceGroupService groupService,
@@ -91,7 +92,8 @@ public class TraceSummaryService {
                                ControlledScanService controlledScanService,
                                TraceCorrectionSuggestionService correctionService,
                                ProjectSemanticContextService semanticContextService,
-                               List<TraceRulePack> traceRulePacks) {
+                               List<TraceRulePack> traceRulePacks,
+                               com.company.aitest.loop.LoopIntegrationService loopIntegrationService) {
         this.jdbc = jdbc;
         this.jdbcTemplate = jdbcTemplate;
         this.timeProvider = timeProvider;
@@ -103,6 +105,7 @@ public class TraceSummaryService {
         this.correctionService = correctionService;
         this.semanticContextService = semanticContextService;
         this.traceRulePacks = traceRulePacks;
+        this.loopIntegrationService = loopIntegrationService;
         this.objectMapper = new ObjectMapper();
         this.traceStepNormalizer = new TraceStepNormalizer(this.traceRulePacks);
     }
@@ -150,7 +153,12 @@ public class TraceSummaryService {
                 user.id(), parsed.pendingConfirmationJson(), now, now);
 
         Long id = jdbc.sql("select last_insert_id()").query(Long.class).single();
-        return getSummaryById(id);
+        var record = getSummaryById(id);
+
+        loopIntegrationService.onTraceSummaryCompleted(detail.group().projectId(), output, prompt, user);
+        loopIntegrationService.onChineseLocalizationCheck(detail.group().projectId(), output, "TRACE_SUMMARY", user);
+
+        return record;
     }
 
     /**

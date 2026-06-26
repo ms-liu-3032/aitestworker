@@ -50,13 +50,15 @@ public class RequirementAnalysisService {
     private final GenerationTaskService taskService;
     private final DirectCaseGenerationService directCaseGenerationService;
     private final ProjectSemanticContextService semanticContextService;
+    private final com.company.aitest.loop.LoopIntegrationService loopIntegrationService;
 
     public RequirementAnalysisService(JdbcClient jdbc, JdbcTemplate jdbcTemplate, TimeProvider timeProvider,
                                        LlmGateway llmGateway, GenerationSessionService sessionService,
                                        GenerationMessageService messageService, GenerationAttachmentService attachmentService,
                                        MiniTomService miniTomService, GenerationTaskService taskService,
                                        DirectCaseGenerationService directCaseGenerationService,
-                                       ProjectSemanticContextService semanticContextService) {
+                                       ProjectSemanticContextService semanticContextService,
+                                       com.company.aitest.loop.LoopIntegrationService loopIntegrationService) {
         this.jdbc = jdbc;
         this.jdbcTemplate = jdbcTemplate;
         this.timeProvider = timeProvider;
@@ -68,6 +70,7 @@ public class RequirementAnalysisService {
         this.taskService = taskService;
         this.directCaseGenerationService = directCaseGenerationService;
         this.semanticContextService = semanticContextService;
+        this.loopIntegrationService = loopIntegrationService;
     }
 
     public RequirementAnalysisRecord analyze(Long sessionId, CurrentUser user) {
@@ -181,6 +184,9 @@ public class RequirementAnalysisService {
             summary += "\n\n请确认以上分析是否正确？有什么需要补充或修改的内容请输入。\n你也可以点击「跳过确认，直接生成用例」。";
         }
         messageService.appendAssistantMessage(sessionId, summary, llmOutput, "REQ_ANALYSIS", newVersion);
+
+        loopIntegrationService.onTomUsageEvaluated(projectId, analysisResult, tomSnapshot, user);
+        loopIntegrationService.onChineseLocalizationCheck(projectId, analysisResult, "ANALYSIS", user);
 
         return getAnalysis(sessionId, newVersion);
     }

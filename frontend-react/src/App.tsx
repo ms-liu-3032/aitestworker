@@ -23,6 +23,7 @@ const MiniTom = lazy(() => import('./pages/project/MiniTom'));
 const TestTools = lazy(() => import('./pages/project/TestTools'));
 const ProjectSettings = lazy(() => import('./pages/project/ProjectSettings'));
 const BusinessPacks = lazy(() => import('./pages/project/BusinessPacks'));
+const WikiPackages = lazy(() => import('./pages/project/WikiPackages'));
 
 // 模块 C：Management Console
 const UserManagement = lazy(() => import('./pages/admin/UserManagement'));
@@ -32,6 +33,7 @@ const MiniTomModels = lazy(() => import('./pages/admin/MiniTomModels'));
 const AssetLibrary = lazy(() => import('./pages/admin/AssetLibrary'));
 const CandidateReview = lazy(() => import('./pages/admin/CandidateReview'));
 const SystemConfig = lazy(() => import('./pages/admin/SystemConfig'));
+const LoopConfig = lazy(() => import('./pages/admin/LoopConfig'));
 
 function PageLoading() {
   return (
@@ -79,6 +81,7 @@ function ProtectedApp() {
             <Route path="tools" element={<TestTools />} />
             <Route path="settings" element={<ProjectSettings />} />
             <Route path="business-packs" element={<BusinessPacks />} />
+            <Route path="wiki" element={<WikiPackages />} />
           </Route>
 
           {/* 模块 C：Management Console（带侧边栏） */}
@@ -91,6 +94,7 @@ function ProtectedApp() {
             <Route path="assets" element={<AssetLibrary />} />
             <Route path="candidates" element={<CandidateReview />} />
             <Route path="scan" element={<SystemConfig />} />
+            <Route path="loop" element={<LoopConfig />} />
           </Route>
 
           {/* 兜底路由 */}
