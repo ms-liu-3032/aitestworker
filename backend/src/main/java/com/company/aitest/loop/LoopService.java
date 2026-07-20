@@ -82,9 +82,20 @@ public class LoopService {
 
     @Transactional
     public LoopEventRecord updateEventStatus(Long eventId, String status) {
+        validateEventStatus(status);
+        LoopEventRecord event = getEvent(eventId);
+        if (event.status().equals(status)) {
+            return event;
+        }
+        if (!isAllowedLoopStatusTransition(event.status(), status)) {
+            throw new BusinessException("事件状态不允许从 " + event.status() + " 变更为 " + status);
+        }
         LocalDateTime now = timeProvider.now();
-        jdbcTemplate.update("UPDATE learning_loop_event SET status = ?, updated_at = ? WHERE id = ?",
-                status, now, eventId);
+        int updated = jdbcTemplate.update("UPDATE learning_loop_event SET status = ?, updated_at = ? WHERE id = ? AND status = ?",
+                status, now, eventId, event.status());
+        if (updated == 0) {
+            throw new BusinessException("事件状态已变化，请刷新后重试");
+        }
         return getEvent(eventId);
     }
 
@@ -119,9 +130,20 @@ public class LoopService {
 
     @Transactional
     public LoopClusterRecord updateClusterStatus(Long clusterId, String status) {
+        validateClusterStatus(status);
+        LoopClusterRecord cluster = getCluster(clusterId);
+        if (cluster.status().equals(status)) {
+            return cluster;
+        }
+        if (!isAllowedLoopStatusTransition(cluster.status(), status)) {
+            throw new BusinessException("聚类状态不允许从 " + cluster.status() + " 变更为 " + status);
+        }
         LocalDateTime now = timeProvider.now();
-        jdbcTemplate.update("UPDATE learning_loop_cluster SET status = ?, updated_at = ? WHERE id = ?",
-                status, now, clusterId);
+        int updated = jdbcTemplate.update("UPDATE learning_loop_cluster SET status = ?, updated_at = ? WHERE id = ? AND status = ?",
+                status, now, clusterId, cluster.status());
+        if (updated == 0) {
+            throw new BusinessException("聚类状态已变化，请刷新后重试");
+        }
         return getCluster(clusterId);
     }
 
@@ -189,8 +211,12 @@ public class LoopService {
                 default -> count += generateWikiCandidates(projectId, cluster, events, now, sourceRefs);
             }
 
-            jdbcTemplate.update("UPDATE learning_loop_cluster SET status = 'CONSUMED', updated_at = ? WHERE id = ?",
+            int updated = jdbcTemplate.update(
+                    "UPDATE learning_loop_cluster SET status = 'CONSUMED', updated_at = ? WHERE id = ? AND status = 'APPROVED'",
                     now, cluster.id());
+            if (updated == 0) {
+                throw new BusinessException("聚类状态已变化，请刷新后重试");
+            }
         }
         return count;
     }
@@ -309,6 +335,28 @@ public class LoopService {
             case "LOCALIZATION_CHECK" -> "WIKI";
             default -> "WIKI";
         };
+    }
+
+    private void validateEventStatus(String status) {
+        if (!Set.of("PENDING", "APPROVED", "REJECTED", "CONSUMED").contains(status)) {
+            throw new BusinessException("事件状态不支持：" + status);
+        }
+    }
+
+    private void validateClusterStatus(String status) {
+        if (!Set.of("PENDING", "APPROVED", "REJECTED", "CONSUMED").contains(status)) {
+            throw new BusinessException("聚类状态不支持：" + status);
+        }
+    }
+
+    private boolean isAllowedLoopStatusTransition(String from, String to) {
+        if ("PENDING".equals(from)) {
+            return "APPROVED".equals(to) || "REJECTED".equals(to);
+        }
+        if ("APPROVED".equals(from)) {
+            return "CONSUMED".equals(to) || "REJECTED".equals(to);
+        }
+        return false;
     }
 
     // ---- Mapper ----

@@ -27,8 +27,8 @@ import {
   generateGroupCases,
   generateGroupSkill,
   generateGroupTool,
-  listGeneratedCases as listTraceGeneratedCases,
-  listFormalCases,
+  listGeneratedCasesPage as listTraceGeneratedCasesPage,
+  listFormalCasesPage,
   submitGeneratedCase as submitTraceGeneratedCase,
   deleteGroup as apiDeleteGroup,
   createBindCode as apiCreateBindCode,
@@ -58,7 +58,7 @@ import {
   type WorkerStartResult,
   type WorkerStopResult,
 } from '../../services/traceApi';
-import { api as baseApi, listLocalCases, type LocalCaseDraft } from '../../services/api';
+import { api as baseApi, listLocalCasesPage, type LocalCaseDraft } from '../../services/api';
 import { type ModelConfigOption } from '../../services/generationApi';
 import SegmentedControl from '../SegmentedControl';
 import StatusBadge from '../StatusBadge';
@@ -278,8 +278,12 @@ export default function TracePanel({ projectId }: { projectId: number }) {
   const [profiles, setProfiles] = useState<BrowserProfile[]>([]);
   const [groups, setGroups] = useState<BrowserTraceGroup[]>([]);
   const [traceGeneratedCases, setTraceGeneratedCases] = useState<TraceGeneratedCase[]>([]);
+  const [traceGeneratedCaseTotal, setTraceGeneratedCaseTotal] = useState(0);
+  const [traceGeneratedCasePage, setTraceGeneratedCasePage] = useState(0);
   const [localCases, setLocalCases] = useState<LocalCaseDraft[]>([]);
   const [formalCases, setFormalCases] = useState<FormalCase[]>([]);
+  const [localCaseTotal, setLocalCaseTotal] = useState(0);
+  const [formalCaseTotal, setFormalCaseTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
@@ -406,48 +410,76 @@ export default function TracePanel({ projectId }: { projectId: number }) {
     setWorkerHealth(health);
     if (!health) setWorkerError('采集器未启动');
     setCheckingWorker(false);
+    return health;
   }, []);
 
   const loadProfiles = useCallback(async () => {
-    try { setProfiles(await listProfiles(projectId)); }
+    try {
+      const data = await listProfiles(projectId);
+      setProfiles(data);
+      return data;
+    }
     catch (e: any) { setError(e.message || '加载身份空间失败'); }
+    return [];
   }, [projectId]);
 
   const loadGroups = useCallback(async () => {
-    try { setGroups(await listGroups(projectId)); }
+    try {
+      const data = await listGroups(projectId);
+      setGroups(data);
+      return data;
+    }
     catch (e: any) { setError(e.message || '加载采集组失败'); }
+    return [];
   }, [projectId]);
 
   const loadEnabledModels = useCallback(async () => {
     try {
       const models = await baseApi<ModelConfigOption[]>('/api/model-configs/enabled');
       setEnabledModels(models);
-      if (!traceModelConfigId && models.length > 0) setTraceModelConfigId(models[0].id);
+      setTraceModelConfigId(current => current || models[0]?.id || 0);
     } catch (e: any) { setError(e.message || '加载模型失败'); }
-  }, [traceModelConfigId]);
+  }, []);
 
-  const loadTraceGeneratedCases = useCallback(async () => {
-    try { setTraceGeneratedCases(await listTraceGeneratedCases(projectId)); }
+  const loadTraceGeneratedCases = useCallback(async (groupId = expandedGroupId, page = traceGeneratedCasePage) => {
+    if (!groupId) return;
+    try {
+      const result = await listTraceGeneratedCasesPage(projectId, groupId, page, 20);
+      setTraceGeneratedCases(result.items || []);
+      setTraceGeneratedCaseTotal(result.total || 0);
+      setTraceGeneratedCasePage(result.page || 0);
+    }
     catch (e: any) { setError(e.message || '加载轨迹草稿失败'); }
-  }, [projectId]);
+  }, [projectId, expandedGroupId, traceGeneratedCasePage]);
 
   const loadLocalCases = useCallback(async () => {
-    try { setLocalCases(await listLocalCases(projectId)); }
+    try {
+      const page = await listLocalCasesPage(projectId, 0, 10);
+      setLocalCases(page.items || []);
+      setLocalCaseTotal(page.total || 0);
+    }
     catch (e: any) { setError(e.message || '加载本地用例库失败'); }
   }, [projectId]);
 
   const loadFormalCases = useCallback(async () => {
-    try { setFormalCases(await listFormalCases(projectId)); }
+    try {
+      const page = await listFormalCasesPage(projectId, 0, 10);
+      setFormalCases(page.items || []);
+      setFormalCaseTotal(page.total || 0);
+    }
     catch (e: any) { setError(e.message || '加载正式库失败'); }
   }, [projectId]);
 
   const initialize = useCallback(async () => {
     setLoading(true);
-    await Promise.all([loadProfiles(), loadGroups(), loadEnabledModels(), loadTraceGeneratedCases(), loadLocalCases(), loadFormalCases()]);
-    await checkWorker();
-    await syncCaptureState();
+    const [, loadedGroups] = await Promise.all([loadProfiles(), loadGroups(), loadEnabledModels()]);
     setLoading(false);
-  }, [loadProfiles, loadGroups, loadEnabledModels, loadTraceGeneratedCases, loadLocalCases, loadFormalCases, checkWorker]);
+
+    // Libraries and the local worker are secondary information. They must not hold the trace page's
+    // first paint hostage, especially when a project already owns hundreds of generated cases.
+    void Promise.all([loadLocalCases(), loadFormalCases()]);
+    void checkWorker().then(health => syncCaptureState(health, loadedGroups));
+  }, [loadProfiles, loadGroups, loadEnabledModels, loadLocalCases, loadFormalCases, checkWorker]);
 
   useEffect(() => {
     initialize();
@@ -458,10 +490,13 @@ export default function TracePanel({ projectId }: { projectId: number }) {
   }, [initialize, checkWorker]);
 
   // Sync capture state with worker
-  const syncCaptureState = useCallback(async () => {
-    const activeSessionIds = new Set(workerHealth?.activeSessions || []);
+  const syncCaptureState = useCallback(async (
+    health: WorkerHealth | null = workerHealth,
+    currentGroups: BrowserTraceGroup[] = groups,
+  ) => {
+    const activeSessionIds = new Set(health?.activeSessions || []);
     const next: Record<number, { groupId: number; sessionId: number }> = {};
-    const recordingGroups = groups.filter(g => g.status === 'RECORDING');
+    const recordingGroups = currentGroups.filter(g => g.status === 'RECORDING');
     for (const group of recordingGroups) {
       try {
         const sessions = await listGroupSessions(group.id);
@@ -622,6 +657,9 @@ export default function TracePanel({ projectId }: { projectId: number }) {
     if (expandedGroupId === g.id) {
       setExpandedGroupId(null);
       setGroupDetail(null);
+      setTraceGeneratedCases([]);
+      setTraceGeneratedCaseTotal(0);
+      setTraceGeneratedCasePage(0);
       setExpandedSessionId(null);
       setDetailTab('overview');
       setCleanSteps([]);
@@ -630,6 +668,7 @@ export default function TracePanel({ projectId }: { projectId: number }) {
       setGroupCorrections([]);
     } else {
       setExpandedGroupId(g.id);
+      setTraceGeneratedCasePage(0);
       setExpandedSessionId(null);
       setDetailTab('overview');
       try {
@@ -655,6 +694,9 @@ export default function TracePanel({ projectId }: { projectId: number }) {
       setGroupSkills(skills.status === 'fulfilled' ? skills.value : []);
       setGroupTools(tools.status === 'fulfilled' ? tools.value : []);
       setGroupCorrections(corrections.status === 'fulfilled' ? corrections.value : []);
+      // Trace drafts are only rendered inside an expanded group. Keep this potentially large
+      // project-wide query out of the initial route load.
+      await loadTraceGeneratedCases(g.id, 0);
     }
   };
 
@@ -1183,8 +1225,8 @@ export default function TracePanel({ projectId }: { projectId: number }) {
         />
         <StatCard
           title="资产沉淀"
-          value={`${activeLocalCases.length} 条本地草稿`}
-          subtitle={`正式库 ${formalCases.length} 条 / 采集组 ${groups.length} 个`}
+          value={`${localCaseTotal} 条本地用例`}
+          subtitle={`正式库 ${formalCaseTotal} 条 / 采集组 ${groups.length} 个`}
         />
       </div>
 
@@ -2018,6 +2060,23 @@ export default function TracePanel({ projectId }: { projectId: number }) {
                               {groupTraceGeneratedCases(group.id).length === 0 && (
                                 <div className="text-xs text-gray-400 py-2">
                                   暂无轨迹草稿，生成后可在当前采集组资产区继续查看并提交正式库。
+                                </div>
+                              )}
+                              {traceGeneratedCaseTotal > 20 && (
+                                <div className="flex items-center justify-between border-t border-gray-100 pt-2 text-xs text-gray-500">
+                                  <span>共 {traceGeneratedCaseTotal} 条，第 {traceGeneratedCasePage + 1} / {Math.ceil(traceGeneratedCaseTotal / 20)} 页</span>
+                                  <div className="flex gap-2">
+                                    <button
+                                      onClick={() => loadTraceGeneratedCases(group.id, traceGeneratedCasePage - 1)}
+                                      disabled={traceGeneratedCasePage === 0}
+                                      className="rounded border border-gray-200 px-2 py-1 disabled:opacity-40"
+                                    >上一页</button>
+                                    <button
+                                      onClick={() => loadTraceGeneratedCases(group.id, traceGeneratedCasePage + 1)}
+                                      disabled={(traceGeneratedCasePage + 1) * 20 >= traceGeneratedCaseTotal}
+                                      className="rounded border border-gray-200 px-2 py-1 disabled:opacity-40"
+                                    >下一页</button>
+                                  </div>
                                 </div>
                               )}
                             </div>

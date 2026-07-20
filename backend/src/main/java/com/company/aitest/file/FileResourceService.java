@@ -16,14 +16,18 @@ public class FileResourceService {
     private final JdbcClient jdbc;
     private final JdbcTemplate jdbcTemplate;
     private final TimeProvider timeProvider;
+    private final FileStorageService fileStorageService;
 
-    public FileResourceService(JdbcClient jdbc, JdbcTemplate jdbcTemplate, TimeProvider timeProvider) {
+    public FileResourceService(JdbcClient jdbc, JdbcTemplate jdbcTemplate, TimeProvider timeProvider,
+                               FileStorageService fileStorageService) {
         this.jdbc = jdbc;
         this.jdbcTemplate = jdbcTemplate;
         this.timeProvider = timeProvider;
+        this.fileStorageService = fileStorageService;
     }
 
     public FileResourceRecord register(Long projectId, RegisterFileCommand command, CurrentUser user) {
+        fileStorageService.validateStoragePath(command.storagePath());
         LocalDateTime now = timeProvider.now();
         jdbcTemplate.update("""
                 insert into file_resource(project_id, file_name, file_type, storage_type, storage_path, content_hash, created_by, created_at)
@@ -37,6 +41,15 @@ public class FileResourceService {
     public List<FileResourceRecord> list(Long projectId) {
         return jdbc.sql("select * from file_resource where project_id = :projectId order by id desc")
                 .param("projectId", projectId).query(this::map).list();
+    }
+
+    public FileResourceRecord getForProject(Long projectId, Long fileId) {
+        return jdbc.sql("select * from file_resource where id = :id and project_id = :projectId")
+                .param("id", fileId)
+                .param("projectId", projectId)
+                .query(this::map)
+                .optional()
+                .orElseThrow(() -> new com.company.aitest.common.BusinessException("文件不存在"));
     }
 
     private FileResourceRecord map(ResultSet rs, int rowNum) throws SQLException {

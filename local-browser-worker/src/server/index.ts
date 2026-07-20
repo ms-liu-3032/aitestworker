@@ -12,8 +12,6 @@ import {
 const DEFAULT_ALLOWED_ORIGINS = [
   'http://localhost:5173',
   'http://127.0.0.1:5173',
-  'http://192.168.41.205:5173',
-  'http://192.168.204.37:5173',
 ];
 
 function deriveAllowedOrigins(config: WorkerConfig): string[] {
@@ -265,11 +263,10 @@ function ensureLocalToken(
   const header = req.headers['x-local-token'];
   const authorization = req.headers['authorization'];
   const requestUrl = new URL(req.url || '/', 'http://127.0.0.1');
-  const queryToken = requestUrl.searchParams.get('localToken') || '';
   const actual = Array.isArray(header) ? header[0] : header;
   const bearer = Array.isArray(authorization) ? authorization[0] : authorization;
   const bearerToken = bearer?.startsWith('Bearer ') ? bearer.slice(7).trim() : '';
-  if (actual === expected || bearerToken === expected || queryToken === expected) return true;
+  if (actual === expected || bearerToken === expected) return true;
   sendJson(res, 401, { success: false, message: '本地访问令牌无效，请在页面填写 local_token。' }, corsOrigin);
   return false;
 }

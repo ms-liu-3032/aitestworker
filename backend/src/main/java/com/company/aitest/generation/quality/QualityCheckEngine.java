@@ -22,6 +22,8 @@ public class QualityCheckEngine {
                 this::checkLevelInvalid,
                 this::checkDuplicateCaseNo,
                 this::checkSuspectedDuplicate,
+                this::checkFieldValidationOverSplit,
+                this::checkP0Boundary,
                 this::checkVagueExpression,
                 this::checkSourceEmpty,
                 this::checkAiAssumptionNotMarked);
@@ -133,6 +135,54 @@ public class QualityCheckEngine {
             }
         }
         return issues;
+    }
+
+    private List<QualityCheckIssue> checkFieldValidationOverSplit(List<QualityCheckCaseInput> inputs) {
+        List<QualityCheckIssue> issues = new ArrayList<>();
+        Map<String, List<QualityCheckCaseInput>> grouped = inputs.stream()
+                .filter(input -> input.module() != null && input.title() != null)
+                .filter(input -> containsAny(input.title(), "必填", "字段校验", "格式校验", "长度校验", "输入校验"))
+                .collect(Collectors.groupingBy(input -> input.module().strip()));
+        for (List<QualityCheckCaseInput> group : grouped.values()) {
+            if (group.size() >= 3) {
+                for (QualityCheckCaseInput input : group) {
+                    issues.add(new QualityCheckIssue("FIELD_VALIDATION_OVER_SPLIT", "WARN", input.caseNo(),
+                            "同一模块存在多条字段校验类用例，可能拆分过细",
+                            "建议按表单或字段组聚合校验，避免每个字段单独生成重复用例"));
+                }
+            }
+        }
+        return issues;
+    }
+
+    private List<QualityCheckIssue> checkP0Boundary(List<QualityCheckCaseInput> inputs) {
+        List<QualityCheckIssue> issues = new ArrayList<>();
+        for (QualityCheckCaseInput input : inputs) {
+            if (input.level() == null || !"P0".equals(input.level().strip().toUpperCase())) {
+                continue;
+            }
+            String text = ((input.title() == null ? "" : input.title()) + " "
+                    + (input.steps() == null ? "" : input.steps()) + " "
+                    + (input.expected() == null ? "" : input.expected())).toLowerCase();
+            if (containsAny(text, "取消", "关闭", "样式", "布局", "必填", "边界", "权限", "无权限", "异常", "失败")) {
+                issues.add(new QualityCheckIssue("P0_SCOPE_REVIEW", "WARN", input.caseNo(),
+                        "P0 用例疑似不是核心主路径",
+                        "请复核 P0 仅用于核心业务 Happy Path，字段校验/权限/异常/取消关闭通常应降级"));
+            }
+        }
+        return issues;
+    }
+
+    private boolean containsAny(String text, String... keywords) {
+        if (text == null || text.isBlank()) {
+            return false;
+        }
+        for (String keyword : keywords) {
+            if (text.contains(keyword)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private List<QualityCheckIssue> checkSourceEmpty(List<QualityCheckCaseInput> inputs) {

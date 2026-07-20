@@ -55,8 +55,11 @@ public class IntentRecognizer {
 
         // 1. Stage-specific checks first (highest priority)
 
-        // ASK_TOM_MODE: everything is a TOM choice
+        // Explicit generation remains a generation command even when a recovered/stale
+        // session is parked at ASK_TOM_MODE. The generator itself verifies that an analysis exists.
         if ("ASK_TOM_MODE".equals(currentStage)) {
+            if (matchesAny(lower, GENERATE_KEYWORDS)) return UserIntent.GENERATE_CASES;
+            if (len <= 4 && matchesAny(lower, GENERATE_SHORT)) return UserIntent.GENERATE_CASES;
             return UserIntent.CHOOSE_TOM_MODE;
         }
 
@@ -70,7 +73,9 @@ public class IntentRecognizer {
         }
 
         // WAITING_USER_CONFIRMATION: check commands first, then treat as supplement
-        if ("WAITING_USER_CONFIRMATION".equals(currentStage) || "ANALYSIS_READY".equals(currentStage)) {
+        if ("WAITING_REQUIREMENT_SCOPE".equals(currentStage)
+                || "WAITING_USER_CONFIRMATION".equals(currentStage)
+                || "ANALYSIS_READY".equals(currentStage)) {
             // Generate cases
             if (matchesAny(lower, GENERATE_KEYWORDS)) return UserIntent.GENERATE_CASES;
             if (len <= 4 && matchesAny(lower, GENERATE_SHORT)) return UserIntent.GENERATE_CASES;
@@ -110,6 +115,14 @@ public class IntentRecognizer {
         if (matchesAny(lower, TOM_NO_KEYWORDS)) return "DIRECT";
         if (matchesAny(lower, TOM_PROJECT_ONLY_KEYWORDS)) return "PROJECT_TOM";
         return "PROJECT_AND_SYSTEM_TOM";
+    }
+
+    public boolean isExplicitTomModeChoice(String message) {
+        if (message == null || message.isBlank() || message.trim().length() > 30) return false;
+        String lower = message.trim().toLowerCase().replaceAll("[\\s,.，。、!?！？:：;；]", "");
+        return matchesAny(lower, TOM_NO_KEYWORDS)
+                || matchesAny(lower, TOM_PROJECT_ONLY_KEYWORDS)
+                || matchesAny(lower, TOM_YES_KEYWORDS);
     }
 
     private boolean matchesAny(String text, Set<String> keywords) {

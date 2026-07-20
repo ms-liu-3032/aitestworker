@@ -31,7 +31,7 @@ export default function LoginPage() {
           <div className="w-12 h-12 bg-slate-900 text-white rounded-xl flex items-center justify-center text-xl font-bold mx-auto mb-4">
             A
           </div>
-          <h1 className="text-xl font-bold text-gray-900">AITestHub</h1>
+          <h1 className="text-xl font-bold text-gray-900">AI Test Platform</h1>
           <p className="text-sm text-gray-500 mt-1">智能测试平台</p>
         </div>
         <form onSubmit={handleSubmit} className="space-y-4">

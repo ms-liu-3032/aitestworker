@@ -25,6 +25,7 @@ need_cmd node
 need_cmd npm
 need_cmd docker
 need_cmd tar
+need_cmd openssl
 
 echo "==> 构建前端静态资源"
 (
@@ -52,7 +53,7 @@ cp -R "$FRONTEND_DIST"/. "$BUILD_ROOT/app/frontend-dist/"
 
 cat > "$BUILD_ROOT/.env.example" <<'EOF'
 APP_NAME=aitest-server
-MYSQL_ROOT_PASSWORD=root
+MYSQL_ROOT_PASSWORD=replace-with-a-unique-mysql-root-password
 MYSQL_DATABASE=aitest
 MYSQL_PORT=3306
 REDIS_PORT=6379
@@ -63,12 +64,59 @@ MINIO_API_PORT=9000
 MINIO_CONSOLE_PORT=9001
 WEB_PORT=5173
 BACKEND_PORT=8080
-APP_SECRET_KEY=jhMJjbxDD1cYO+4P4JJks4XQEj6vZl96DpizxxmZHIk=
-JWT_SECRET=change-me-change-me-change-me-change-me-32
-MINIO_ROOT_USER=minio
-MINIO_ROOT_PASSWORD=minio123
-NEO4J_AUTH=neo4j/password
+APP_SECRET_KEY=replace-with-base64-encoded-32-byte-key
+JWT_SECRET=replace-with-at-least-32-random-bytes
+# Optional. When omitted, APP_SECRET_KEY also encrypts model API keys.
+APP_MODEL_SECRET_KEY=
+MINIO_ROOT_USER=replace-with-a-minio-admin-user
+MINIO_ROOT_PASSWORD=replace-with-a-unique-minio-password
+NEO4J_AUTH=neo4j/replace-with-a-unique-neo4j-password
 EOF
+
+cat > "$BUILD_ROOT/generate-env.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
+OUT_FILE="${1:-$ROOT_DIR/.env}"
+
+if [[ -f "$OUT_FILE" ]]; then
+  echo "拒绝覆盖已存在的 $OUT_FILE"
+  exit 1
+fi
+
+need_cmd() {
+  command -v "$1" >/dev/null 2>&1 || { echo "缺少命令：$1"; exit 1; }
+}
+need_cmd openssl
+
+random_hex() { openssl rand -hex "$1"; }
+random_base64() { openssl rand -base64 "$1" | tr -d '\n'; }
+
+cat > "$OUT_FILE" <<ENV
+APP_NAME=aitest-server
+MYSQL_ROOT_PASSWORD=$(random_hex 24)
+MYSQL_DATABASE=aitest
+MYSQL_PORT=3306
+REDIS_PORT=6379
+WEAVIATE_PORT=8081
+NEO4J_HTTP_PORT=7474
+NEO4J_BOLT_PORT=7687
+MINIO_API_PORT=9000
+MINIO_CONSOLE_PORT=9001
+WEB_PORT=5173
+BACKEND_PORT=8080
+APP_SECRET_KEY=$(random_base64 32)
+JWT_SECRET=$(random_hex 48)
+MINIO_ROOT_USER=aitest-admin
+MINIO_ROOT_PASSWORD=$(random_hex 24)
+NEO4J_AUTH=neo4j/$(random_hex 24)
+ENV
+
+chmod 600 "$OUT_FILE" 2>/dev/null || true
+echo "已生成唯一部署密钥：$OUT_FILE"
+EOF
+chmod +x "$BUILD_ROOT/generate-env.sh"
 
 cat > "$BUILD_ROOT/docker-compose.yml" <<'EOF'
 services:
@@ -195,7 +243,23 @@ server {
     proxy_set_header X-Forwarded-Proto $scheme;
   }
 
+  location = /index.html {
+    add_header Cache-Control "no-store, no-cache, must-revalidate, proxy-revalidate";
+    try_files /index.html =404;
+  }
+
+  location = / {
+    add_header Cache-Control "no-store, no-cache, must-revalidate, proxy-revalidate";
+    try_files /index.html =404;
+  }
+
+  location /assets/ {
+    add_header Cache-Control "public, max-age=31536000, immutable";
+    try_files $uri =404;
+  }
+
   location / {
+    add_header Cache-Control "no-store, no-cache, must-revalidate, proxy-revalidate";
     try_files $uri $uri/ /index.html;
   }
 }
@@ -244,7 +308,9 @@ if [[ ! -L /etc/localtime ]] || ! readlink /etc/localtime | grep -q 'Asia/Shangh
 fi
 
 cd "$ROOT_DIR"
-[[ -f .env ]] || cp .env.example .env
+if [[ ! -f .env ]]; then
+  ./generate-env.sh .env
+fi
 mkdir -p data/mysql data/redis data/weaviate data/neo4j data/minio data/files
 compose_cmd up -d
 

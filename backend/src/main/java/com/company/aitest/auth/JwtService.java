@@ -20,6 +20,9 @@ public class JwtService {
 
     public JwtService(@Value("${app.jwt.secret}") String secret,
                       @Value("${app.jwt.expiration-minutes}") long expirationMinutes) {
+        if (secret == null || secret.isBlank()) {
+            throw new IllegalStateException("JWT_SECRET 未配置。请使用至少 32 字节的随机密钥后再启动服务。");
+        }
         this.key = Keys.hmacShaKeyFor(secret.getBytes(StandardCharsets.UTF_8));
         this.expirationMinutes = expirationMinutes;
     }

@@ -7,8 +7,10 @@ import java.time.LocalDateTime;
 import java.util.Map;
 
 import com.company.aitest.common.ApiResponse;
+import com.company.aitest.common.BusinessException;
 import com.company.aitest.common.CurrentUser;
 import com.company.aitest.common.TimeProvider;
+import com.company.aitest.project.ProjectAccessService;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.core.io.Resource;
 import org.springframework.http.HttpHeaders;
@@ -28,13 +30,19 @@ public class FileUploadController {
     private final JdbcClient jdbc;
     private final JdbcTemplate jdbcTemplate;
     private final TimeProvider timeProvider;
+    private final ProjectAccessService projectAccessService;
+    private final FileResourceService fileResourceService;
 
     public FileUploadController(FileStorageService fileStorageService, JdbcClient jdbc,
-                                 JdbcTemplate jdbcTemplate, TimeProvider timeProvider) {
+                                 JdbcTemplate jdbcTemplate, TimeProvider timeProvider,
+                                 ProjectAccessService projectAccessService,
+                                 FileResourceService fileResourceService) {
         this.fileStorageService = fileStorageService;
         this.jdbc = jdbc;
         this.jdbcTemplate = jdbcTemplate;
         this.timeProvider = timeProvider;
+        this.projectAccessService = projectAccessService;
+        this.fileResourceService = fileResourceService;
     }
 
     @PostMapping("/upload")
@@ -42,6 +50,7 @@ public class FileUploadController {
                                                     @RequestParam("file") MultipartFile file,
                                                     Authentication auth) throws IOException {
         CurrentUser user = (CurrentUser) auth.getPrincipal();
+        projectAccessService.ensureCanAccess(projectId, user);
         String storagePath = fileStorageService.store(file, projectId);
         String originalName = file.getOriginalFilename() != null ? file.getOriginalFilename() : "unknown";
         String ext = "";
@@ -55,18 +64,22 @@ public class FileUploadController {
                 """, projectId, originalName, ext, storagePath, "", user.id(), now);
         Long id = jdbc.sql("SELECT last_insert_id()").query(Long.class).single();
 
-        return ApiResponse.ok(Map.of("id", id, "fileName", originalName, "fileType", ext, "storagePath", storagePath));
+        // The physical storage path is an internal implementation detail. Clients only need the file identity.
+        return ApiResponse.ok(Map.of("id", id, "fileName", originalName, "fileType", ext));
     }
 
     @GetMapping("/{fileId}/download")
-    public ResponseEntity<Resource> download(@PathVariable Long projectId, @PathVariable Long fileId) {
-        var row = jdbc.sql("SELECT file_name, storage_path FROM file_resource WHERE id = :id AND project_id = :pid")
-                .param("id", fileId).param("pid", projectId).query((rs, rowNum) -> {
-                    return new String[]{rs.getString("file_name"), rs.getString("storage_path")};
-                }).single();
-        String fileName = row[0];
-        String storagePath = row[1];
+    public ResponseEntity<Resource> download(@PathVariable Long projectId, @PathVariable Long fileId,
+                                             Authentication auth) {
+        CurrentUser user = (CurrentUser) auth.getPrincipal();
+        projectAccessService.ensureCanAccess(projectId, user);
+        FileResourceRecord fileRecord = fileResourceService.getForProject(projectId, fileId);
+        String fileName = fileRecord.fileName();
+        String storagePath = fileRecord.storagePath();
         Path path = fileStorageService.resolve(storagePath);
+        if (!Files.exists(path) || !Files.isRegularFile(path)) {
+            throw new BusinessException("文件不存在或已被清理");
+        }
         Resource resource = new FileSystemResource(path);
         return ResponseEntity.ok()
                 .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + fileName + "\"")

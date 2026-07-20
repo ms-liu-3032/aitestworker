@@ -282,8 +282,13 @@ describe('Worker Server', () => {
       expect(JSON.parse(body).sessionId).toBe(4);
     });
 
-    it('serves screencast frame via query token', async () => {
-      const { status, body, headers } = await getRaw('/sessions/4/screencast/frame/000001.jpg?localToken=local-test-token');
+    it('rejects a query-string token and serves the frame only with a request header', async () => {
+      const rejected = await getRaw('/sessions/4/screencast/frame/000001.jpg?localToken=local-test-token');
+      expect(rejected.status).toBe(401);
+
+      const { status, body, headers } = await getRaw('/sessions/4/screencast/frame/000001.jpg', {
+        'X-Local-Token': 'local-test-token',
+      });
       expect(status).toBe(200);
       expect(headers['content-type']).toContain('image/jpeg');
       expect(body).toBe('jpeg-data');

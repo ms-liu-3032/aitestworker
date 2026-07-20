@@ -1,13 +1,81 @@
 package com.company.aitest.generation.session;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.contains;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.nullable;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import java.lang.reflect.Method;
 import java.time.LocalDateTime;
 
+import com.company.aitest.common.CurrentUser;
 import org.junit.jupiter.api.Test;
 
 class ConversationOrchestratorTest {
+
+    @Test
+    void generateCommandCannotBypassRequirementScopeReview() throws Exception {
+        var sessionService = mock(GenerationSessionService.class);
+        var messageService = mock(GenerationMessageService.class);
+        var analysisService = mock(RequirementAnalysisService.class);
+        var orchestrator = new ConversationOrchestrator(null, sessionService, messageService, analysisService, null, null);
+        var now = LocalDateTime.of(2026, 7, 18, 10, 0);
+        var session = new GenerationSessionRecord(10L, 20L, "需求", "ACTIVE", "WAITING_REQUIREMENT_SCOPE",
+                1L, 2L, "", true, "PROJECT_AND_SYSTEM_TOM", 1, null, 7L, now, now);
+        var analysis = analysis("NEED_SCOPE_CONFIRMATION", now);
+        var user = new CurrentUser(7L, "tester", "USER");
+        when(analysisService.getLatestAnalysis(10L)).thenReturn(analysis);
+        when(messageService.appendAssistantMessage(any(), any(), nullable(String.class), any(), any(Integer.class)))
+                .thenReturn(new GenerationMessageRecord(1L, 10L, "ASSISTANT", "提示", null, 1,
+                        "OPERATION_HINT", now));
+
+        Method method = ConversationOrchestrator.class.getDeclaredMethod(
+                "handleSkipAndGenerate", GenerationSessionRecord.class, CurrentUser.class);
+        method.setAccessible(true);
+        method.invoke(orchestrator, session, user);
+
+        verify(messageService).appendAssistantMessage(eq(10L), contains("不能跳过范围审核"),
+                eq(null), eq("OPERATION_HINT"), eq(1));
+        verify(analysisService, never()).skipAnalysis(any(), any(Integer.class));
+        verify(analysisService, never()).doGenerate(any(), any());
+    }
+
+    @Test
+    void generateCommandCannotBypassTestPointScopeReview() throws Exception {
+        var sessionService = mock(GenerationSessionService.class);
+        var messageService = mock(GenerationMessageService.class);
+        var analysisService = mock(RequirementAnalysisService.class);
+        var orchestrator = new ConversationOrchestrator(null, sessionService, messageService, analysisService, null, null);
+        var now = LocalDateTime.of(2026, 7, 18, 10, 0);
+        var session = new GenerationSessionRecord(10L, 20L, "需求", "ACTIVE", "WAITING_USER_CONFIRMATION",
+                1L, 2L, "", true, "PROJECT_AND_SYSTEM_TOM", 1, null, 7L, now, now);
+        var analysis = analysis("NEED_TEST_POINT_SCOPE_CONFIRMATION", now);
+        var user = new CurrentUser(7L, "tester", "USER");
+        when(analysisService.getLatestAnalysis(10L)).thenReturn(analysis);
+        when(messageService.appendAssistantMessage(any(), any(), nullable(String.class), any(), any(Integer.class)))
+                .thenReturn(new GenerationMessageRecord(1L, 10L, "ASSISTANT", "提示", null, 1,
+                        "OPERATION_HINT", now));
+
+        Method method = ConversationOrchestrator.class.getDeclaredMethod(
+                "handleSkipAndGenerate", GenerationSessionRecord.class, CurrentUser.class);
+        method.setAccessible(true);
+        method.invoke(orchestrator, session, user);
+
+        verify(messageService).appendAssistantMessage(eq(10L), contains("不能直接生成草稿"),
+                eq(null), eq("OPERATION_HINT"), eq(1));
+        verify(analysisService, never()).skipAnalysis(any(), any(Integer.class));
+        verify(analysisService, never()).doGenerate(any(), any());
+    }
+
+    private static RequirementAnalysisRecord analysis(String status, LocalDateTime now) {
+        return new RequirementAnalysisRecord(1L, 10L, 1, 0, "需求", "{}", null,
+                "[]", null, "[]", "[]", null, null, null, status, now, now);
+    }
 
     @Test
     void analysisOutputShowsReviewRiskQuestionsBeforeClarificationAndUncertain() throws Exception {
@@ -122,5 +190,20 @@ class ConversationOrchestratorTest {
 
         assertTrue(confirmPrompt.contains("请直接输入补充说明"));
         assertTrue(confirmPrompt.contains("重新分析"));
+    }
+
+    @Test
+    void modelFailureMessageExplainsHttp524() throws Exception {
+        var orchestrator = new ConversationOrchestrator(null, null, null, null, null, null);
+        Method format = ConversationOrchestrator.class.getDeclaredMethod("formatModelFailure", String.class, Exception.class);
+        format.setAccessible(true);
+
+        String text = (String) format.invoke(orchestrator, "分析失败",
+                new RuntimeException("需求分析失败: 模型调用失败，HTTP 524：error code: 524"));
+
+        assertTrue(text.contains("HTTP 524"));
+        assertTrue(text.contains("模型中转网关等待上游响应超时"));
+        assertTrue(text.contains("短需求"));
+        assertTrue(text.contains("更换 endpoint/模型"));
     }
 }

@@ -16,11 +16,14 @@ public class ModelConfigService {
     private final JdbcClient jdbc;
     private final JdbcTemplate jdbcTemplate;
     private final TimeProvider timeProvider;
+    private final ModelSecretService modelSecretService;
 
-    public ModelConfigService(JdbcClient jdbc, JdbcTemplate jdbcTemplate, TimeProvider timeProvider) {
+    public ModelConfigService(JdbcClient jdbc, JdbcTemplate jdbcTemplate, TimeProvider timeProvider,
+                              ModelSecretService modelSecretService) {
         this.jdbc = jdbc;
         this.jdbcTemplate = jdbcTemplate;
         this.timeProvider = timeProvider;
+        this.modelSecretService = modelSecretService;
     }
 
     public List<ModelConfigRecord> list() {
@@ -40,7 +43,8 @@ public class ModelConfigService {
         jdbcTemplate.update("""
                 insert into model_config(config_name, provider, model_name, endpoint, api_key_encrypted, status, created_by, created_at, updated_at)
                 values (?, ?, ?, ?, ?, 'ACTIVE', ?, ?, ?)
-                """, command.configName(), command.provider(), command.modelName(), command.endpoint(), command.apiKey(), user.id(), now, now);
+                """, command.configName(), command.provider(), command.modelName(), command.endpoint(),
+                modelSecretService.protect(command.apiKey()), user.id(), now, now);
         Long id = jdbc.sql("select last_insert_id()").query(Long.class).single();
         return jdbc.sql("select * from model_config where id = :id").param("id", id).query(this::map).single();
     }
@@ -50,7 +54,8 @@ public class ModelConfigService {
         if (command.apiKey() != null && !command.apiKey().isBlank()) {
             jdbcTemplate.update("""
                     update model_config set config_name=?, provider=?, model_name=?, endpoint=?, api_key_encrypted=?, updated_at=? where id=?
-                    """, command.configName(), command.provider(), command.modelName(), command.endpoint(), command.apiKey(), now, id);
+                    """, command.configName(), command.provider(), command.modelName(), command.endpoint(),
+                    modelSecretService.protect(command.apiKey()), now, id);
         } else {
             jdbcTemplate.update("""
                     update model_config set config_name=?, provider=?, model_name=?, endpoint=?, updated_at=? where id=?
@@ -64,6 +69,9 @@ public class ModelConfigService {
     }
 
     public RuntimeModelConfig getRuntimeConfig(Long modelConfigId) {
+        if (modelConfigId == null) {
+            return null;
+        }
         return jdbc.sql("""
                 select id, provider, model_name, endpoint, api_key_encrypted, status
                 from model_config
@@ -75,10 +83,13 @@ public class ModelConfigService {
                         rs.getString("provider"),
                         rs.getString("model_name"),
                         rs.getString("endpoint"),
-                        rs.getString("api_key_encrypted"),
+                        modelSecretService.reveal(rs.getString("api_key_encrypted")),
                         rs.getString("status")
                 ))
-                .single();
+                .list()
+                .stream()
+                .findFirst()
+                .orElse(null);
     }
 
     private ModelConfigRecord map(ResultSet rs, int rowNum) throws SQLException {

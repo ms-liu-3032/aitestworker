@@ -533,8 +533,7 @@ export class CaptureManager {
         .replace(/确\s*定/g, '确定')
         .replace(/提\s*交/g, '提交')
         .replace(/取\s*消/g, '取消')
-        .replace(/详\s*情\s*及\s*操\s*作/g, '详情及操作')
-        .replace(/请\s*添加\s*访\s*客/g, '添加访客');
+        .replace(/详\s*情\s*及\s*操\s*作/g, '详情及操作');
       const sanitizeHeadingText = (value: string) => cleanText(value)
         .replace(/提\s*交\s*取\s*消/g, '')
         .replace(/取\s*消\s*确\s*定/g, '')
@@ -543,7 +542,6 @@ export class CaptureManager {
         .replace(/提\s*交/g, '提交')
         .replace(/取\s*消/g, '取消')
         .replace(/详\s*情\s*及\s*操\s*作/g, '详情及操作')
-        .replace(/请\s*添加\s*访\s*客/g, '添加访客')
         .replace(/^\W+|\W+$/g, '')
         .trim();
       const isPromptLike = (text: string) => /请输入|请选择|请搜索|姓名|手机|证件|公司|邮箱|排序|全选/.test(text);
@@ -819,7 +817,6 @@ export class CaptureManager {
         .replace(/取消/g, '')
         .replace(/提交/g, '')
         .replace(/提 交/g, '')
-        .replace(/请添加访客/g, '')
         .replace(/\s+/g, ' ')
         .trim();
       const findRowText = (el: Element) => {

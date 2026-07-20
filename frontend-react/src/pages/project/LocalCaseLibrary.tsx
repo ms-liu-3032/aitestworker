@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import Modal from '../../components/Modal';
 import MultiSelectFilter from '../../components/MultiSelectFilter';
@@ -7,8 +7,13 @@ import { useApp } from '../../context/AppContext';
 import RichList from '../../components/RichList';
 import {
   confirmLocalCase,
+  batchConfirmLocalCases,
+  batchDeprecateLocalCases,
+  batchSubmitLocalCases,
   deprecateLocalCase,
-  listLocalCases,
+  duplicateLocalCase,
+  getLocalCase,
+  listLocalCasesPage,
   submitLocalCase,
   updateLocalCase,
   type LocalCaseDraft,
@@ -30,15 +35,25 @@ export default function LocalCaseLibrary() {
   const { showToast } = useApp();
   const [cases, setCases] = useState<LocalCaseDraft[]>([]);
   const [loading, setLoading] = useState(true);
+  const [page, setPage] = useState(0);
+  const [total, setTotal] = useState(0);
+  const pageSize = 50;
   const [submittingId, setSubmittingId] = useState<number | null>(null);
   const [confirmingId, setConfirmingId] = useState<number | null>(null);
   const [deprecatingId, setDeprecatingId] = useState<number | null>(null);
+  const [duplicatingId, setDuplicatingId] = useState<number | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [batchingAction, setBatchingAction] = useState<'confirm' | 'deprecate' | 'submit' | null>(null);
   const [keyword, setKeyword] = useState('');
   const [moduleFilter, setModuleFilter] = useState<string[]>([]);
   const [priorityFilter, setPriorityFilter] = useState<string[]>([]);
   const [statusFilter, setStatusFilter] = useState<string[]>([]);
-  const [sourceFilter, setSourceFilter] = useState<string[]>([]);  const [editingCase, setEditingCase] = useState<LocalCaseDraft | null>(null);
+  const [sourceFilter, setSourceFilter] = useState<string[]>([]);
+  const [editingCase, setEditingCase] = useState<LocalCaseDraft | null>(null);
+  const [moduleOptions, setModuleOptions] = useState<string[]>([]);
+  const loadRequestId = useRef(0);
   const [savingEdit, setSavingEdit] = useState(false);
+  const [detailCase, setDetailCase] = useState<LocalCaseDraft | null>(null);
   const [actionNotice, setActionNotice] = useState<{ title: string; body: string } | null>(null);
   const [editForm, setEditForm] = useState({
     caseTitle: '',
@@ -49,16 +64,28 @@ export default function LocalCaseLibrary() {
     priority: 'P2',
   });
 
-  const loadCases = async () => {
+  const loadCases = async (nextPage = page) => {
     if (!projectId) return;
+    const requestId = ++loadRequestId.current;
     setLoading(true);
     try {
-      const data = await listLocalCases(Number(projectId));
-      setCases(data);
+      const data = await listLocalCasesPage(Number(projectId), nextPage, pageSize, {
+        keyword,
+        modules: moduleFilter,
+        priorities: priorityFilter,
+        statuses: statusFilter,
+        sources: sourceFilter,
+      });
+      if (requestId !== loadRequestId.current) return;
+      setCases(data.items);
+      setTotal(data.total);
+      setPage(data.page);
+      setModuleOptions(data.moduleOptions || []);
+      setSelectedIds(new Set());
     } catch (error: any) {
       showToast(error.message || '加载本地用例失败', 'error');
     } finally {
-      setLoading(false);
+      if (requestId === loadRequestId.current) setLoading(false);
     }
   };
 
@@ -67,8 +94,36 @@ export default function LocalCaseLibrary() {
   };
 
   useEffect(() => {
-    void loadCases();
-  }, [projectId]);
+    loadRequestId.current += 1;
+    setPage(0);
+    setLoading(true);
+    const timer = window.setTimeout(() => void loadCases(0), keyword.trim() ? 250 : 0);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId, keyword, moduleFilter, priorityFilter, statusFilter, sourceFilter]);
+
+  const openDetail = async (draft: LocalCaseDraft) => {
+    if (!projectId) return;
+    try {
+      setDetailCase(await getLocalCase(Number(projectId), draft.id));
+    } catch (error: any) {
+      showToast(error.message || '加载用例详情失败', 'error');
+    }
+  };
+
+  const handleDuplicate = async (draft: LocalCaseDraft) => {
+    if (!projectId) return;
+    setDuplicatingId(draft.id);
+    try {
+      await duplicateLocalCase(Number(projectId), draft.id);
+      showToast('已复制为新的本地草稿');
+      await loadCases(0);
+    } catch (error: any) {
+      showToast(error.message || '复制失败', 'error');
+    } finally {
+      setDuplicatingId(null);
+    }
+  };
 
   const handleSubmit = async (id: number) => {
     if (!projectId) return;
@@ -110,30 +165,90 @@ export default function LocalCaseLibrary() {
     if (!projectId) return;
     setDeprecatingId(draft.id);
     try {
-      const updated = await deprecateLocalCase(Number(projectId), draft.id);
-      updateCaseInState(updated);
+      await deprecateLocalCase(Number(projectId), draft.id);
+      setCases(prev => prev.filter(item => item.id !== draft.id));
+      setTotal(prev => Math.max(0, prev - 1));
       setActionNotice({
-        title: '草稿已弃用',
-        body: '这条用例已从当前可提交状态中退出。若后续需要恢复，可以在生成源头重新整理，或根据规则再生成一版。',
+        title: '草稿已舍弃',
+        body: '这条用例已从本地用例库和当前会话草稿中删除，不会再参与后续提交。',
       });
-      showToast('草稿已弃用');
+      showToast('草稿已舍弃');
     } catch (error: any) {
-      showToast(error.message || '弃用失败', 'error');
+      showToast(error.message || '舍弃失败', 'error');
     } finally {
       setDeprecatingId(null);
     }
   };
 
-  const openEditModal = (draft: LocalCaseDraft) => {
-    setEditingCase(draft);
-    setEditForm({
-      caseTitle: draft.caseTitle || '',
-      moduleName: draft.moduleName || '',
-      precondition: draft.precondition || '',
-      steps: draft.steps || '',
-      expectedResult: draft.expectedResult || '',
-      priority: draft.priority || 'P2',
+  const toggleSelect = (id: number) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
     });
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedIds.size === cases.length) {
+      setSelectedIds(new Set());
+      return;
+    }
+    setSelectedIds(new Set(cases.map(item => item.id)));
+  };
+
+  const runBatchAction = async (action: 'confirm' | 'deprecate' | 'submit') => {
+    if (!projectId) return;
+    const selected = cases.filter(item => selectedIds.has(item.id));
+    const eligible = selected.filter(item => {
+      const status = normalizeStatus(item.caseStatus);
+      if (action === 'confirm') return status !== 'SUBMITTED' && status !== 'CONFIRMED';
+      if (action === 'deprecate') return status !== 'SUBMITTED';
+      return status !== 'SUBMITTED' && status !== 'DEPRECATED';
+    });
+    if (eligible.length === 0) {
+      showToast(action === 'confirm' ? '所选用例均无需确认' : action === 'deprecate' ? '所选用例均不能舍弃' : '所选用例均不能提交', 'error');
+      return;
+    }
+    const actionLabel = action === 'confirm' ? '确认' : action === 'deprecate' ? '舍弃' : '提交到正式库';
+    if (!window.confirm(`确定批量${actionLabel} ${eligible.length} 条本地用例吗？`)) return;
+    setBatchingAction(action);
+    try {
+      const ids = eligible.map(item => item.id);
+      const result = action === 'confirm'
+        ? await batchConfirmLocalCases(Number(projectId), ids)
+        : action === 'deprecate'
+          ? await batchDeprecateLocalCases(Number(projectId), ids)
+          : await batchSubmitLocalCases(Number(projectId), ids);
+      showToast(`已批量${actionLabel} ${result.affectedCount} 条用例`);
+      setActionNotice({
+        title: `批量${actionLabel}完成`,
+        body: `${result.affectedCount} 条本地用例已完成处理。`,
+      });
+      await loadCases(page);
+    } catch (error: any) {
+      showToast(error.message || `批量${actionLabel}失败`, 'error');
+    } finally {
+      setBatchingAction(null);
+    }
+  };
+
+  const openEditModal = async (draft: LocalCaseDraft) => {
+    if (!projectId) return;
+    try {
+      const fullDraft = await getLocalCase(Number(projectId), draft.id);
+      setEditingCase(fullDraft);
+      setEditForm({
+        caseTitle: fullDraft.caseTitle || '',
+        moduleName: fullDraft.moduleName || '',
+        precondition: fullDraft.precondition || '',
+        steps: fullDraft.steps || '',
+        expectedResult: fullDraft.expectedResult || '',
+        priority: fullDraft.priority || 'P2',
+      });
+    } catch (error: any) {
+      showToast(error.message || '加载用例详情失败', 'error');
+    }
   };
 
   const handleSaveEdit = async () => {
@@ -166,31 +281,8 @@ export default function LocalCaseLibrary() {
     }
   };
 
-  const moduleOptions = useMemo(
-    () => Array.from(new Set(cases.map(item => item.moduleName).filter(Boolean))) as string[],
-    [cases]
-  );
-
-  const filteredCases = useMemo(() => {
-    const term = keyword.trim().toLowerCase();
-    return cases.filter(item => {
-      if (moduleFilter.length > 0 && !moduleFilter.includes(item.moduleName || '')) return false;
-      if (priorityFilter.length > 0 && !priorityFilter.includes(item.priority || '')) return false;
-      if (statusFilter.length > 0 && !statusFilter.includes(normalizeStatus(item.caseStatus))) return false;
-      if (sourceFilter.length > 0 && !sourceFilter.includes(item.sourceType || '')) return false;
-      if (!term) return true;
-      return [
-        item.caseTitle,
-        item.moduleName || '',
-        item.caseType || '',
-        item.caseScope || '',
-        item.sourceType || '',
-      ].some(value => value.toLowerCase().includes(term));
-    });
-  }, [cases, keyword, moduleFilter, priorityFilter, statusFilter, sourceFilter]);
-
   const counts = useMemo(() => ({
-    total: cases.length,
+    total,
     draft: cases.filter(item => normalizeStatus(item.caseStatus) === 'DRAFT').length,
     confirmed: cases.filter(item => normalizeStatus(item.caseStatus) === 'CONFIRMED').length,
     submitted: cases.filter(item => normalizeStatus(item.caseStatus) === 'SUBMITTED').length,
@@ -198,12 +290,13 @@ export default function LocalCaseLibrary() {
   }), [cases]);
 
   const columns = [
+    { key: 'select', label: '', width: '40px' },
     { key: 'title', label: '用例名称', width: '320px' },
     { key: 'type', label: '类型', width: '100px' },
     { key: 'priority', label: '优先级', width: '80px' },
     { key: 'status', label: '状态', width: '100px' },
     { key: 'updated', label: '生成时间', width: '120px' },
-    { key: 'actions', label: '操作', width: '260px' },
+    { key: 'actions', label: '操作', width: '280px' },
   ];
 
   return (
@@ -214,7 +307,7 @@ export default function LocalCaseLibrary() {
           <p className="text-sm text-gray-500 mt-1">统一查看需求生成和轨迹回放沉淀的草稿，并继续整理后提交到正式用例库。</p>
         </div>
         <button
-          onClick={() => void loadCases()}
+          onClick={() => void loadCases(page)}
           className="min-h-10 shrink-0 rounded-lg border border-gray-200 px-3 py-2 text-sm font-medium text-gray-700 transition-colors hover:border-gray-300 hover:bg-gray-50"
         >
           刷新列表
@@ -248,19 +341,19 @@ export default function LocalCaseLibrary() {
           <div className="text-2xl font-semibold text-gray-900 mt-1">{counts.total}</div>
         </div>
         <div className="bg-white rounded-xl border border-gray-200 p-4">
-          <div className="text-xs text-gray-500">草稿</div>
+          <div className="text-xs text-gray-500">当前页草稿</div>
           <div className="text-2xl font-semibold text-yellow-700 mt-1">{counts.draft}</div>
         </div>
         <div className="bg-white rounded-xl border border-gray-200 p-4">
-          <div className="text-xs text-gray-500">已确认</div>
+          <div className="text-xs text-gray-500">当前页已确认</div>
           <div className="text-2xl font-semibold text-green-700 mt-1">{counts.confirmed}</div>
         </div>
         <div className="bg-white rounded-xl border border-gray-200 p-4">
-          <div className="text-xs text-gray-500">已提交</div>
+          <div className="text-xs text-gray-500">当前页已提交</div>
           <div className="text-2xl font-semibold text-blue-700 mt-1">{counts.submitted}</div>
         </div>
         <div className="bg-white rounded-xl border border-gray-200 p-4">
-          <div className="text-xs text-gray-500">轨迹回放来源</div>
+          <div className="text-xs text-gray-500">当前页轨迹来源</div>
           <div className="text-2xl font-semibold text-purple-700 mt-1">{counts.trace}</div>
         </div>
       </div>
@@ -284,8 +377,32 @@ export default function LocalCaseLibrary() {
         </div>
       </div>
 
+      <div className="mb-2 flex flex-wrap items-center gap-2">
+        <input
+          type="checkbox"
+          checked={selectedIds.size === cases.length && cases.length > 0}
+          onChange={toggleSelectAll}
+          className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+        />
+        <span className="text-xs text-gray-500">全选当前页筛选结果</span>
+        {selectedIds.size > 0 && <span className="text-xs text-blue-600">已选 {selectedIds.size} 条</span>}
+        {selectedIds.size > 0 && (
+          <>
+            <button onClick={() => void runBatchAction('confirm')} disabled={batchingAction !== null} className="rounded border border-emerald-200 px-2.5 py-1.5 text-xs font-medium text-emerald-700 hover:bg-emerald-50 disabled:opacity-50">
+              {batchingAction === 'confirm' ? '确认中...' : '批量确认'}
+            </button>
+            <button onClick={() => void runBatchAction('submit')} disabled={batchingAction !== null} className="rounded border border-blue-200 px-2.5 py-1.5 text-xs font-medium text-blue-700 hover:bg-blue-50 disabled:opacity-50">
+              {batchingAction === 'submit' ? '提交中...' : '批量提交正式库'}
+            </button>
+            <button onClick={() => void runBatchAction('deprecate')} disabled={batchingAction !== null} className="rounded border border-amber-200 px-2.5 py-1.5 text-xs font-medium text-amber-700 hover:bg-amber-50 disabled:opacity-50">
+              {batchingAction === 'deprecate' ? '舍弃中...' : '批量舍弃'}
+            </button>
+          </>
+        )}
+      </div>
+
       <RichList
-        items={filteredCases}
+        items={cases}
         columns={columns}
         loading={loading}
         emptyText="暂无匹配的本地用例"
@@ -300,8 +417,16 @@ export default function LocalCaseLibrary() {
             : 'bg-sky-50 text-sky-700';
           return (
             <>
+              <div className="flex shrink-0 items-center" style={{ width: '40px' }}>
+                <input
+                  type="checkbox"
+                  checked={selectedIds.has(testCase.id)}
+                  onChange={() => toggleSelect(testCase.id)}
+                  className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                />
+              </div>
               <div style={{ width: '320px' }}>
-                <div className="text-sm font-medium text-gray-900 truncate">{testCase.caseTitle}</div>
+                <button onClick={() => void openDetail(testCase)} className="block max-w-full truncate text-left text-sm font-medium text-gray-900 hover:text-blue-600">{testCase.caseTitle}</button>
                 <div className="text-xs text-gray-500 truncate flex items-center gap-2">
                   <span className={`inline-flex items-center px-2 py-0.5 rounded font-medium ${sourceClass}`}>{sourceType}</span>
                   <span className="truncate">{testCase.moduleName || '未分模块'} · {testCase.caseScope || testCase.caseType || '未分类'}</span>
@@ -328,11 +453,12 @@ export default function LocalCaseLibrary() {
               <div className="text-xs text-gray-500 font-mono" style={{ width: '120px' }}>
                 {new Date(testCase.createdAt).toLocaleDateString('zh-CN')}
               </div>
-              <div style={{ width: '260px', flex: 1 }}>
+              <div style={{ width: '280px', flex: 1 }}>
                 <div className="flex flex-wrap items-center gap-3 text-xs">
+                  <button onClick={() => void openDetail(testCase)} className="text-sky-600 hover:text-sky-700 font-medium">详情</button>
                   {!submitted && (
                     <button
-                      onClick={() => openEditModal(testCase)}
+                      onClick={() => void openEditModal(testCase)}
                       className="text-slate-700 hover:text-slate-900 font-medium"
                     >
                       编辑
@@ -353,7 +479,16 @@ export default function LocalCaseLibrary() {
                       disabled={deprecatingId === testCase.id}
                       className="text-amber-600 hover:text-amber-700 font-medium disabled:opacity-50"
                     >
-                      {deprecatingId === testCase.id ? '弃用中...' : '弃用'}
+                      {deprecatingId === testCase.id ? '舍弃中...' : '舍弃'}
+                    </button>
+                  )}
+                  {!submitted && !deprecated && (
+                    <button
+                      onClick={() => void handleDuplicate(testCase)}
+                      disabled={duplicatingId === testCase.id}
+                      className="text-violet-600 hover:text-violet-700 font-medium disabled:opacity-50"
+                    >
+                      {duplicatingId === testCase.id ? '复制中...' : '复制'}
                     </button>
                   )}
                   {submitted ? (
@@ -375,6 +510,28 @@ export default function LocalCaseLibrary() {
           );
         }}
       />
+
+      <div className="mt-4 flex items-center justify-between gap-3 text-sm">
+        <span className="text-gray-500">
+          {loading ? '正在统计筛选结果...' : `第 ${page + 1} / ${Math.max(1, Math.ceil(total / pageSize))} 页，共 ${total} 条`}
+        </span>
+        <div className="flex gap-2">
+          <button onClick={() => void loadCases(page - 1)} disabled={page === 0 || loading} className="rounded-lg border border-gray-200 px-3 py-2 text-gray-700 disabled:opacity-40">上一页</button>
+          <button onClick={() => void loadCases(page + 1)} disabled={(page + 1) * pageSize >= total || loading} className="rounded-lg border border-gray-200 px-3 py-2 text-gray-700 disabled:opacity-40">下一页</button>
+        </div>
+      </div>
+
+      {detailCase && (
+        <Modal title="本地用例详情" onClose={() => setDetailCase(null)} footer={<button onClick={() => setDetailCase(null)} className="px-4 py-2 text-sm text-gray-600">关闭</button>}>
+          <div className="space-y-4 text-sm">
+            <div><div className="text-xs text-gray-500">用例名称</div><div className="mt-1 break-words font-medium">{detailCase.caseTitle}</div></div>
+            <div className="grid grid-cols-2 gap-3"><div><div className="text-xs text-gray-500">模块</div><div>{detailCase.moduleName || '-'}</div></div><div><div className="text-xs text-gray-500">优先级</div><div>{detailCase.priority || '-'}</div></div></div>
+            {detailCase.precondition && <div><div className="text-xs text-gray-500">前置条件</div><div className="mt-1 whitespace-pre-wrap break-words">{detailCase.precondition}</div></div>}
+            <div><div className="text-xs text-gray-500">测试步骤</div><div className="mt-1 whitespace-pre-wrap break-words rounded-lg bg-gray-50 p-3">{detailCase.steps}</div></div>
+            <div><div className="text-xs text-gray-500">预期结果</div><div className="mt-1 whitespace-pre-wrap break-words rounded-lg bg-gray-50 p-3">{detailCase.expectedResult}</div></div>
+          </div>
+        </Modal>
+      )}
 
       {editingCase && (
         <Modal

@@ -1,5 +1,5 @@
-import { lazy, Suspense } from 'react';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { Component, lazy, Suspense, type ReactNode } from 'react';
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { AppProvider } from './context/AppContext';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import GlobalHeader from './layouts/GlobalHeader';
@@ -34,12 +34,89 @@ const AssetLibrary = lazy(() => import('./pages/admin/AssetLibrary'));
 const CandidateReview = lazy(() => import('./pages/admin/CandidateReview'));
 const SystemConfig = lazy(() => import('./pages/admin/SystemConfig'));
 const LoopConfig = lazy(() => import('./pages/admin/LoopConfig'));
+const RuntimeDiagnostics = lazy(() => import('./pages/admin/RuntimeDiagnostics'));
 
 function PageLoading() {
   return (
     <div className="p-6">
       <div className="animate-pulse bg-gray-200 rounded h-8 w-40" />
     </div>
+  );
+}
+
+class RouteErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean; message: string }> {
+  state = { hasError: false, message: '' };
+
+  static getDerivedStateFromError(error: unknown) {
+    return { hasError: true, message: errorMessage(error) };
+  }
+
+  componentDidCatch(error: unknown) {
+    console.error('Route render failed', error);
+    const message = errorMessage(error);
+    if (isChunkLoadError(message) && !sessionStorage.getItem('aitest:chunk-reload-once')) {
+      sessionStorage.setItem('aitest:chunk-reload-once', '1');
+      window.location.reload();
+      return;
+    }
+    if (!isChunkLoadError(message)) {
+      sessionStorage.removeItem('aitest:chunk-reload-once');
+    }
+  }
+
+  render() {
+    if (!this.state.hasError) return this.props.children;
+    return (
+      <div className="p-6">
+        <div className="rounded-xl border border-red-100 bg-red-50 px-4 py-3">
+          <div className="text-sm font-semibold text-red-900">页面加载失败</div>
+          <div className="mt-1 text-xs text-red-700">
+            {isChunkLoadError(this.state.message)
+              ? '前端资源版本已更新或缓存不一致，请点击下方按钮重新加载页面。'
+              : '请重新点击左侧菜单或刷新页面。'}
+          </div>
+          {this.state.message && (
+            <div className="mt-2 break-words rounded-lg bg-white/70 px-2 py-1 font-mono text-[11px] text-red-800">
+              {this.state.message}
+            </div>
+          )}
+          <button
+            type="button"
+            onClick={() => window.location.reload()}
+            className="mt-3 rounded-lg bg-red-600 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-red-700"
+          >
+            重新加载页面
+          </button>
+        </div>
+      </div>
+    );
+  }
+}
+
+function errorMessage(error: unknown) {
+  if (error instanceof Error) return error.message;
+  if (typeof error === 'string') return error;
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return 'unknown error';
+  }
+}
+
+function isChunkLoadError(message: string) {
+  const value = message.toLowerCase();
+  return value.includes('failed to fetch dynamically imported module')
+    || value.includes('loading chunk')
+    || value.includes('chunkloaderror')
+    || value.includes('importing a module script failed');
+}
+
+function RouteShell({ children }: { children: ReactNode }) {
+  const location = useLocation();
+  return (
+    <RouteErrorBoundary key={location.pathname}>
+      <Suspense fallback={<PageLoading />}>{children}</Suspense>
+    </RouteErrorBoundary>
   );
 }
 
@@ -61,7 +138,7 @@ function ProtectedApp() {
   return (
     <div className="min-h-screen min-w-0 overflow-x-hidden bg-gray-50">
       <GlobalHeader />
-      <Suspense fallback={<PageLoading />}>
+      <RouteShell>
         <Routes>
           {/* 模块 A：Workspace Hub */}
           <Route path="/" element={<ProjectList />} />
@@ -95,12 +172,13 @@ function ProtectedApp() {
             <Route path="candidates" element={<CandidateReview />} />
             <Route path="scan" element={<SystemConfig />} />
             <Route path="loop" element={<LoopConfig />} />
+            <Route path="diagnostics" element={<RuntimeDiagnostics />} />
           </Route>
 
           {/* 兜底路由 */}
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
-      </Suspense>
+      </RouteShell>
     </div>
   );
 }

@@ -8,10 +8,14 @@ import java.util.Map;
 import com.company.aitest.common.BusinessException;
 import com.company.aitest.common.CurrentUser;
 import com.company.aitest.common.TimeProvider;
+import com.company.aitest.common.TomUsageMode;
 import com.company.aitest.llm.gateway.LlmGateway;
+import com.company.aitest.llm.gateway.JsonOutputParser;
+import com.company.aitest.llm.gateway.LlmErrorCode;
 import com.company.aitest.llm.gateway.LlmInvocationRequest;
 import com.company.aitest.llm.gateway.LlmInvocationResponse;
 import com.company.aitest.llm.gateway.LlmInvocationStatus;
+import com.company.aitest.llm.gateway.LlmRuntimeException;
 import com.company.aitest.llm.gateway.LlmStage;
 import com.company.aitest.minitom.MiniTomService;
 import com.company.aitest.minitom.TestObjectModelRecord;
@@ -88,12 +92,14 @@ public class TestPointGenerationService {
 
         // 构建 TOM 上下文
         String tomContext = "";
-        if (Boolean.TRUE.equals(task.useMiniTom())) {
+        TomUsageMode tomMode = TomUsageMode.resolve(
+                task.generationMode(), Boolean.TRUE.equals(task.useMiniTom()));
+        if (tomMode.usesTom()) {
             String scopeSnapshot = task.testScopeSnapshot();
             if (scopeSnapshot == null || scopeSnapshot.isBlank()) {
                 // 快照不存在，主动构建 TOM 范围并持久化
                 MiniTomService.TestScopeResult scope = miniTomService.buildTestScope(
-                        projectId, task.requirementText(), task.modelConfigId(), user);
+                        projectId, task.requirementText(), task.modelConfigId(), user, tomMode);
                 persistTomSnapshot(taskId, scope);
                 scopeSnapshot = serializeScope(scope);
             }
@@ -131,7 +137,8 @@ public class TestPointGenerationService {
                 SYSTEM_PROMPT, userPrompt, null, 16384));
 
         if (resp.status() != LlmInvocationStatus.OK) {
-            throw new BusinessException("测试点生成失败：" + emptySafe(resp.errorMessage()));
+            throw new LlmRuntimeException(parseErrorCode(resp.errorCode()),
+                    "测试点生成失败：" + emptySafe(resp.errorMessage()));
         }
 
         List<TestPointDraft> drafts = parseAndSave(taskId, projectId, resp.content(), user);
@@ -169,7 +176,7 @@ public class TestPointGenerationService {
     }
 
     private List<TestPointDraft> parseAndSave(Long taskId, Long projectId, String rawOutput, CurrentUser user) {
-        String jsonText = extractJson(rawOutput);
+        String jsonText = JsonOutputParser.extractJson(rawOutput);
         try {
             List<Map<String, Object>> rows = objectMapper.readValue(jsonText, new TypeReference<>() {});
             List<TestPointDraft> drafts = new ArrayList<>();
@@ -178,6 +185,9 @@ public class TestPointGenerationService {
             for (Map<String, Object> row : rows) {
                 String moduleName = str(row.get("moduleName"), "默认模块");
                 String pointContent = str(row.get("pointContent"), "");
+                if (pointContent.isBlank()) {
+                    throw new LlmRuntimeException(LlmErrorCode.OUTPUT_PARSE_ERROR, "模型返回测试点缺少 pointContent");
+                }
                 String testType = str(row.get("testType"), "功能测试");
                 String designMethod = str(row.get("designMethod"), "场景法");
                 String suggestedPriority = normalizePriority(str(row.get("suggestedPriority"), "P2"));
@@ -201,11 +211,11 @@ public class TestPointGenerationService {
             }
 
             if (drafts.isEmpty()) {
-                throw new BusinessException("模型未返回可用测试点");
+                throw new LlmRuntimeException(LlmErrorCode.OUTPUT_PARSE_ERROR, "模型未返回可用测试点");
             }
             return drafts;
         } catch (JsonProcessingException ex) {
-            return List.of(new TestPointDraft(null, "默认模块", rawOutput, "功能测试", "场景法", "P2", 1, "模型返回原文，待人工整理"));
+            throw new LlmRuntimeException(LlmErrorCode.OUTPUT_PARSE_ERROR, "模型输出不是有效的测试点 JSON");
         }
     }
 
@@ -261,19 +271,6 @@ public class TestPointGenerationService {
         return sb.toString();
     }
 
-    private String extractJson(String raw) {
-        if (raw == null) return "[]";
-        String text = raw.trim();
-        if (text.startsWith("```")) {
-            int start = text.indexOf('\n');
-            int end = text.lastIndexOf("```");
-            if (start > 0 && end > start) {
-                text = text.substring(start + 1, end).trim();
-            }
-        }
-        return text;
-    }
-
     private String str(Object value, String defaultValue) {
         if (value == null) return defaultValue;
         String text = String.valueOf(value).trim();
@@ -291,6 +288,17 @@ public class TestPointGenerationService {
 
     private String emptySafe(String value) {
         return value == null ? "" : value;
+    }
+
+    private LlmErrorCode parseErrorCode(String value) {
+        if (value == null || value.isBlank()) {
+            return LlmErrorCode.UNKNOWN_ERROR;
+        }
+        try {
+            return LlmErrorCode.valueOf(value);
+        } catch (IllegalArgumentException ignored) {
+            return LlmErrorCode.UNKNOWN_ERROR;
+        }
     }
 
     public record TestPointDraft(Long id, String moduleName, String pointContent, String testType,

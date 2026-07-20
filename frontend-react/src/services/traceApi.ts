@@ -433,8 +433,20 @@ export function listGeneratedCases(projectId: number) {
   return api<TraceGeneratedCase[]>(`/api/trace/projects/${projectId}/generated-cases`)
 }
 
+export function listGeneratedCasesPage(projectId: number, traceGroupId: number, page = 0, size = 20) {
+  return api<{ items: TraceGeneratedCase[]; total: number; page: number; size: number }>(
+    `/api/trace/projects/${projectId}/generated-cases/page?traceGroupId=${traceGroupId}&page=${page}&size=${size}`,
+  )
+}
+
 export function listFormalCases(projectId: number) {
   return api<FormalCase[]>(`/api/trace/projects/${projectId}/formal-cases`)
+}
+
+export function listFormalCasesPage(projectId: number, page = 0, size = 10) {
+  return api<{ items: FormalCase[]; total: number; page: number; size: number }>(
+    `/api/trace/projects/${projectId}/formal-cases/page?page=${page}&size=${size}`,
+  )
 }
 
 export function submitGeneratedCase(caseId: number) {

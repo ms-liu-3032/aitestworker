@@ -2,6 +2,7 @@ package com.company.aitest.project;
 
 import com.company.aitest.common.ApiResponse;
 import com.company.aitest.common.CurrentUser;
+import com.company.aitest.audit.OperationLogService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import org.springframework.security.core.Authentication;
@@ -19,9 +20,11 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/api/projects")
 public class ProjectController {
     private final ProjectService projectService;
+    private final OperationLogService operationLogService;
 
-    public ProjectController(ProjectService projectService) {
+    public ProjectController(ProjectService projectService, OperationLogService operationLogService) {
         this.projectService = projectService;
+        this.operationLogService = operationLogService;
     }
 
     @GetMapping
@@ -41,8 +44,11 @@ public class ProjectController {
 
     @PostMapping
     public ApiResponse<ProjectRecord> create(@Valid @RequestBody CreateProjectRequest request, Authentication authentication) {
-        return ApiResponse.ok(projectService.create(request.projectName(), request.description(),
-                (CurrentUser) authentication.getPrincipal()));
+        CurrentUser user = (CurrentUser) authentication.getPrincipal();
+        ProjectRecord project = projectService.create(request.projectName(), request.description(), user);
+        operationLogService.recordQuietly(user.id(), "PROJECT_CREATE", "PROJECT", project.id(),
+                "{\"projectName\":\"" + safe(project.projectName()) + "\"}");
+        return ApiResponse.ok(project);
     }
 
     @GetMapping("/{projectId}")
@@ -55,27 +61,40 @@ public class ProjectController {
             @PathVariable Long projectId,
             @Valid @RequestBody UpdateProjectRequest request,
             Authentication authentication) {
-        return ApiResponse.ok(projectService.update(
+        CurrentUser user = (CurrentUser) authentication.getPrincipal();
+        ProjectRecord project = projectService.update(
                 projectId,
                 request.projectName(),
                 request.description(),
-                (CurrentUser) authentication.getPrincipal()));
+                user);
+        operationLogService.recordQuietly(user.id(), "PROJECT_UPDATE", "PROJECT", projectId,
+                "{\"projectName\":\"" + safe(project.projectName()) + "\"}");
+        return ApiResponse.ok(project);
     }
 
     @DeleteMapping("/{projectId}")
     public ApiResponse<Void> delete(@PathVariable Long projectId, Authentication authentication) {
-        projectService.delete(projectId, (CurrentUser) authentication.getPrincipal());
+        CurrentUser user = (CurrentUser) authentication.getPrincipal();
+        projectService.delete(projectId, user);
+        operationLogService.recordQuietly(user.id(), "PROJECT_DELETE", "PROJECT", projectId, "{}");
         return ApiResponse.ok(null);
     }
 
     @PostMapping("/{projectId}/restore")
     public ApiResponse<ProjectRecord> restore(@PathVariable Long projectId, Authentication authentication) {
-        return ApiResponse.ok(projectService.restore(projectId, (CurrentUser) authentication.getPrincipal()));
+        CurrentUser user = (CurrentUser) authentication.getPrincipal();
+        ProjectRecord project = projectService.restore(projectId, user);
+        operationLogService.recordQuietly(user.id(), "PROJECT_RESTORE", "PROJECT", projectId, "{}");
+        return ApiResponse.ok(project);
     }
 
     public record CreateProjectRequest(@NotBlank String projectName, String description) {
     }
 
     public record UpdateProjectRequest(@NotBlank String projectName, String description) {
+    }
+
+    private String safe(String value) {
+        return value == null ? "" : value.replace("\\", "\\\\").replace("\"", "\\\"");
     }
 }

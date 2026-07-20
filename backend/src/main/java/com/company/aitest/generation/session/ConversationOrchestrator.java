@@ -36,6 +36,18 @@ public class ConversationOrchestrator {
     }
 
     public ConversationReply processUserMessage(Long sessionId, String userContent, CurrentUser user) {
+        return processUserMessage(sessionId, userContent, user, false);
+    }
+
+    public ConversationReply processUserMessageForAsyncTask(Long sessionId, String userContent, CurrentUser user) {
+        return processUserMessage(sessionId, userContent, user, true);
+    }
+
+    public boolean isExplicitTomModeChoice(String content) {
+        return intentRecognizer.isExplicitTomModeChoice(content);
+    }
+
+    private ConversationReply processUserMessage(Long sessionId, String userContent, CurrentUser user, boolean propagateAnalysisFailure) {
         var session = sessionService.get(null, sessionId, user);
         long lastMessageIdBefore = latestMessageId(sessionId);
         String stage = resolveStage(sessionId);
@@ -54,9 +66,9 @@ public class ConversationOrchestrator {
 
         var reply = switch (intent) {
             case SUBMIT_REQUIREMENT -> handleSubmitRequirement(session, userContent, user);
-            case CHOOSE_TOM_MODE -> handleChooseTomMode(session, userContent, user);
-            case SUPPLEMENT_REQUIREMENT -> handleSupplementRequirement(session, userContent, user);
-            case REANALYZE_REQUIREMENT -> handleReanalyzeRequirement(session, user);
+            case CHOOSE_TOM_MODE -> handleChooseTomMode(session, userContent, user, propagateAnalysisFailure);
+            case SUPPLEMENT_REQUIREMENT -> handleSupplementRequirement(session, userContent, user, propagateAnalysisFailure);
+            case REANALYZE_REQUIREMENT -> handleReanalyzeRequirement(session, user, propagateAnalysisFailure);
             case CONFIRM_ANALYSIS -> handleConfirmAnalysis(session, user);
             case SKIP_CONFIRMATION, GENERATE_CASES -> handleSkipAndGenerate(session, user);
             default -> handleUnknown(sessionId);
@@ -84,12 +96,11 @@ public class ConversationOrchestrator {
         return new ConversationReply(List.of(sysMsg), null);
     }
 
-    private ConversationReply handleChooseTomMode(GenerationSessionRecord session, String content, CurrentUser user) {
+    private ConversationReply handleChooseTomMode(GenerationSessionRecord session, String content, CurrentUser user, boolean propagateAnalysisFailure) {
         Long sessionId = session.id();
         String tomMode = intentRecognizer.resolveTomMode(content);
-        boolean useMiniTom = !"DIRECT".equals(tomMode);
-
-            sessionService.updateConfig(session.projectId(), sessionId, session.modelConfigId(), session.promptTemplateId(), useMiniTom, user);
+        sessionService.updateConfig(session.projectId(), sessionId, session.modelConfigId(),
+                session.promptTemplateId(), tomMode, user);
         sessionService.updateStage(sessionId, "REQUIREMENT_ANALYZING");
 
         String modeDesc = switch (tomMode) {
@@ -101,25 +112,35 @@ public class ConversationOrchestrator {
         var ackMsg = messageService.appendAssistantMessage(sessionId, "好的，" + modeDesc + "。正在分析需求...", null, "SYSTEM_ANALYSIS_START", 0);
 
         try {
-            var analysis = analysisService.analyze(sessionId, user);
-            sessionService.updateStage(sessionId, "WAITING_USER_CONFIRMATION");
+            var analysis = propagateAnalysisFailure
+                    ? analysisService.analyzeScopeOnly(sessionId, user)
+                    : analysisService.analyze(sessionId, user);
+            sessionService.updateStage(sessionId, stageAfterAnalysis(analysis));
 
             String analysisReply = formatAnalysisOutput(analysis);
             var sysMsg = messageService.appendAssistantMessage(sessionId, analysisReply,
                     analysis.analysisResult(), "REQUIREMENT_ANALYSIS_RESULT", analysis.version());
 
-            String confirmPrompt = buildConfirmPrompt(analysis);
+            String confirmPrompt = buildNextStepPrompt(analysis);
             var confirmMsg = messageService.appendAssistantMessage(sessionId, confirmPrompt, null, "CLARIFICATION_QUESTION", analysis.version());
 
             return new ConversationReply(List.of(ackMsg, sysMsg, confirmMsg), analysis);
         } catch (Exception e) {
             sessionService.updateStage(sessionId, "REQUIREMENT_INPUT");
-            var errMsg = messageService.appendAssistantMessage(sessionId, "分析失败: " + e.getMessage() + "\n请检查模型配置后重试。", null, "ERROR", 0);
+            var errMsg = messageService.appendAssistantMessage(sessionId,
+                    formatModelFailure("分析失败", e), null, "ERROR", 0);
+            if (propagateAnalysisFailure) {
+                if (e instanceof RuntimeException runtimeException) {
+                    throw runtimeException;
+                }
+                throw new com.company.aitest.common.BusinessException(e.getMessage());
+            }
             return new ConversationReply(List.of(ackMsg, errMsg), null);
         }
     }
 
-    private ConversationReply handleSupplementRequirement(GenerationSessionRecord session, String content, CurrentUser user) {
+    private ConversationReply handleSupplementRequirement(GenerationSessionRecord session, String content,
+                                                          CurrentUser user, boolean scopeOnly) {
         Long sessionId = session.id();
         sessionService.updateStage(sessionId, "REANALYZING");
 
@@ -135,12 +156,14 @@ public class ConversationOrchestrator {
 
         try {
             var analysis = canIncremental
-                    ? analysisService.incrementalAnalyze(sessionId, content, user)
-                    : analysisService.analyze(sessionId, user);
-            sessionService.updateStage(sessionId, "WAITING_USER_CONFIRMATION");
+                    ? (scopeOnly ? analysisService.incrementalAnalyzeScopeOnly(sessionId, content, user)
+                            : analysisService.incrementalAnalyze(sessionId, content, user))
+                    : (scopeOnly ? analysisService.analyzeScopeOnly(sessionId, user)
+                            : analysisService.analyze(sessionId, user));
+            sessionService.updateStage(sessionId, stageAfterAnalysis(analysis));
 
             // 增量分析后自动为新测试点生成用例
-            if (canIncremental && analysis.newCasesNeeded() != null
+            if (!scopeOnly && canIncremental && analysis.newCasesNeeded() != null
                     && !analysis.newCasesNeeded().isBlank() && !"[]".equals(analysis.newCasesNeeded())) {
                 try {
                     analysisService.autoGenerateNewCases(sessionId, analysis, user);
@@ -155,18 +178,24 @@ public class ConversationOrchestrator {
             var sysMsg = messageService.appendAssistantMessage(sessionId, analysisReply,
                     analysis.analysisResult(), "REQUIREMENT_ANALYSIS_RESULT", analysis.version());
 
-            String confirmPrompt = buildConfirmPrompt(analysis);
+            String confirmPrompt = buildNextStepPrompt(analysis);
             var confirmMsg = messageService.appendAssistantMessage(sessionId, confirmPrompt, null, "CLARIFICATION_QUESTION", analysis.version());
 
             return new ConversationReply(List.of(ackMsg, sysMsg, confirmMsg), analysis);
         } catch (Exception e) {
-            sessionService.updateStage(sessionId, "WAITING_USER_CONFIRMATION");
-            var errMsg = messageService.appendAssistantMessage(sessionId, "分析失败: " + e.getMessage(), null, "ERROR", 0);
+            sessionService.updateStage(sessionId, scopeOnly ? "WAITING_REQUIREMENT_SCOPE" : "WAITING_USER_CONFIRMATION");
+            var errMsg = messageService.appendAssistantMessage(sessionId,
+                    formatModelFailure("分析失败", e), null, "ERROR", 0);
+            if (scopeOnly) {
+                if (e instanceof RuntimeException runtimeException) throw runtimeException;
+                throw new com.company.aitest.common.BusinessException(e.getMessage());
+            }
             return new ConversationReply(List.of(ackMsg, errMsg), null);
         }
     }
 
-    private ConversationReply handleReanalyzeRequirement(GenerationSessionRecord session, CurrentUser user) {
+    private ConversationReply handleReanalyzeRequirement(GenerationSessionRecord session, CurrentUser user,
+                                                         boolean scopeOnly) {
         Long sessionId = session.id();
         var latest = analysisService.getLatestAnalysis(sessionId);
         if (latest == null) {
@@ -178,20 +207,26 @@ public class ConversationOrchestrator {
         var ackMsg = messageService.appendAssistantMessage(sessionId, "正在基于当前需求和已补充信息重新分析...", null, "SYSTEM_ANALYSIS_START", latest.version());
 
         try {
-            var analysis = analysisService.analyze(sessionId, user);
-            sessionService.updateStage(sessionId, "WAITING_USER_CONFIRMATION");
+            var analysis = scopeOnly ? analysisService.analyzeScopeOnly(sessionId, user)
+                    : analysisService.analyze(sessionId, user);
+            sessionService.updateStage(sessionId, stageAfterAnalysis(analysis));
 
             String analysisReply = formatAnalysisOutput(analysis);
             var sysMsg = messageService.appendAssistantMessage(sessionId, analysisReply,
                     analysis.analysisResult(), "REQUIREMENT_ANALYSIS_RESULT", analysis.version());
 
-            String confirmPrompt = buildConfirmPrompt(analysis);
+            String confirmPrompt = buildNextStepPrompt(analysis);
             var confirmMsg = messageService.appendAssistantMessage(sessionId, confirmPrompt, null, "CLARIFICATION_QUESTION", analysis.version());
 
             return new ConversationReply(List.of(ackMsg, sysMsg, confirmMsg), analysis);
         } catch (Exception e) {
-            sessionService.updateStage(sessionId, "WAITING_USER_CONFIRMATION");
-            var errMsg = messageService.appendAssistantMessage(sessionId, "重新分析失败: " + e.getMessage(), null, "ERROR", 0);
+            sessionService.updateStage(sessionId, scopeOnly ? "WAITING_REQUIREMENT_SCOPE" : "WAITING_USER_CONFIRMATION");
+            var errMsg = messageService.appendAssistantMessage(sessionId,
+                    formatModelFailure("重新分析失败", e), null, "ERROR", 0);
+            if (scopeOnly) {
+                if (e instanceof RuntimeException runtimeException) throw runtimeException;
+                throw new com.company.aitest.common.BusinessException(e.getMessage());
+            }
             return new ConversationReply(List.of(ackMsg, errMsg), null);
         }
     }
@@ -202,6 +237,19 @@ public class ConversationOrchestrator {
         if (latest == null) {
             var errMsg = messageService.appendAssistantMessage(sessionId, "还没有分析结果，请先输入需求。", null, "ERROR", 0);
             return new ConversationReply(List.of(errMsg), null);
+        }
+        if ("NEED_SCOPE_CONFIRMATION".equals(latest.status()) || "SCOPE_CONFIRMED".equals(latest.status())) {
+            var msg = messageService.appendAssistantMessage(sessionId,
+                    "请先在右侧【本期需求范围】中确认哪些内容本期生成、仅作参考或排除。范围确认完成后系统才会生成覆盖矩阵和测试点。",
+                    null, "OPERATION_HINT", latest.version());
+            return new ConversationReply(List.of(msg), latest);
+        }
+        if ("NEED_TEST_POINT_SCOPE_CONFIRMATION".equals(latest.status())
+                || "TEST_POINT_SCOPE_CONFIRMED".equals(latest.status())) {
+            var msg = messageService.appendAssistantMessage(sessionId,
+                    "请先在右侧【测试点生成范围】完成确认并等待用例编排结束。编排完成后再输入“生成用例”。",
+                    null, "OPERATION_HINT", latest.version());
+            return new ConversationReply(List.of(msg), latest);
         }
         if (hasClarificationQuestions(latest)) {
             var msg = messageService.appendAssistantMessage(sessionId,
@@ -224,6 +272,20 @@ public class ConversationOrchestrator {
         if (latest == null) {
             var errMsg = messageService.appendAssistantMessage(sessionId, "还没有分析结果，请先输入需求。", null, "ERROR", 0);
             return new ConversationReply(List.of(errMsg), null);
+        }
+
+        if ("NEED_SCOPE_CONFIRMATION".equals(latest.status()) || "SCOPE_CONFIRMED".equals(latest.status())) {
+            var msg = messageService.appendAssistantMessage(sessionId,
+                    "当前尚未确认本期需求范围，不能跳过范围审核直接生成用例。请先在右侧完成需求范围确认。",
+                    null, "OPERATION_HINT", latest.version());
+            return new ConversationReply(List.of(msg), latest);
+        }
+        if ("NEED_TEST_POINT_SCOPE_CONFIRMATION".equals(latest.status())
+                || "TEST_POINT_SCOPE_CONFIRMED".equals(latest.status())) {
+            var msg = messageService.appendAssistantMessage(sessionId,
+                    "当前尚未完成测试点范围确认或用例编排，不能直接生成草稿。请先完成右侧测试点范围审核。",
+                    null, "OPERATION_HINT", latest.version());
+            return new ConversationReply(List.of(msg), latest);
         }
 
         if (!"CONFIRMED".equals(latest.status()) && !"GENERATED".equals(latest.status())) {
@@ -250,7 +312,8 @@ public class ConversationOrchestrator {
             return new ConversationReply(List.of(genMsg, doneMsg), result);
         } catch (Exception e) {
             sessionService.updateStage(sessionId, "WAITING_USER_CONFIRMATION");
-            var errMsg = messageService.appendAssistantMessage(sessionId, "用例生成失败: " + e.getMessage(), null, "ERROR", 0);
+            var errMsg = messageService.appendAssistantMessage(sessionId,
+                    formatModelFailure("用例生成失败", e), null, "ERROR", 0);
             return new ConversationReply(List.of(genMsg, errMsg), null);
         }
     }
@@ -276,6 +339,48 @@ public class ConversationOrchestrator {
         return "REQUIREMENT_ANALYZING".equals(stage)
                 || "REANALYZING".equals(stage)
                 || "CASE_GENERATING".equals(stage);
+    }
+
+    private String formatModelFailure(String title, Exception exception) {
+        String raw = exception == null || exception.getMessage() == null
+                ? "未知错误"
+                : exception.getMessage();
+        StringBuilder sb = new StringBuilder(title).append(": ").append(raw);
+        String lower = raw.toLowerCase();
+
+        if (raw.contains("HTTP 524")) {
+            sb.append("\n\n原因判断：模型中转网关等待上游响应超时，不是数据库或前端错误。");
+            sb.append("\n建议处理：先用一条很短的需求验证当前模型配置；短需求也失败时更换 endpoint/模型，短需求正常但长需求失败时减少本轮需求或 TOM 上下文。");
+        } else if (raw.contains("HTTP 429")) {
+            sb.append("\n\n原因判断：模型服务限流或额度不足。");
+            sb.append("\n建议处理：稍后重试，或检查模型服务额度、并发限制和账号套餐。");
+        } else if (raw.contains("HTTP 401") || raw.contains("HTTP 403")) {
+            sb.append("\n\n原因判断：模型服务拒绝访问。");
+            sb.append("\n建议处理：检查 API Key、模型权限、余额和 endpoint 是否匹配。");
+        } else if (raw.contains("HTTP 500") || raw.contains("HTTP 502")
+                || raw.contains("HTTP 503") || raw.contains("HTTP 504")) {
+            sb.append("\n\n原因判断：模型服务或中转网关异常。");
+            sb.append("\n建议处理：稍后重试；如果持续出现，切换模型 endpoint 或查看中转服务状态。");
+        } else if (raw.contains("未产出最终正文") || raw.contains("推理或输出预算已耗尽")) {
+            sb.append("\n\n原因判断：模型接口格式正常，但模型只返回了推理通道，未输出最终 JSON 正文。");
+            sb.append("\n建议处理：系统会优先按缺失字段缩小补齐节点；若持续出现，请在模型侧降低推理强度、提高输出额度或更换非推理模型。");
+        } else if (raw.contains("模型返回解析失败") || raw.contains("模型返回内容为空")) {
+            sb.append("\n\n原因判断：模型服务返回了 HTTP 成功响应，但没有可用正文；这不等同于 endpoint 不兼容。");
+            sb.append("\n建议处理：查看 llm_invocation_log 中的 finish reason、输出摘要与模型配置；短请求也复现时再检查 endpoint/模型兼容性。");
+        } else if (raw.contains("模型调用超时") || lower.contains("timed out") || lower.contains("timeout")) {
+            sb.append("\n\n原因判断：模型在超时时间内没有返回。");
+            sb.append("\n建议处理：稍后重试；若只在长需求失败，减少输入范围或关闭 TOM 后验证。");
+        } else if (raw.contains("网络异常")) {
+            sb.append("\n\n原因判断：后端到模型服务之间存在网络连接异常。");
+            sb.append("\n建议处理：检查服务器网络、DNS、代理、防火墙和模型 endpoint 可达性。");
+        } else if (raw.contains("模型配置缺少") || raw.contains("模型配置不存在")
+                || raw.contains("模型配置未启用") || raw.contains("模型名称不能为空")) {
+            sb.append("\n\n原因判断：模型配置不完整或未启用。");
+            sb.append("\n建议处理：到模型配置页检查模型名称、API Key、endpoint 和启用状态。");
+        } else {
+            sb.append("\n\n建议处理：查看后端 Docker 日志和 llm_invocation_log，确认模型服务返回的具体错误。");
+        }
+        return sb.toString();
     }
 
     private long latestMessageId(Long sessionId) {
@@ -422,6 +527,19 @@ public class ConversationOrchestrator {
             return "\n\n上方【需要澄清】会影响测试范围和用例设计，请直接输入补充说明；系统会基于你的补充重新分析。\n如果确认按当前假设继续，也可以回复「生成用例」。";
         }
         return "\n\n请确认以上分析是否正确。有什么需要补充或修改的内容可以直接输入。\n如果无误，可以回复「生成用例」。";
+    }
+
+    private String buildNextStepPrompt(RequirementAnalysisRecord analysis) {
+        if (analysis != null && "NEED_SCOPE_CONFIRMATION".equals(analysis.status())) {
+            return "\n\n请先在右侧【本期需求范围】中确认哪些需求需要生成测试点、哪些仅作参考或排除。"
+                    + "确认后系统会继续生成覆盖矩阵和测试点；范围确认前不会展开后续模型节点。";
+        }
+        return buildConfirmPrompt(analysis);
+    }
+
+    private String stageAfterAnalysis(RequirementAnalysisRecord analysis) {
+        return analysis != null && "NEED_SCOPE_CONFIRMATION".equals(analysis.status())
+                ? "WAITING_REQUIREMENT_SCOPE" : "WAITING_USER_CONFIRMATION";
     }
 
     private boolean hasClarificationQuestions(RequirementAnalysisRecord analysis) {

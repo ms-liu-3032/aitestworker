@@ -2,17 +2,24 @@ package com.company.aitest.llm.gateway;
 
 import java.util.UUID;
 
-import com.company.aitest.common.BusinessException;
 import com.company.aitest.llm.LlmAdapter;
+import com.company.aitest.llm.LlmAdapter.CompletionResponse;
+import com.company.aitest.llm.gateway.audit.LlmAttemptContext;
 import com.company.aitest.llm.gateway.audit.LlmInvocationLogEntry;
 import com.company.aitest.llm.gateway.audit.LlmInvocationLogger;
 import com.company.aitest.llm.gateway.context.ContextManifest;
 import com.company.aitest.llm.gateway.context.ContextManifestRepository;
+import com.company.aitest.llm.gateway.guard.LlmQuotaService;
+import com.company.aitest.llm.gateway.guard.LlmTokenBudgetService;
+import com.company.aitest.llm.gateway.guard.PromptInjectionGuard;
+import com.company.aitest.llm.gateway.guard.SecurityEventLogger;
+import com.company.aitest.llm.gateway.guard.SensitiveDataMasker;
 import com.company.aitest.llm.gateway.prompt.PromptSnapshotEntry;
 import com.company.aitest.llm.gateway.prompt.PromptSnapshotService;
 import com.company.aitest.llm.gateway.retrieval.RagRetrievalService;
 import com.company.aitest.llm.gateway.retrieval.RetrievalPolicy;
 import com.company.aitest.llm.gateway.retrieval.RetrievalResult;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 /**
@@ -30,17 +37,47 @@ public class LlmGatewayImpl implements LlmGateway {
     private final LlmInvocationLogger invocationLogger;
     private final RagRetrievalService ragRetrievalService;
     private final ContextManifestRepository contextManifestRepository;
+    private final SensitiveDataMasker sensitiveDataMasker;
+    private final PromptInjectionGuard promptInjectionGuard;
+    private final SecurityEventLogger securityEventLogger;
+    private final LlmQuotaService quotaService;
+    private final LlmTokenBudgetService tokenBudgetService;
 
+    @Autowired
     public LlmGatewayImpl(LlmAdapter llmAdapter,
                          PromptSnapshotService promptSnapshotService,
                          LlmInvocationLogger invocationLogger,
                          RagRetrievalService ragRetrievalService,
-                         ContextManifestRepository contextManifestRepository) {
+                         ContextManifestRepository contextManifestRepository,
+                         SensitiveDataMasker sensitiveDataMasker,
+                         PromptInjectionGuard promptInjectionGuard,
+                         SecurityEventLogger securityEventLogger,
+                         LlmQuotaService quotaService,
+                         LlmTokenBudgetService tokenBudgetService) {
         this.llmAdapter = llmAdapter;
         this.promptSnapshotService = promptSnapshotService;
         this.invocationLogger = invocationLogger;
         this.ragRetrievalService = ragRetrievalService;
         this.contextManifestRepository = contextManifestRepository;
+        this.sensitiveDataMasker = sensitiveDataMasker;
+        this.promptInjectionGuard = promptInjectionGuard;
+        this.securityEventLogger = securityEventLogger;
+        this.quotaService = quotaService;
+        this.tokenBudgetService = tokenBudgetService;
+    }
+
+    LlmGatewayImpl(LlmAdapter llmAdapter,
+                   PromptSnapshotService promptSnapshotService,
+                   LlmInvocationLogger invocationLogger,
+                   RagRetrievalService ragRetrievalService,
+                   ContextManifestRepository contextManifestRepository,
+                   SensitiveDataMasker sensitiveDataMasker,
+                   PromptInjectionGuard promptInjectionGuard,
+                   SecurityEventLogger securityEventLogger,
+                   LlmQuotaService quotaService) {
+        this(llmAdapter, promptSnapshotService, invocationLogger, ragRetrievalService, contextManifestRepository,
+                sensitiveDataMasker, promptInjectionGuard, securityEventLogger, quotaService,
+                new LlmTokenBudgetService(false, 0, 0));
     }
 
     @Override
@@ -58,12 +95,46 @@ public class LlmGatewayImpl implements LlmGateway {
                     "INVALID_REQUEST", validationError, started);
         }
 
-        // step 2: TODO 限流 (Sprint 6 · LlmQuotaService)
-        // step 7: TODO Prompt Injection 扫描 (Sprint 5 · PromptInjectionGuard)
-        // step 8: TODO 入参脱敏 (Sprint 5 · SensitiveDataMasker)
-
         String systemPrompt = nullSafe(request.systemPromptOverride());
         String userPrompt = nullSafe(request.userPromptOverride());
+
+        // step 2: 轻量限流
+        LlmQuotaService.Decision quota = quotaService.tryAcquire(request);
+        if (!quota.allowed()) {
+            recordSecurityEvent("LLM_RATE_LIMITED", "WARN", request, requestId,
+                    "{\"scope\":\"" + quota.scope() + "\",\"limit\":" + quota.limit() + "}");
+            return logAndReturn(request, requestId, null, null, "", 0, 0,
+                    LlmInvocationStatus.QUOTA_EXCEEDED,
+                    LlmErrorCode.RATE_LIMITED.name(),
+                    "LLM 调用超过限流阈值：" + quota.scope() + " 每分钟最多 " + quota.limit() + " 次",
+                    started);
+        }
+
+        // step 7: Prompt Injection 基础检测（记录事件，不阻断）
+        PromptInjectionGuard.Result guardResult = promptInjectionGuard.scan(systemPrompt, userPrompt);
+        if (guardResult.suspicious()) {
+            recordSecurityEvent("PROMPT_INJECTION_SUSPECTED", "WARN", request, requestId,
+                    "{\"signals\":\"" + String.join(",", guardResult.signals()) + "\"}");
+            systemPrompt = systemPrompt + promptInjectionGuard.systemReminder(guardResult);
+        }
+
+        // step 8: 入参脱敏。只处理明显密钥/Token/密码类内容，避免破坏业务测试数据。
+        systemPrompt = sensitiveDataMasker.mask(systemPrompt);
+        userPrompt = sensitiveDataMasker.mask(userPrompt);
+
+        int estimatedInputTokens = estimateTokens(systemPrompt) + estimateTokens(userPrompt);
+        LlmTokenBudgetService.Decision budget = tokenBudgetService.checkBeforeCall(request, estimatedInputTokens);
+        if (!budget.allowed()) {
+            recordSecurityEvent("LLM_DAILY_TOKEN_BUDGET_EXCEEDED", "WARN", request, requestId,
+                    "{\"scope\":\"" + budget.scope() + "\",\"limit\":" + budget.limit()
+                            + ",\"used\":" + budget.used() + "}");
+            return logAndReturn(request, requestId, null, null, "", estimatedInputTokens, 0,
+                    LlmInvocationStatus.QUOTA_EXCEEDED,
+                    LlmErrorCode.RATE_LIMITED.name(),
+                    "LLM 调用超过日 token 预算：" + budget.scope()
+                            + " 每日最多 " + budget.limit() + " tokens，当前已使用 " + budget.used(),
+                    started);
+        }
 
         // step 4: RAG 检索（按 stage 取默认 policy）
         RetrievalPolicy policy = RetrievalPolicy.forStage(request.stage(), userPrompt);
@@ -87,26 +158,32 @@ public class LlmGatewayImpl implements LlmGateway {
                 null));
 
         // step 9: 调模型
-        String content;
+        CompletionResponse completion;
         try {
-            content = llmAdapter.complete(new LlmAdapter.CompletionRequest(
+            LlmAttemptContext.bind(requestId, request, promptSnapshotId, manifestId);
+            completion = llmAdapter.completeWithUsage(new LlmAdapter.CompletionRequest(
                     request.modelConfigId(), systemPrompt, userPrompt, request.maxTokens()));
-        } catch (BusinessException ex) {
-            return logAndReturn(request, requestId, promptSnapshotId, manifestId, "", 0, 0,
-                    LlmInvocationStatus.MODEL_ERROR,
-                    "MODEL_ERROR", ex.getMessage(), started);
+        } catch (LlmRuntimeException ex) {
+            return logAndReturn(request, requestId, promptSnapshotId, manifestId, "", estimatedInputTokens, 0,
+                    statusFor(ex.errorCode()),
+                    ex.errorCode().name(), ex.getMessage(), started);
         } catch (RuntimeException ex) {
-            return logAndReturn(request, requestId, promptSnapshotId, manifestId, "", 0, 0,
+            return logAndReturn(request, requestId, promptSnapshotId, manifestId, "", estimatedInputTokens, 0,
                     LlmInvocationStatus.MODEL_ERROR,
-                    "UNEXPECTED", ex.getMessage(), started);
+                    LlmErrorCode.UNKNOWN_ERROR.name(), ex.getMessage(), started);
+        } finally {
+            LlmAttemptContext.clear();
         }
 
         // step 10: TODO 出参脱敏
 
         // step 11: 写日志（成功）
         long duration = System.currentTimeMillis() - started;
-        int tokenIn = estimateTokens(systemPrompt) + estimateTokens(userPrompt);
-        int tokenOut = estimateTokens(content);
+        String content = completion.content();
+        int tokenIn = tokenOrFallback(completion.promptTokens(), estimatedInputTokens);
+        int tokenOut = tokenOrFallback(completion.completionTokens(), estimateTokens(content));
+        int tokenCachedIn = Math.min(tokenIn, Math.max(0,
+                completion.cachedPromptTokens() == null ? 0 : completion.cachedPromptTokens()));
         Long logId = invocationLogger.record(new LlmInvocationLogEntry(
                 requestId,
                 request.userId(),
@@ -120,11 +197,15 @@ public class LlmGatewayImpl implements LlmGateway {
                 promptSnapshotId,
                 null,
                 null,
+                null,
+                snapshot(content),
                 manifestId,
                 tokenIn,
+                tokenCachedIn,
                 tokenOut,
                 LlmInvocationStatus.OK.name(),
                 null, null, duration));
+        tokenBudgetService.recordUsage(request, tokenIn, tokenOut);
 
         return new LlmInvocationResponse(
                 requestId, content, tokenIn, tokenOut, duration,
@@ -186,8 +267,43 @@ public class LlmGatewayImpl implements LlmGateway {
         return Math.max(1, text.length() / 4);
     }
 
+    private int tokenOrFallback(Integer providerUsage, int fallback) {
+        return providerUsage != null && providerUsage > 0 ? providerUsage : fallback;
+    }
+
     private String nullSafe(String s) {
         return s == null ? "" : s;
+    }
+
+    private LlmInvocationStatus statusFor(LlmErrorCode errorCode) {
+        if (errorCode == LlmErrorCode.TIMEOUT) {
+            return LlmInvocationStatus.TIMEOUT;
+        }
+        if (errorCode == LlmErrorCode.INVALID_REQUEST || errorCode == LlmErrorCode.MODEL_NOT_FOUND) {
+            return LlmInvocationStatus.INVALID_REQUEST;
+        }
+        return LlmInvocationStatus.MODEL_ERROR;
+    }
+
+    private String snapshot(String content) {
+        if (content == null || content.isBlank()) {
+            return null;
+        }
+        String compact = sensitiveDataMasker.mask(content).replaceAll("\\s+", " ").trim();
+        int max = 2000;
+        return compact.length() <= max ? compact : compact.substring(0, max);
+    }
+
+    private void recordSecurityEvent(String eventType,
+                                     String severity,
+                                     LlmInvocationRequest request,
+                                     String requestId,
+                                     String detailJson) {
+        try {
+            securityEventLogger.record(eventType, severity, request, requestId, detailJson);
+        } catch (RuntimeException ex) {
+            System.err.println("[LlmGateway] security event record failed: " + ex.getMessage());
+        }
     }
 
     private LlmInvocationResponse logAndReturn(LlmInvocationRequest req,
@@ -213,7 +329,7 @@ public class LlmGatewayImpl implements LlmGateway {
                 req.promptTemplateId(),
                 req.promptVersion(),
                 promptSnapshotId,
-                null, null, manifestId,
+                null, null, null, snapshot(content), manifestId,
                 tokenIn, tokenOut,
                 status.name(), errorCode, errorMessage, duration));
         return new LlmInvocationResponse(

@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { useApp } from '../../context/AppContext';
 import RichList from '../../components/RichList';
 import MultiSelectFilter from '../../components/MultiSelectFilter';
-import { listFormalCases, type FormalCase } from '../../services/api';
+import { deleteFormalCase, deleteFormalCases, getFormalCase, listFormalCasesPage, type FormalCase } from '../../services/api';
 
 const priorityConfig: Record<string, { bg: string; text: string }> = {
   P0: { bg: 'bg-red-50', text: 'text-red-600' },
@@ -39,62 +39,99 @@ export default function FormalCaseLibrary() {
   const { showToast } = useApp();
   const [cases, setCases] = useState<FormalCase[]>([]);
   const [loading, setLoading] = useState(true);
+  const [page, setPage] = useState(0);
+  const [total, setTotal] = useState(0);
+  const pageSize = 50;
   const [keyword, setKeyword] = useState('');
   const [moduleFilter, setModuleFilter] = useState<string[]>([]);
   const [priorityFilter, setPriorityFilter] = useState<string[]>([]);
   const [statusFilter, setStatusFilter] = useState<string[]>([]);
   const [sourceFilter, setSourceFilter] = useState<string[]>([]);
+  const [moduleOptions, setModuleOptions] = useState<string[]>([]);
+  const loadRequestId = useRef(0);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [detailCase, setDetailCase] = useState<FormalCase | null>(null);
   const [exporting, setExporting] = useState(false);
+  const [deletingId, setDeletingId] = useState<number | null>(null);
+  const [batchDeleting, setBatchDeleting] = useState(false);
 
-  const loadCases = async () => {
+  const loadCases = async (nextPage = page) => {
     if (!projectId) return;
+    const requestId = ++loadRequestId.current;
     setLoading(true);
     try {
-      const data = await listFormalCases(Number(projectId));
-      setCases(data);
+      const data = await listFormalCasesPage(Number(projectId), nextPage, pageSize, {
+        keyword,
+        modules: moduleFilter,
+        priorities: priorityFilter,
+        statuses: statusFilter,
+        sources: sourceFilter,
+      });
+      if (requestId !== loadRequestId.current) return;
+      setCases(data.items);
+      setTotal(data.total);
+      setPage(data.page);
+      setModuleOptions(data.moduleOptions || []);
+      setSelectedIds(new Set());
     } catch (error: any) {
       showToast(error.message || '加载正式用例失败', 'error');
     } finally {
-      setLoading(false);
+      if (requestId === loadRequestId.current) setLoading(false);
     }
   };
 
   useEffect(() => {
-    loadCases();
-  }, [projectId]);
+    loadRequestId.current += 1;
+    setPage(0);
+    setLoading(true);
+    const timer = window.setTimeout(() => void loadCases(0), keyword.trim() ? 250 : 0);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId, keyword, moduleFilter, priorityFilter, statusFilter, sourceFilter]);
 
-  const moduleOptions = useMemo(
-    () => Array.from(new Set(cases.map(item => item.moduleName).filter(Boolean))) as string[],
-    [cases]
-  );
+  const openDetail = async (testCase: FormalCase) => {
+    if (!projectId) return;
+    try {
+      setDetailCase(await getFormalCase(Number(projectId), testCase.id));
+    } catch (error: any) {
+      showToast(error.message || '加载正式用例详情失败', 'error');
+    }
+  };
 
-  const filteredCases = useMemo(() => {
-    const term = keyword.trim().toLowerCase();
-    return cases.filter(item => {
-      const sourceType = getFormalCaseSourceType(item);
-      if (moduleFilter.length > 0 && !moduleFilter.includes(item.moduleName || '')) return false;
-      if (priorityFilter.length > 0 && !priorityFilter.includes(item.priority || '')) return false;
-      if (statusFilter.length > 0) {
-        const normalizedStatus = item.caseStatus === 'DEPRECATED' ? 'DEPRECATED' : isFormalCaseActive(item.caseStatus) ? 'ACTIVE' : item.caseStatus;
-        if (!statusFilter.includes(normalizedStatus)) return false;
-      }
-      if (sourceFilter.length > 0 && !sourceFilter.includes(sourceType)) return false;
-      if (!term) return true;
-      return [
-        item.caseTitle,
-        item.caseNo || '',
-        item.moduleName || '',
-        item.caseType || '',
-        item.caseScope || '',
-        formalCaseSourceLabel(sourceType),
-      ].some(value => value.toLowerCase().includes(term));
-    });
-  }, [cases, keyword, moduleFilter, priorityFilter, statusFilter, sourceFilter]);
+  const handleDelete = async (testCase: FormalCase) => {
+    if (!projectId || !window.confirm(`确定删除正式用例“${testCase.caseTitle}”吗？此操作不可恢复。`)) return;
+    setDeletingId(testCase.id);
+    try {
+      await deleteFormalCase(Number(projectId), testCase.id);
+      if (detailCase?.id === testCase.id) setDetailCase(null);
+      showToast('正式用例已删除');
+      await loadCases(cases.length === 1 && page > 0 ? page - 1 : page);
+    } catch (error: any) {
+      showToast(error.message || '删除正式用例失败', 'error');
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
+  const handleBatchDelete = async () => {
+    if (!projectId || selectedIds.size === 0) return;
+    const caseIds = Array.from(selectedIds);
+    if (!window.confirm(`确定批量删除 ${caseIds.length} 条正式用例吗？此操作不可恢复。`)) return;
+    setBatchDeleting(true);
+    try {
+      const result = await deleteFormalCases(Number(projectId), caseIds);
+      if (detailCase && selectedIds.has(detailCase.id)) setDetailCase(null);
+      showToast(`已删除 ${result.affectedCount} 条正式用例`);
+      await loadCases(cases.length === caseIds.length && page > 0 ? page - 1 : page);
+    } catch (error: any) {
+      showToast(error.message || '批量删除正式用例失败', 'error');
+    } finally {
+      setBatchDeleting(false);
+    }
+  };
 
   const counts = useMemo(() => ({
-    total: cases.length,
+    total,
     active: cases.filter(item => isFormalCaseActive(item.caseStatus)).length,
     deprecated: cases.filter(item => item.caseStatus === 'DEPRECATED').length,
     exported: cases.filter(item => item.exportedAt).length,
@@ -112,10 +149,10 @@ export default function FormalCaseLibrary() {
   };
 
   const toggleSelectAll = () => {
-    if (selectedIds.size === filteredCases.length) {
+    if (selectedIds.size === cases.length) {
       setSelectedIds(new Set());
     } else {
-      setSelectedIds(new Set(filteredCases.map(c => c.id)));
+      setSelectedIds(new Set(cases.map(c => c.id)));
     }
   };
 
@@ -140,7 +177,7 @@ export default function FormalCaseLibrary() {
       a.download = '正式用例库.xmind';
       a.click();
       URL.revokeObjectURL(url);
-      showToast(`已导出 ${ids ? ids.length : filteredCases.length} 条用例`);
+      showToast(`已导出 ${ids ? ids.length : total} 条用例`);
     } catch (error: any) {
       showToast(error.message || '导出失败', 'error');
     } finally {
@@ -156,6 +193,7 @@ export default function FormalCaseLibrary() {
     { key: 'priority', label: '优先级', width: '60px' },
     { key: 'status', label: '状态', width: '70px' },
     { key: 'updated', label: '更新时间', width: '90px' },
+    { key: 'actions', label: '操作', width: '100px' },
   ];
 
   return (
@@ -171,10 +209,19 @@ export default function FormalCaseLibrary() {
             disabled={exporting}
             className="min-h-10 shrink-0 rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700 disabled:opacity-50"
           >
-            {exporting ? '导出中...' : `导出 (${selectedIds.size > 0 ? selectedIds.size : filteredCases.length})`}
+            {exporting ? '导出中...' : selectedIds.size > 0 ? `导出 (${selectedIds.size})` : '导出全部'}
           </button>
+          {selectedIds.size > 0 && (
+            <button
+              onClick={() => void handleBatchDelete()}
+              disabled={batchDeleting}
+              className="min-h-10 shrink-0 rounded-lg border border-red-200 px-3 py-2 text-sm font-medium text-red-700 transition-colors hover:bg-red-50 disabled:opacity-50"
+            >
+              {batchDeleting ? '删除中...' : `批量删除 (${selectedIds.size})`}
+            </button>
+          )}
           <button
-            onClick={loadCases}
+            onClick={() => void loadCases(page)}
             className="min-h-10 shrink-0 rounded-lg border border-gray-200 px-3 py-2 text-sm font-medium text-gray-700 transition-colors hover:border-gray-300 hover:bg-gray-50"
           >
             刷新列表
@@ -188,19 +235,19 @@ export default function FormalCaseLibrary() {
           <div className="text-2xl font-semibold text-gray-900 mt-1">{counts.total}</div>
         </div>
         <div className="bg-white rounded-xl border border-gray-200 p-4">
-          <div className="text-xs text-gray-500">生效</div>
+          <div className="text-xs text-gray-500">当前页生效</div>
           <div className="text-2xl font-semibold text-green-700 mt-1">{counts.active}</div>
         </div>
         <div className="bg-white rounded-xl border border-gray-200 p-4">
-          <div className="text-xs text-gray-500">已弃用</div>
+          <div className="text-xs text-gray-500">当前页已弃用</div>
           <div className="text-2xl font-semibold text-gray-700 mt-1">{counts.deprecated}</div>
         </div>
         <div className="bg-white rounded-xl border border-gray-200 p-4">
-          <div className="text-xs text-gray-500">已导出</div>
+          <div className="text-xs text-gray-500">当前页已导出</div>
           <div className="text-2xl font-semibold text-blue-700 mt-1">{counts.exported}</div>
         </div>
         <div className="bg-white rounded-xl border border-gray-200 p-4">
-          <div className="text-xs text-gray-500">来源分布</div>
+          <div className="text-xs text-gray-500">当前页来源</div>
           <div className="mt-2 flex flex-wrap items-center gap-2">
             <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium bg-sky-50 text-sky-700">
               需求生成 {counts.generation}
@@ -234,7 +281,7 @@ export default function FormalCaseLibrary() {
       <div className="flex items-center gap-2 mb-2">
         <input
           type="checkbox"
-          checked={selectedIds.size === filteredCases.length && filteredCases.length > 0}
+          checked={selectedIds.size === cases.length && cases.length > 0}
           onChange={toggleSelectAll}
           className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
         />
@@ -245,7 +292,7 @@ export default function FormalCaseLibrary() {
       </div>
 
       <RichList
-        items={filteredCases}
+        items={cases}
         columns={columns}
         loading={loading}
         emptyText="暂无匹配的正式用例"
@@ -266,7 +313,7 @@ export default function FormalCaseLibrary() {
             </div>
             <div className="flex-1 min-w-0">
               <button
-                onClick={() => setDetailCase(testCase)}
+                onClick={() => void openDetail(testCase)}
                 className="text-sm font-medium text-gray-900 truncate hover:text-blue-600 text-left"
               >
                 {testCase.caseTitle}
@@ -298,10 +345,24 @@ export default function FormalCaseLibrary() {
             <div className="flex-shrink-0 text-xs text-gray-500 font-mono" style={{ width: '90px' }}>
               {new Date(testCase.updatedAt).toLocaleDateString('zh-CN')}
             </div>
+            <div className="flex shrink-0 items-center gap-2 text-xs" style={{ width: '100px' }}>
+              <button onClick={() => void openDetail(testCase)} className="text-sky-600 hover:text-sky-700">详情</button>
+              <button onClick={() => void handleDelete(testCase)} disabled={deletingId === testCase.id} className="text-red-600 hover:text-red-700 disabled:opacity-50">{deletingId === testCase.id ? '删除中' : '删除'}</button>
+            </div>
           </>
           );
         }}
       />
+
+      <div className="mt-4 flex items-center justify-between gap-3 text-sm">
+        <span className="text-gray-500">
+          {loading ? '正在统计筛选结果...' : `第 ${page + 1} / ${Math.max(1, Math.ceil(total / pageSize))} 页，共 ${total} 条`}
+        </span>
+        <div className="flex gap-2">
+          <button onClick={() => void loadCases(page - 1)} disabled={page === 0 || loading} className="rounded-lg border border-gray-200 px-3 py-2 text-gray-700 disabled:opacity-40">上一页</button>
+          <button onClick={() => void loadCases(page + 1)} disabled={(page + 1) * pageSize >= total || loading} className="rounded-lg border border-gray-200 px-3 py-2 text-gray-700 disabled:opacity-40">下一页</button>
+        </div>
+      </div>
 
       {/* 用例详情弹窗 */}
       {detailCase && (

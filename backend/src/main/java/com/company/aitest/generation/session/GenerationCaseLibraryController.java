@@ -31,6 +31,29 @@ public class GenerationCaseLibraryController {
         return ApiResponse.ok(caseLibraryService.list(projectId, user));
     }
 
+    @GetMapping("/page")
+    public ApiResponse<GenerationCaseLibraryService.LocalCaseDraftPage> listPage(@PathVariable Long projectId,
+                                                                                  @org.springframework.web.bind.annotation.RequestParam(defaultValue = "0") int page,
+                                                                                  @org.springframework.web.bind.annotation.RequestParam(defaultValue = "50") int size,
+                                                                                  @org.springframework.web.bind.annotation.RequestParam(required = false) String keyword,
+                                                                                  @org.springframework.web.bind.annotation.RequestParam(required = false) List<String> modules,
+                                                                                  @org.springframework.web.bind.annotation.RequestParam(required = false) List<String> priorities,
+                                                                                  @org.springframework.web.bind.annotation.RequestParam(required = false) List<String> statuses,
+                                                                                  @org.springframework.web.bind.annotation.RequestParam(required = false) List<String> sources,
+                                                                                  Authentication auth) {
+        CurrentUser user = (CurrentUser) auth.getPrincipal();
+        return ApiResponse.ok(caseLibraryService.listPage(projectId, page, size, keyword,
+                modules, priorities, statuses, sources, user));
+    }
+
+    @GetMapping("/{draftId}")
+    public ApiResponse<GenerationCaseLibraryService.LocalCaseDraftView> get(@PathVariable Long projectId,
+                                                                             @PathVariable Long draftId,
+                                                                             Authentication auth) {
+        CurrentUser user = (CurrentUser) auth.getPrincipal();
+        return ApiResponse.ok(caseLibraryService.getOwnedDraft(projectId, draftId, user));
+    }
+
     @PatchMapping("/{draftId}")
     public ApiResponse<GenerationCaseLibraryService.LocalCaseDraftView> update(@PathVariable Long projectId,
                                                                                 @PathVariable Long draftId,
@@ -56,6 +79,14 @@ public class GenerationCaseLibraryController {
         return ApiResponse.ok(caseLibraryService.confirm(projectId, draftId, user));
     }
 
+    @PostMapping("/{draftId}/duplicate")
+    public ApiResponse<GenerationCaseLibraryService.LocalCaseDraftView> duplicate(@PathVariable Long projectId,
+                                                                                   @PathVariable Long draftId,
+                                                                                   Authentication auth) {
+        CurrentUser user = (CurrentUser) auth.getPrincipal();
+        return ApiResponse.ok(caseLibraryService.duplicate(projectId, draftId, user));
+    }
+
     @PostMapping("/{draftId}/deprecate")
     public ApiResponse<GenerationCaseLibraryService.LocalCaseDraftView> deprecate(@PathVariable Long projectId,
                                                                                    @PathVariable Long draftId,
@@ -73,7 +104,46 @@ public class GenerationCaseLibraryController {
         return ApiResponse.ok(null);
     }
 
+    @PostMapping("/batch/confirm")
+    public ApiResponse<GenerationCaseLibraryService.BatchOperationResult> batchConfirm(@PathVariable Long projectId,
+                                                                                         @RequestBody Map<String, Object> body,
+                                                                                         Authentication auth) {
+        CurrentUser user = (CurrentUser) auth.getPrincipal();
+        return ApiResponse.ok(caseLibraryService.batchConfirm(projectId, longList(body.get("draftIds")), user));
+    }
+
+    @PostMapping("/batch/deprecate")
+    public ApiResponse<GenerationCaseLibraryService.BatchOperationResult> batchDeprecate(@PathVariable Long projectId,
+                                                                                           @RequestBody Map<String, Object> body,
+                                                                                           Authentication auth) {
+        CurrentUser user = (CurrentUser) auth.getPrincipal();
+        return ApiResponse.ok(caseLibraryService.batchDeprecate(projectId, longList(body.get("draftIds")), user));
+    }
+
+    @PostMapping("/batch/submit")
+    public ApiResponse<GenerationCaseLibraryService.BatchOperationResult> batchSubmit(@PathVariable Long projectId,
+                                                                                        @RequestBody Map<String, Object> body,
+                                                                                        Authentication auth) {
+        CurrentUser user = (CurrentUser) auth.getPrincipal();
+        return ApiResponse.ok(caseLibraryService.batchSubmitToFormal(projectId, longList(body.get("draftIds")), user));
+    }
+
     private static String stringValue(Object value) {
         return value == null ? null : String.valueOf(value);
+    }
+
+    private static List<Long> longList(Object value) {
+        if (!(value instanceof List<?> values)) return List.of();
+        return values.stream()
+                .filter(item -> item instanceof Number || item instanceof String)
+                .map(item -> {
+                    try {
+                        return Long.valueOf(String.valueOf(item));
+                    } catch (NumberFormatException ignored) {
+                        return null;
+                    }
+                })
+                .filter(java.util.Objects::nonNull)
+                .toList();
     }
 }

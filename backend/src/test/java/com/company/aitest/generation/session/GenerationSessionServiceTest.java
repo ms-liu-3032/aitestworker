@@ -3,12 +3,15 @@ package com.company.aitest.generation.session;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.util.List;
+import java.time.LocalDateTime;
 
+import com.company.aitest.common.BusinessException;
 import com.company.aitest.common.CurrentUser;
 import com.company.aitest.common.TimeProvider;
 import org.junit.jupiter.api.BeforeEach;
@@ -77,6 +80,26 @@ class GenerationSessionServiceTest {
         service.get(2L, 99L, user);
 
         verify(jdbcClient).sql("SELECT * FROM generation_session WHERE id = :id AND project_id = :pid AND created_by = :uid");
+    }
+
+    @Test
+    void updateConfigStoresExplicitTomModeAndLegacyCompatibilityFlag() {
+        LocalDateTime now = LocalDateTime.of(2026, 7, 17, 16, 0);
+        when(timeProvider.now()).thenReturn(now);
+
+        service.updateConfig(2L, 99L, 12L, 13L, "PROJECT_TOM", user);
+
+        verify(jdbcTemplate).update(
+                "UPDATE generation_session SET model_config_id = ?, prompt_template_id = ?, use_mini_tom = ?, tom_mode = ?, updated_at = ? WHERE id = ? AND project_id = ? AND created_by = ?",
+                12L, 13L, 1, "PROJECT_TOM", now, 99L, 2L, 7L);
+    }
+
+    @Test
+    void updateConfigRejectsUnknownTomMode() {
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.updateConfig(2L, 99L, 12L, 13L, "ALL_TOMS", user));
+
+        org.junit.jupiter.api.Assertions.assertEquals("不支持的 TOM 使用模式: ALL_TOMS", ex.getMessage());
     }
 
     @SuppressWarnings("unchecked")

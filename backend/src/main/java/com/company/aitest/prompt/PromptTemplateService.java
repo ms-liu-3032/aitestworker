@@ -140,7 +140,7 @@ public class PromptTemplateService {
                 insert into prompt_template(prompt_name, prompt_type, scope, content, content_hash, version,
                   status, review_status, contributor_user_id, contributor_username, created_by, created_at, updated_at)
                 values (?, ?, 'PUBLIC', ?, ?, 1, 'REVIEWING', 'PENDING', ?, ?, ?, ?, ?)
-                """, src.promptName(), src.promptType(), src.content(), src.content(),
+                """, src.promptName(), src.promptType(), src.content(), src.contentHash(),
                 user.id(), user.username(), user.id(), now, now);
         Long id = jdbc.sql("select last_insert_id()").query(Long.class).single();
         return getById(id);
@@ -184,6 +184,7 @@ public class PromptTemplateService {
                 rs.getString("prompt_type"),
                 rs.getString("scope"),
                 rs.getString("content"),
+                rs.getString("content_hash"),
                 rs.getString("status"),
                 getNullableInt(rs, "version"),
                 rs.getString("review_status"),

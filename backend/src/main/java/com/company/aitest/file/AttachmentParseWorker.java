@@ -57,7 +57,12 @@ public class AttachmentParseWorker {
             String storagePath = (String) row.get("storage_path");
             Long sessionId = ((Number) row.get("session_id")).longValue();
 
-            jdbcTemplate.update("UPDATE generation_attachment SET parse_status = 'PARSING' WHERE id = ?", id);
+            int claimed = jdbcTemplate.update(
+                    "UPDATE generation_attachment SET parse_status = 'PARSING' WHERE id = ? AND parse_status = 'PENDING'",
+                    id);
+            if (claimed == 0) {
+                continue;
+            }
 
             try {
                 Path filePath = fileStorageService.resolve(storagePath);
@@ -70,7 +75,10 @@ public class AttachmentParseWorker {
                     // Try vision analysis - get model config from session
                     Long modelConfigId = jdbc.sql(
                                     "SELECT model_config_id FROM generation_session WHERE id = :sid")
-                            .param("sid", sessionId).query((rs, rowNum) -> (Long) rs.getLong("model_config_id")).single();
+                            .param("sid", sessionId).query((rs, rowNum) -> {
+                                long value = rs.getLong("model_config_id");
+                                return rs.wasNull() ? null : value;
+                            }).single();
                     if (modelConfigId != null && imageUnderstandingService.supportsVision(modelConfigId)) {
                         visionResult = imageUnderstandingService.analyzeImage(filePath, modelConfigId, 0L, null);
                     }

@@ -108,6 +108,23 @@ class QualityCheckEngineTest {
     }
 
     @Test
+    void fieldValidationOverSplitDetected() {
+        QualityCheckCaseInput a = new QualityCheckCaseInput(1, "用户表单", "姓名必填校验", "1. 清空姓名", "提示必填", "P1", "src", true);
+        QualityCheckCaseInput b = new QualityCheckCaseInput(2, "用户表单", "手机号格式校验", "1. 输入错误手机号", "提示格式错误", "P1", "src", true);
+        QualityCheckCaseInput c = new QualityCheckCaseInput(3, "用户表单", "地址长度校验", "1. 输入超长地址", "提示超长", "P1", "src", true);
+        QualityCheckResult result = engine.evaluate(List.of(a, b, c));
+        assertTrue(result.issues().stream().anyMatch(i -> "FIELD_VALIDATION_OVER_SPLIT".equals(i.issueCode())));
+    }
+
+    @Test
+    void p0ScopeReviewDetectedForNonHappyPath() {
+        QualityCheckCaseInput input = new QualityCheckCaseInput(1, "权限模块", "无权限用户不能删除记录",
+                "1. 使用无权限账号登录\n2. 点击删除", "提示无权限", "P0", "src", true);
+        QualityCheckResult result = engine.evaluate(List.of(input));
+        assertTrue(result.issues().stream().anyMatch(i -> "P0_SCOPE_REVIEW".equals(i.issueCode())));
+    }
+
+    @Test
     void vagueExpressionDetected() {
         for (String vague : List.of("功能正常", "显示正常", "符合预期", "正常展示")) {
             QualityCheckCaseInput input = new QualityCheckCaseInput(1, "mod", "title", "steps", "验证" + vague, "P0", "src", true);

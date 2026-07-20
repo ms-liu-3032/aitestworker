@@ -2,6 +2,7 @@ package com.company.aitest.wiki;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Set;
 
 import com.company.aitest.common.BusinessException;
 import com.company.aitest.common.CurrentUser;
@@ -44,8 +45,26 @@ public class WikiService {
         return results.get(0);
     }
 
+    public Long projectIdForPack(Long packId) {
+        return getPack(packId).projectId();
+    }
+
+    public WikiPackRecord getPackForEntry(Long entryId) {
+        var results = jdbc.sql("""
+                SELECT wp.* FROM wiki_pack wp
+                JOIN wiki_entry we ON we.pack_id = wp.id
+                WHERE we.id = ?
+                """)
+                .param(entryId)
+                .query(this::mapPack)
+                .list();
+        if (results.isEmpty()) throw new BusinessException("Wiki 条目不存在");
+        return results.get(0);
+    }
+
     @Transactional
     public WikiPackRecord createPack(Long projectId, String scope, String name, String description, CurrentUser user) {
+        validateScope(scope);
         LocalDateTime now = timeProvider.now();
         jdbcTemplate.update("""
                 INSERT INTO wiki_pack(project_id, scope, name, status, review_status, description, created_by, created_at, updated_at)
@@ -57,9 +76,13 @@ public class WikiService {
 
     @Transactional
     public WikiPackRecord updatePackStatus(Long packId, String status, CurrentUser user) {
+        validatePackStatus(status);
         LocalDateTime now = timeProvider.now();
-        jdbcTemplate.update("UPDATE wiki_pack SET status = ?, updated_at = ? WHERE id = ?",
+        int updated = jdbcTemplate.update("UPDATE wiki_pack SET status = ?, updated_at = ? WHERE id = ?",
                 status, now, packId);
+        if (updated == 0) {
+            throw new BusinessException("Wiki 包不存在");
+        }
         return getPack(packId);
     }
 
@@ -100,10 +123,32 @@ public class WikiService {
 
     @Transactional
     public WikiEntryRecord reviewEntry(Long entryId, String reviewStatus, CurrentUser user) {
+        validateReviewStatus(reviewStatus);
         LocalDateTime now = timeProvider.now();
-        jdbcTemplate.update("UPDATE wiki_entry SET review_status = ?, updated_at = ? WHERE id = ?",
+        int updated = jdbcTemplate.update("UPDATE wiki_entry SET review_status = ?, updated_at = ? WHERE id = ?",
                 reviewStatus, now, entryId);
+        if (updated == 0) {
+            throw new BusinessException("Wiki 条目不存在");
+        }
         return getEntry(entryId);
+    }
+
+    private void validateScope(String scope) {
+        if (!Set.of("PROJECT", "REUSABLE", "SYSTEM").contains(scope)) {
+            throw new BusinessException("Wiki 范围不支持：" + scope);
+        }
+    }
+
+    private void validatePackStatus(String status) {
+        if (!Set.of("DRAFT", "ACTIVE", "INACTIVE", "ARCHIVED").contains(status)) {
+            throw new BusinessException("Wiki 包状态不支持：" + status);
+        }
+    }
+
+    private void validateReviewStatus(String reviewStatus) {
+        if (!Set.of("PENDING", "APPROVED", "REJECTED").contains(reviewStatus)) {
+            throw new BusinessException("Wiki 审核状态不支持：" + reviewStatus);
+        }
     }
 
     // ---- Mapper ----

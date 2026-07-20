@@ -106,7 +106,7 @@ class TraceCorrectionSuggestionServiceTest {
                 "选择时间“20260604 10:15”"));
         assertFalse(service.isRiskyGenericStepRewrite(
                 "点击“新增”按钮",
-                "发起新增申请"));
+                "发起新增申请人"));
     }
 
     @Test

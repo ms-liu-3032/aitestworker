@@ -73,6 +73,10 @@ function formatDate(value?: string) {
   return value ? new Date(value).toLocaleDateString('zh-CN') : '-';
 }
 
+function asArray<T>(value: unknown): T[] {
+  return Array.isArray(value) ? value : [];
+}
+
 export default function AssetLibrary() {
   const { showToast } = useApp();
   const [tab, setTab] = useState<TabKey>('cases');
@@ -88,7 +92,7 @@ export default function AssetLibrary() {
 
   useEffect(() => {
     listProjects({ page: 1, size: 200 })
-      .then(result => setProjects(result.items))
+      .then(result => setProjects(asArray<Project>((result as any)?.items)))
       .catch(() => {});
   }, []);
 
@@ -108,7 +112,7 @@ export default function AssetLibrary() {
         projectId: projectFilter ? Number(projectFilter) : undefined,
         status: statusFilter || undefined,
       } as any);
-      setData(result);
+      setData(asArray<AssetItem>(result));
     } catch (error: any) {
       showToast(error.message || '加载失败', 'error');
     } finally {

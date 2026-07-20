@@ -51,6 +51,29 @@ export async function api<T>(url: string, options: RequestInit = {}): Promise<T>
   return body.data as T
 }
 
+export async function apiText(url: string, options: RequestInit = {}): Promise<string> {
+  const headers = new Headers(options.headers)
+  const token = getToken()
+  if (token) {
+    headers.set('Authorization', `Bearer ${token}`)
+  }
+  const response = await fetch(`${API_BASE}${url}`, { ...options, headers })
+  const text = await response.text()
+  if (!response.ok) {
+    if (response.status === 401) {
+      clearToken()
+      if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
+        setTimeout(() => {
+          window.location.href = '/login'
+        }, 0)
+      }
+      throw new Error(`登录已失效，请重新登录（${options.method || 'GET'} ${url}）`)
+    }
+    throw new Error((text || `请求失败（HTTP ${response.status}）`) + `（${options.method || 'GET'} ${url}）`)
+  }
+  return text
+}
+
 export async function uploadFile<T>(url: string, file: File): Promise<T> {
   const formData = new FormData()
   formData.append('file', file)
@@ -452,12 +475,57 @@ export interface FormalCase {
   updatedAt: string
 }
 
+export interface CasePage<T> {
+  items: T[]
+  total: number
+  page: number
+  size: number
+  moduleOptions?: string[]
+}
+
+export type CaseLibraryFilters = {
+  keyword?: string
+  modules?: string[]
+  priorities?: string[]
+  statuses?: string[]
+  sources?: string[]
+}
+
+function buildCaseLibraryQuery(page: number, size: number, filters: CaseLibraryFilters = {}) {
+  const query = new URLSearchParams({ page: String(page), size: String(size) })
+  if (filters.keyword?.trim()) query.set('keyword', filters.keyword.trim())
+  filters.modules?.forEach(value => query.append('modules', value))
+  filters.priorities?.forEach(value => query.append('priorities', value))
+  filters.statuses?.forEach(value => query.append('statuses', value))
+  filters.sources?.forEach(value => query.append('sources', value))
+  return query.toString()
+}
+
 export function listGeneratedCases(projectId: number) {
   return api<GeneratedCase[]>(`/api/trace/projects/${projectId}/generated-cases`)
 }
 
 export function listFormalCases(projectId: number) {
   return api<FormalCase[]>(`/api/trace/projects/${projectId}/formal-cases`)
+}
+
+export function listFormalCasesPage(projectId: number, page = 0, size = 50, filters: CaseLibraryFilters = {}) {
+  return api<CasePage<FormalCase>>(`/api/trace/projects/${projectId}/formal-cases/page?${buildCaseLibraryQuery(page, size, filters)}`)
+}
+
+export function getFormalCase(projectId: number, caseId: number) {
+  return api<FormalCase>(`/api/trace/projects/${projectId}/formal-cases/${caseId}`)
+}
+
+export function deleteFormalCase(projectId: number, caseId: number) {
+  return api<void>(`/api/trace/projects/${projectId}/formal-cases/${caseId}`, { method: 'DELETE' })
+}
+
+export function deleteFormalCases(projectId: number, caseIds: number[]) {
+  return api<{ affectedCount: number }>(`/api/trace/projects/${projectId}/formal-cases/batch/delete`, {
+    method: 'POST',
+    body: JSON.stringify({ caseIds }),
+  })
 }
 
 export function exportFormalCasesToXmind(projectId: number, caseIds?: number[]) {
@@ -638,7 +706,9 @@ export interface GenerationSession {
   modelConfigId: number | null
   promptTemplateId: number | null
   useMiniTom: boolean
+  tomMode: 'DIRECT' | 'PROJECT_TOM' | 'PROJECT_AND_SYSTEM_TOM'
   latestAnalysisVersion: number | null
+  executionTaskId: number | null
   createdBy: number
   createdAt: string
   updatedAt: string
@@ -665,14 +735,14 @@ export function listGenerationSessions(projectId: number, params?: { page?: numb
   return api<PageResult<GenerationSession>>(`/api/projects/${projectId}/generation/sessions${query ? '?' + query : ''}`)
 }
 
-export function createGenerationSession(projectId: number, body: { sessionTitle?: string; modelConfigId?: number; promptTemplateId?: number; useMiniTom?: boolean }) {
+export function createGenerationSession(projectId: number, body: { sessionTitle?: string; modelConfigId?: number; promptTemplateId?: number; useMiniTom?: boolean; tomMode?: 'DIRECT' | 'PROJECT_TOM' | 'PROJECT_AND_SYSTEM_TOM' }) {
   return api<GenerationSession>(`/api/projects/${projectId}/generation/sessions`, { method: 'POST', body: JSON.stringify(body) })
 }
 
 export function updateGenerationSession(
   projectId: number,
   sessionId: number,
-  body: { sessionTitle?: string; modelConfigId?: number | null; promptTemplateId?: number | null; useMiniTom?: boolean }
+  body: { sessionTitle?: string; modelConfigId?: number | null; promptTemplateId?: number | null; useMiniTom?: boolean; tomMode?: 'DIRECT' | 'PROJECT_TOM' | 'PROJECT_AND_SYSTEM_TOM' }
 ) {
   return api<void>(`/api/projects/${projectId}/generation/sessions/${sessionId}`, { method: 'PATCH', body: JSON.stringify(body) })
 }
@@ -716,6 +786,89 @@ export function listGenerationDrafts(projectId: number, sessionId: number) {
   return api<CaseDraft[]>(`/api/projects/${projectId}/generation/sessions/${sessionId}/drafts`)
 }
 
+export type AsyncGenerationTaskType = 'TEST_CASE_GENERATION' | 'TEST_POINT_GENERATION' | 'TRACE_SUMMARY' | 'REQUIREMENT_ANALYSIS' | 'REQUIREMENT_SCOPE_CONTINUATION' | 'TEST_POINT_SCOPE_CONTINUATION' | 'INCREMENTAL_CASE_GENERATION'
+export type AsyncGenerationTaskStatus = 'PENDING' | 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'TIMEOUT' | 'CANCELED'
+
+export interface AsyncGenerationTask {
+  taskId: number
+  taskType: string
+  status: AsyncGenerationTaskStatus
+  errorCode: string | null
+  errorMessage: string | null
+  draftCount: number
+  createdAt: string
+  updatedAt: string
+  stages?: AsyncGenerationTaskStage[]
+}
+
+export interface AsyncGenerationTaskStage {
+  code: string
+  label: string
+  status: AsyncGenerationTaskStatus | 'PENDING'
+  errorCode?: string | null
+  errorMessage?: string | null
+  updatedAt?: string | null
+}
+
+export interface CreateAsyncGenerationTaskRequest {
+  taskType: AsyncGenerationTaskType
+  taskName?: string
+  requirementText?: string
+  modelConfigId?: number
+  promptSnapshot?: string
+  generationMode?: string
+  useMiniTom?: boolean
+  promptVersion?: number
+  traceGroupId?: number
+  traceSessionId?: number
+  issueClipId?: number
+  summaryScope?: string
+}
+
+export function createAsyncGenerationTask(projectId: number, body: CreateAsyncGenerationTaskRequest) {
+  return api<AsyncGenerationTask>(`/api/projects/${projectId}/generation/tasks`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+}
+
+export function getAsyncGenerationTask(projectId: number, taskId: number) {
+  return api<AsyncGenerationTask>(`/api/projects/${projectId}/generation/tasks/${taskId}`)
+}
+
+export function retryAsyncGenerationTask(projectId: number, taskId: number) {
+  return api<AsyncGenerationTask>(`/api/projects/${projectId}/generation/tasks/${taskId}/retry`, {
+    method: 'POST',
+  })
+}
+
+export function cancelAsyncGenerationTask(projectId: number, taskId: number) {
+  return api<AsyncGenerationTask>(`/api/projects/${projectId}/generation/tasks/${taskId}/cancel`, {
+    method: 'POST',
+  })
+}
+
+export function startSessionCaseGenerationTask(projectId: number, sessionId: number, content?: string) {
+  return api<AsyncGenerationTask>(`/api/projects/${projectId}/generation/sessions/${sessionId}/generate-async`, {
+    method: 'POST',
+    body: JSON.stringify({ content: content || '生成用例' }),
+  })
+}
+
+export function startSessionRequirementAnalysisTask(projectId: number, sessionId: number, content?: string) {
+  return api<AsyncGenerationTask>(`/api/projects/${projectId}/generation/sessions/${sessionId}/analysis-async`, {
+    method: 'POST',
+    body: JSON.stringify({ content: content || '使用 TOM' }),
+  })
+}
+
+export function startSessionIncrementalGenerationTask(projectId: number, sessionId: number, selectedDraftIds: number[]) {
+  return api<AsyncGenerationTask>(`/api/projects/${projectId}/generation/sessions/${sessionId}/generate-incremental-async`, {
+    method: 'POST',
+    body: JSON.stringify({ selectedDraftIds }),
+  })
+}
+
 export interface AnalysisResult {
   requirement_understanding?: string
   business_domain?: string
@@ -730,6 +883,7 @@ export interface AnalysisResult {
 }
 
 export interface TestPoint {
+  id?: string
   title?: string
   description?: string
   test_dimension?: string
@@ -739,6 +893,10 @@ export interface TestPoint {
   source_basis?: string[]
   confidence?: number
   needs_confirmation?: boolean
+  scope_recommendation?: 'IN_SCOPE' | 'REFERENCE_ONLY' | 'OUT_OF_SCOPE' | 'NEEDS_CONFIRMATION'
+  scope_reason?: string
+  generation_scope?: 'GENERATE' | 'REFERENCE_ONLY' | 'EXCLUDED'
+  scope_decision_source?: 'AI_RECOMMENDATION' | 'USER'
 }
 
 export interface ClarificationQuestion {
@@ -780,6 +938,42 @@ export function listGenerationAnalyses(projectId: number, sessionId: number) {
   return api<RequirementAnalysis[]>(`/api/projects/${projectId}/generation/sessions/${sessionId}/analyses`)
 }
 
+export interface TestPointScopeDecision {
+  testPointId: string
+  disposition: 'GENERATE' | 'REFERENCE_ONLY' | 'EXCLUDED'
+  reason?: string
+}
+
+export interface RequirementScopeDecision {
+  requirementAtomId: string
+  disposition: 'GENERATE' | 'REFERENCE_ONLY' | 'EXCLUDED'
+  reason?: string
+}
+
+export function confirmGenerationRequirementScope(
+  projectId: number,
+  sessionId: number,
+  version: number,
+  decisions: RequirementScopeDecision[],
+) {
+  return api<AsyncGenerationTask>(`/api/projects/${projectId}/generation/sessions/${sessionId}/analysis/${version}/requirement-scope`, {
+    method: 'PUT',
+    body: JSON.stringify({ decisions }),
+  })
+}
+
+export function confirmGenerationTestPointScope(
+  projectId: number,
+  sessionId: number,
+  version: number,
+  decisions: TestPointScopeDecision[],
+) {
+  return api<AsyncGenerationTask>(`/api/projects/${projectId}/generation/sessions/${sessionId}/analysis/${version}/test-point-scope`, {
+    method: 'PUT',
+    body: JSON.stringify({ decisions }),
+  })
+}
+
 export interface LocalCaseDraft {
   id: number
   taskId: number
@@ -808,6 +1002,20 @@ export function listLocalCases(projectId: number) {
   return api<LocalCaseDraft[]>(`/api/projects/${projectId}/generation/local-cases`)
 }
 
+export function listLocalCasesPage(projectId: number, page = 0, size = 50, filters: CaseLibraryFilters = {}) {
+  return api<CasePage<LocalCaseDraft>>(`/api/projects/${projectId}/generation/local-cases/page?${buildCaseLibraryQuery(page, size, filters)}`)
+}
+
+export function getLocalCase(projectId: number, draftId: number) {
+  return api<LocalCaseDraft>(`/api/projects/${projectId}/generation/local-cases/${draftId}`)
+}
+
+export function duplicateLocalCase(projectId: number, draftId: number) {
+  return api<LocalCaseDraft>(`/api/projects/${projectId}/generation/local-cases/${draftId}/duplicate`, {
+    method: 'POST', body: JSON.stringify({}),
+  })
+}
+
 export function updateLocalCase(
   projectId: number,
   draftId: number,
@@ -826,10 +1034,24 @@ export function confirmLocalCase(projectId: number, draftId: number) {
   })
 }
 
+export function batchConfirmLocalCases(projectId: number, draftIds: number[]) {
+  return api<{ affectedCount: number }>(`/api/projects/${projectId}/generation/local-cases/batch/confirm`, {
+    method: 'POST',
+    body: JSON.stringify({ draftIds }),
+  })
+}
+
 export function deprecateLocalCase(projectId: number, draftId: number) {
   return api<LocalCaseDraft>(`/api/projects/${projectId}/generation/local-cases/${draftId}/deprecate`, {
     method: 'POST',
     body: JSON.stringify({}),
+  })
+}
+
+export function batchDeprecateLocalCases(projectId: number, draftIds: number[]) {
+  return api<{ affectedCount: number }>(`/api/projects/${projectId}/generation/local-cases/batch/deprecate`, {
+    method: 'POST',
+    body: JSON.stringify({ draftIds }),
   })
 }
 
@@ -840,6 +1062,13 @@ export function submitLocalCase(projectId: number, draftId: number) {
   })
 }
 
+export function batchSubmitLocalCases(projectId: number, draftIds: number[]) {
+  return api<{ affectedCount: number }>(`/api/projects/${projectId}/generation/local-cases/batch/submit`, {
+    method: 'POST',
+    body: JSON.stringify({ draftIds }),
+  })
+}
+
 // ===== Project Files API =====
 export interface ProjectFileRecord {
   id: number
@@ -847,7 +1076,6 @@ export interface ProjectFileRecord {
   fileName: string
   fileType: string
   storageType: string
-  storagePath: string
   contentHash: string
   createdBy: number
   createdAt: string
@@ -1328,4 +1556,110 @@ export function rejectLoopCluster(clusterId: number) {
 
 export function consumeLoopCandidates(projectId: number) {
   return api<{ candidatesGenerated: number }>(`/api/loop/consume?projectId=${projectId}`, { method: 'POST' })
+}
+
+// ===== Runtime Diagnostics API =====
+export interface LlmInvocationLog {
+  id: number
+  requestId: string
+  userId: number | null
+  projectId: number | null
+  taskId: number | null
+  taskType: string | null
+  stage: string
+  modelConfigId: number | null
+  provider: string | null
+  modelName: string | null
+  retryIndex: number | null
+  status: string
+  errorCode: string | null
+  errorMessage: string | null
+  durationMs: number | null
+  tokenInput: number
+  tokenCachedInput?: number
+  tokenOutput: number
+  rawOutputPreview: string
+  createdAt: string
+}
+
+export interface SecurityEventLog {
+  id: number
+  eventType: string
+  severity: string
+  userId: number | null
+  projectId: number | null
+  taskId: number | null
+  requestId: string | null
+  detailPreview: string
+  createdAt: string
+}
+
+export interface LlmInvocationChain {
+  rootRequestId: string
+  entries: LlmInvocationLog[]
+}
+
+export interface LlmInvocationSnapshot {
+  id: number
+  requestId: string
+  userId: number | null
+  projectId: number | null
+  taskId: number | null
+  stage: string | null
+  provider: string | null
+  modelName: string | null
+  status: string
+  errorCode: string | null
+  errorMessage: string | null
+  rawOutput: string
+  createdAt: string | null
+}
+
+export type RuntimeLogParams = {
+  projectId?: number
+  taskId?: number
+  status?: string
+  errorCode?: string
+  eventType?: string
+  severity?: string
+  keyword?: string
+  limit?: number
+}
+
+function buildRuntimeLogQuery(params: RuntimeLogParams = {}) {
+  const qs = new URLSearchParams()
+  if (params.projectId) qs.set('projectId', String(params.projectId))
+  if (params.taskId) qs.set('taskId', String(params.taskId))
+  if (params.status) qs.set('status', params.status)
+  if (params.errorCode) qs.set('errorCode', params.errorCode)
+  if (params.eventType) qs.set('eventType', params.eventType)
+  if (params.severity) qs.set('severity', params.severity)
+  if (params.keyword) qs.set('keyword', params.keyword)
+  if (params.limit) qs.set('limit', String(params.limit))
+  const query = qs.toString()
+  return query ? `?${query}` : ''
+}
+
+export function listLlmInvocationLogs(params: RuntimeLogParams = {}) {
+  return api<LlmInvocationLog[]>(`/api/admin/runtime-diagnostics/llm-invocations${buildRuntimeLogQuery(params)}`)
+}
+
+export function getLlmInvocationChain(requestId: string) {
+  return api<LlmInvocationChain>(`/api/admin/runtime-diagnostics/llm-invocations/chain?requestId=${encodeURIComponent(requestId)}`)
+}
+
+export function getLlmInvocationSnapshot(id: number) {
+  return api<LlmInvocationSnapshot>(`/api/admin/runtime-diagnostics/llm-invocations/snapshot?id=${id}`)
+}
+
+export function exportLlmInvocationReport(params: RuntimeLogParams = {}) {
+  return apiText(`/api/admin/runtime-diagnostics/llm-invocations/export${buildRuntimeLogQuery(params)}`)
+}
+
+export function listSecurityEventLogs(params: RuntimeLogParams = {}) {
+  return api<SecurityEventLog[]>(`/api/admin/runtime-diagnostics/security-events${buildRuntimeLogQuery(params)}`)
+}
+
+export function exportSecurityEventReport(params: RuntimeLogParams = {}) {
+  return apiText(`/api/admin/runtime-diagnostics/security-events/export${buildRuntimeLogQuery(params)}`)
 }

@@ -4,7 +4,10 @@ import java.time.LocalDateTime;
 
 public record GenerationTaskRecord(Long id, Long projectId, String taskName, String requirementText,
                                    String requirementType, String currentStage, String status,
-                                   Long modelConfigId, String promptSnapshot,
+                                   String taskType,
+                                   String runStatus, String requestHash, String errorCode, String errorMessage,
+                                   Integer retryCount, LocalDateTime startedAt, LocalDateTime finishedAt,
+                                   Long modelConfigId, Long promptTemplateId, Integer promptVersion, String promptSnapshot,
                                    Long createdBy, LocalDateTime createdAt, LocalDateTime updatedAt,
                                    String generationMode, Boolean useMiniTom,
                                    String miniTomContextSnapshot, String testScopeSnapshot,

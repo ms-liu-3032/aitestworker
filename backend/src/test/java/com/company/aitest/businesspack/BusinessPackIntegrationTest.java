@@ -2,8 +2,9 @@ package com.company.aitest.businesspack;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-import java.util.List;
+import java.time.LocalDateTime;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -19,13 +20,29 @@ import org.springframework.transaction.annotation.Transactional;
 @Transactional
 class BusinessPackIntegrationTest {
 
-    private static final long PROJECT_ID = 3001L;
-
     @Autowired
     private BusinessPackService businessPackService;
 
     @Autowired
     private JdbcTemplate jdbcTemplate;
+
+    private Long projectId;
+
+    @BeforeEach
+    void setUpProjectAssets() {
+        LocalDateTime now = LocalDateTime.now();
+        jdbcTemplate.update("""
+                INSERT INTO project(project_name, description, status, created_by, created_at, updated_at)
+                VALUES (?, ?, 'ACTIVE', 1, ?, ?)
+                """, "集成测试项目", "business_pack 自动沉淀验证", now, now);
+        projectId = jdbcTemplate.queryForObject("SELECT LAST_INSERT_ID()", Long.class);
+        jdbcTemplate.update("""
+                INSERT INTO test_object_model(project_id, scope, model_type, name, description,
+                    source_type, source_context, business_domain, confidence, status,
+                    requires_human_confirm, created_by, created_at, updated_at)
+                VALUES (?, 'PROJECT', 'FLOW', ?, ?, 'MANUAL_SECTION', ?, ?, 0.90, 'ACTIVE', 0, 1, ?, ?)
+                """, projectId, "申请审批流程", "提交、审批与结果通知", "集成测试资产", "审批流", now, now);
+    }
 
     @Test
     void refreshForProject_handlesNonExistentProject() {
@@ -35,9 +52,8 @@ class BusinessPackIntegrationTest {
 
     @Test
     void refreshForProject_withExistingProject() {
-        seedProjectAssets(PROJECT_ID);
-        businessPackService.refreshForProject(PROJECT_ID);
-        var packs = businessPackService.listPacks(PROJECT_ID, null);
+        businessPackService.refreshForProject(projectId);
+        var packs = businessPackService.listPacks(projectId, null);
         assertFalse(packs.isEmpty(), "refreshForProject 应该创建业务包");
         assertTrue(packs.size() > 0, "至少应该创建一个业务包");
 
@@ -48,9 +64,8 @@ class BusinessPackIntegrationTest {
 
     @Test
     void refreshForProject_createsBindings() {
-        seedProjectAssets(PROJECT_ID);
-        businessPackService.refreshForProject(PROJECT_ID);
-        var packs = businessPackService.listPacks(PROJECT_ID, null);
+        businessPackService.refreshForProject(projectId);
+        var packs = businessPackService.listPacks(projectId, null);
         if (!packs.isEmpty()) {
             var firstPack = packs.get(0);
             var tomBindings = businessPackService.listTomBindings(firstPack.id());
@@ -60,39 +75,20 @@ class BusinessPackIntegrationTest {
 
     @Test
     void inferRelations_worksWithMultiplePacks() {
-        seedProjectAssets(PROJECT_ID);
-        seedProjectAssets(PROJECT_ID + 1);
-        businessPackService.refreshForProject(PROJECT_ID);
-        businessPackService.refreshForProject(PROJECT_ID + 1);
-        int created = businessPackService.inferRelations(PROJECT_ID);
+        businessPackService.refreshForProject(projectId);
+        int created = businessPackService.inferRelations(projectId);
         assertTrue(created >= 0, "inferRelations 不应该返回负数");
     }
 
     @Test
     void getAvailableTransitions_worksForAllStatuses() {
-        seedProjectAssets(PROJECT_ID);
-        businessPackService.refreshForProject(PROJECT_ID);
-        var packs = businessPackService.listPacks(PROJECT_ID, null);
+        businessPackService.refreshForProject(projectId);
+        var packs = businessPackService.listPacks(projectId, null);
         if (!packs.isEmpty()) {
             var pack = packs.get(0);
             var transitions = businessPackService.getAvailableTransitions(pack.id());
             assertNotNull(transitions);
             assertFalse(transitions.isEmpty(), "应该有可用的转换");
         }
-    }
-
-    private void seedProjectAssets(long projectId) {
-        jdbcTemplate.update("""
-                INSERT INTO test_object_model(
-                    project_id, scope, model_type, name, description, source_type, source_ref_id,
-                    source_context, business_domain, confidence, status, requires_human_confirm,
-                    created_by, created_at, updated_at
-                ) VALUES (?, 'PROJECT', 'ACTION', ?, ?, 'MANUAL_SECTION', NULL, ?, ?, 0.90, 'ACTIVE', 0, 1, NOW(), NOW())
-                """,
-                projectId,
-                "提交申请-" + projectId,
-                "用于 business pack 集成测试的通用动作",
-                "集成测试种子数据",
-                "workflow");
     }
 }

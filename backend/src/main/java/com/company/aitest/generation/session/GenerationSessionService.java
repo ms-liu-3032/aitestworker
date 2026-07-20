@@ -5,10 +5,12 @@ import java.sql.SQLException;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 
 import com.company.aitest.common.BusinessException;
 import com.company.aitest.common.CurrentUser;
 import com.company.aitest.common.TimeProvider;
+import com.company.aitest.common.TomUsageMode;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
@@ -28,11 +30,12 @@ public class GenerationSessionService {
 
     public GenerationSessionRecord create(Long projectId, CreateSessionCommand cmd, CurrentUser user) {
         LocalDateTime now = timeProvider.now();
+        TomUsageMode tomMode = parseTomMode(cmd.tomMode(), cmd.useMiniTom());
         jdbcTemplate.update("""
-                INSERT INTO generation_session(project_id, session_title, status, model_config_id, prompt_template_id, use_mini_tom, created_by, created_at, updated_at)
-                VALUES (?, ?, 'ACTIVE', ?, ?, ?, ?, ?, ?)
+                INSERT INTO generation_session(project_id, session_title, status, model_config_id, prompt_template_id, use_mini_tom, tom_mode, created_by, created_at, updated_at)
+                VALUES (?, ?, 'ACTIVE', ?, ?, ?, ?, ?, ?, ?)
                 """, projectId, cmd.sessionTitle(), cmd.modelConfigId(), cmd.promptTemplateId(),
-                cmd.useMiniTom() ? 1 : 0, user.id(), now, now);
+                tomMode.usesTom() ? 1 : 0, tomMode.name(), user.id(), now, now);
         Long id = jdbc.sql("SELECT last_insert_id()").query(Long.class).single();
         return get(projectId, id, user);
     }
@@ -87,9 +90,28 @@ public class GenerationSessionService {
     }
 
     public void updateConfig(Long projectId, Long sessionId, Long modelConfigId, Long promptTemplateId, boolean useMiniTom, CurrentUser user) {
+        updateConfig(projectId, sessionId, modelConfigId, promptTemplateId,
+                TomUsageMode.resolve(null, useMiniTom).name(), user);
+    }
+
+    public void updateConfig(Long projectId, Long sessionId, Long modelConfigId, Long promptTemplateId,
+                             String tomModeValue, CurrentUser user) {
         LocalDateTime now = timeProvider.now();
-        jdbcTemplate.update("UPDATE generation_session SET model_config_id = ?, prompt_template_id = ?, use_mini_tom = ?, updated_at = ? WHERE id = ? AND project_id = ? AND created_by = ?",
-                modelConfigId, promptTemplateId, useMiniTom ? 1 : 0, now, sessionId, projectId, user.id());
+        TomUsageMode tomMode = parseTomMode(tomModeValue, false);
+        jdbcTemplate.update("UPDATE generation_session SET model_config_id = ?, prompt_template_id = ?, use_mini_tom = ?, tom_mode = ?, updated_at = ? WHERE id = ? AND project_id = ? AND created_by = ?",
+                modelConfigId, promptTemplateId, tomMode.usesTom() ? 1 : 0, tomMode.name(),
+                now, sessionId, projectId, user.id());
+    }
+
+    private TomUsageMode parseTomMode(String tomModeValue, boolean legacyUseMiniTom) {
+        if (tomModeValue == null || tomModeValue.isBlank()) {
+            return TomUsageMode.resolve(null, legacyUseMiniTom);
+        }
+        try {
+            return TomUsageMode.requireExplicit(tomModeValue);
+        } catch (IllegalArgumentException ex) {
+            throw new BusinessException("不支持的 TOM 使用模式: " + tomModeValue);
+        }
     }
 
     public void updateStatus(Long sessionId, String status) {
@@ -133,6 +155,27 @@ public class GenerationSessionService {
         jdbcTemplate.update("UPDATE generation_session SET execution_task_id = ?, updated_at = ? WHERE id = ?", taskId, now, sessionId);
     }
 
+    public Optional<GenerationSessionRecord> findByExecutionTaskId(Long taskId) {
+        return jdbc.sql("SELECT * FROM generation_session WHERE execution_task_id = :taskId LIMIT 1")
+                .param("taskId", taskId)
+                .query(this::map)
+                .optional();
+    }
+
+    public void restoreInterruptedExecutionTasks(List<Long> taskIds) {
+        if (taskIds == null || taskIds.isEmpty()) {
+            return;
+        }
+        LocalDateTime now = timeProvider.now();
+        for (Long taskId : taskIds) {
+            jdbcTemplate.update("""
+                    UPDATE generation_session
+                    SET status = 'ACTIVE', updated_at = ?
+                    WHERE execution_task_id = ? AND status = 'GENERATING'
+                    """, now, taskId);
+        }
+    }
+
     private GenerationSessionRecord map(ResultSet rs, int rowNum) throws SQLException {
         long mcId = rs.getLong("model_config_id");
         Long modelConfigId = rs.wasNull() ? null : mcId;
@@ -145,7 +188,8 @@ public class GenerationSessionService {
                 rs.getString("status"), rs.getString("current_stage"),
                 modelConfigId, promptTemplateId,
                 rs.getString("prompt_snapshot"),
-                rs.getInt("use_mini_tom") == 1, rs.getInt("latest_analysis_version"),
+                rs.getInt("use_mini_tom") == 1, rs.getString("tom_mode"),
+                rs.getInt("latest_analysis_version"),
                 execTaskId, rs.getLong("created_by"),
                 rs.getTimestamp("created_at").toLocalDateTime(),
                 rs.getTimestamp("updated_at").toLocalDateTime()

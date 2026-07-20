@@ -77,6 +77,10 @@ function localCaseSourceClass(sourceType?: string | null) {
     : 'bg-sky-50 text-sky-700';
 }
 
+function asArray<T>(value: unknown): T[] {
+  return Array.isArray(value) ? value : [];
+}
+
 export default function TestAssets() {
   const { projectId } = useParams<{ projectId: string }>();
   const { showToast } = useApp();
@@ -105,11 +109,11 @@ export default function TestAssets() {
         listAdminSkills({ projectId: pid }).catch(() => []),
         listAdminTools({ projectId: pid }).catch(() => []),
       ]);
-      setLocalCases(draftsRes);
-      setFormalCases(formalRes);
-      setSummaries(summaryRes);
-      setSkills(skillRes);
-      setTools(toolRes);
+      setLocalCases(asArray<LocalCaseDraft>(draftsRes));
+      setFormalCases(asArray<FormalCase>(formalRes));
+      setSummaries(asArray<SummaryAsset>(summaryRes));
+      setSkills(asArray<SkillAsset>(skillRes));
+      setTools(asArray<ToolAsset>(toolRes));
     } catch (error: any) {
       showToast(error.message || '加载测试资产失败', 'error');
     } finally {

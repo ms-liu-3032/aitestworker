@@ -4,6 +4,8 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Set;
 
+import com.company.aitest.common.TomUsageMode;
+
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowCallbackHandler;
@@ -155,6 +157,23 @@ class ProjectSemanticContextServiceTest {
         boolean hasProject = ranked.stream().anyMatch(s -> s.category().startsWith("TOM:项目"));
         assertTrue(hasSystem, "兜底分支也应保留系统 TOM");
         assertTrue(hasProject, "兜底分支也应保留项目 TOM");
+    }
+
+    @Test
+    void tomModeFiltersOnlyTheRequestedTomScopes() {
+        var projectTom = new ProjectSemanticContextService.SemanticSignal(
+                "TOM:项目", "项目预约", "desc", null, 1.2, LocalDateTime.now());
+        var systemTom = new ProjectSemanticContextService.SemanticSignal(
+                "TOM:系统", "公共审批", "desc", null, 1.2, LocalDateTime.now());
+        var page = new ProjectSemanticContextService.SemanticSignal(
+                "页面画像", "预约页面", "desc", null, 1.0, LocalDateTime.now());
+        List<ProjectSemanticContextService.SemanticSignal> signals = List.of(projectTom, systemTom, page);
+
+        assertEquals(List.of(page), service.filterSignalsForTomMode(signals, TomUsageMode.DIRECT));
+        assertEquals(List.of(projectTom, page),
+                service.filterSignalsForTomMode(signals, TomUsageMode.PROJECT_TOM));
+        assertEquals(signals,
+                service.filterSignalsForTomMode(signals, TomUsageMode.PROJECT_AND_SYSTEM_TOM));
     }
 
     @Test

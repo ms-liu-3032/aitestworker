@@ -1,13 +1,6 @@
 import { useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { getToken } from '../services/api';
 import { useAuth } from '../context/AuthContext';
-
-function maskToken(token: string | null) {
-  if (!token) return '未登录';
-  if (token.length <= 12) return token;
-  return `${token.slice(0, 6)}...${token.slice(-6)}`;
-}
 
 function formatRole(roleCode?: string) {
   switch (roleCode) {
@@ -26,7 +19,6 @@ export default function Settings() {
   const navigate = useNavigate();
   const { user, logout } = useAuth();
 
-  const token = useMemo(() => getToken(), []);
   const quickActions = useMemo(() => {
     const actions = [
       { label: '返回项目大厅', desc: '查看项目列表、搜索项目、恢复已删除项目。', action: () => navigate('/') },
@@ -77,10 +69,9 @@ export default function Settings() {
           </div>
 
           <div className="mt-6 rounded-lg bg-gray-50 border border-gray-200 p-4">
-            <div className="text-xs font-medium uppercase tracking-wide text-gray-400">当前会话 Token</div>
-            <div className="mt-2 font-mono text-sm text-gray-700 break-all">{maskToken(token)}</div>
+            <div className="text-xs font-medium uppercase tracking-wide text-gray-400">会话安全</div>
             <p className="mt-2 text-xs text-gray-500">
-              React 前端当前使用浏览器本地 token 维持会话；用户资料编辑、通知偏好、API 密钥、安全日志等功能在后端尚无对应接口，因此不再以假数据形式展示。
+              当前会话已建立。为避免截图、录屏或旁观时泄露凭证，页面不会显示或导出会话令牌。
             </p>
           </div>
         </section>

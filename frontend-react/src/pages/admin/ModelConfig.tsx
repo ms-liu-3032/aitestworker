@@ -150,7 +150,7 @@ export default function ModelConfig() {
             </div>
             <div>
               <label className="block text-xs font-medium text-gray-500 mb-1">API Key</label>
-              <input type="password" value={form.apiKey} onChange={e => setForm({ ...form, apiKey: e.target.value })} className="w-full h-9 px-3 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:border-gray-400 outline-none" />
+              <input type="password" autoComplete="new-password" value={form.apiKey} onChange={e => setForm({ ...form, apiKey: e.target.value })} className="w-full h-9 px-3 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:border-gray-400 outline-none" />
             </div>
           </div>
           <div className="flex flex-wrap justify-end gap-2">
@@ -190,7 +190,7 @@ export default function ModelConfig() {
             </div>
             <div>
               <label className="block text-xs font-medium text-gray-500 mb-1">API Key</label>
-              <input type="password" value={form.apiKey} onChange={e => setForm({ ...form, apiKey: e.target.value })} placeholder="留空表示保持原值" className="w-full h-9 px-3 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:border-gray-400 outline-none" />
+              <input type="password" autoComplete="new-password" value={form.apiKey} onChange={e => setForm({ ...form, apiKey: e.target.value })} placeholder="留空表示保持原值" className="w-full h-9 px-3 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:border-gray-400 outline-none" />
             </div>
           </div>
           <div className="flex flex-wrap justify-end gap-2">

@@ -110,6 +110,7 @@ class WikiServiceTest {
         when(mapped.list()).thenReturn(List.of(
                 new WikiEntryRecord(1L, 1L, "RULE", "Rule1", "content", null, null, "APPROVED", null, "ACTIVE", 1L, LocalDateTime.now(), LocalDateTime.now())
         ));
+        when(tmpl.update(anyString(), any(), any(), any())).thenReturn(1);
 
         var user = new CurrentUser(1L, "admin", null);
         var result = svc.reviewEntry(1L, "APPROVED", user);

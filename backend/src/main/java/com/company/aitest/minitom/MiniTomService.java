@@ -18,6 +18,7 @@ import java.util.concurrent.TimeUnit;
 import com.company.aitest.common.BusinessException;
 import com.company.aitest.common.CurrentUser;
 import com.company.aitest.common.TimeProvider;
+import com.company.aitest.common.TomUsageMode;
 import com.company.aitest.model.ModelConfigService;
 import com.company.aitest.semantic.ProjectSemanticContextService;
 import com.company.aitest.trace.TraceSummaryRecord;
@@ -29,6 +30,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -45,8 +47,8 @@ import org.springframework.transaction.annotation.Transactional;
 public class MiniTomService {
 
     private static final Logger log = LoggerFactory.getLogger(MiniTomService.class);
-    private static final int SEMANTIC_MATCH_MAX_CANDIDATES = 80;
-    private static final int SEMANTIC_MATCH_TIMEOUT_SECONDS = 45;
+    private static final int DEFAULT_SEMANTIC_MATCH_MAX_CANDIDATES = 30;
+    private static final int DEFAULT_SEMANTIC_MATCH_TIMEOUT_SECONDS = 8;
 
     private final JdbcClient jdbc;
     private final JdbcTemplate jdbcTemplate;
@@ -56,6 +58,15 @@ public class MiniTomService {
     private final ModelConfigService modelConfigService;
     private final ProjectSemanticContextService semanticContextService;
     private final ObjectMapper objectMapper;
+
+    @Value("${aitest.tom.semantic-match.enabled:false}")
+    private boolean semanticMatchEnabled;
+
+    @Value("${aitest.tom.semantic-match.max-candidates:30}")
+    private int semanticMatchMaxCandidates;
+
+    @Value("${aitest.tom.semantic-match.timeout-seconds:8}")
+    private int semanticMatchTimeoutSeconds;
 
     public MiniTomService(JdbcClient jdbc, JdbcTemplate jdbcTemplate, TimeProvider timeProvider,
                           TraceSummaryService traceSummaryService,
@@ -848,13 +859,28 @@ public class MiniTomService {
      * 输出：影响模块、页面、字段、角色、流程、状态、断言
      */
     public TestScopeResult buildTestScope(Long projectId, String requirementText, CurrentUser user) {
-        return buildTestScope(projectId, requirementText, null, user);
+        return buildTestScope(projectId, requirementText, null, user,
+                TomUsageMode.PROJECT_AND_SYSTEM_TOM);
     }
 
     public TestScopeResult buildTestScope(Long projectId, String requirementText, Long modelConfigId, CurrentUser user) {
+        return buildTestScope(projectId, requirementText, modelConfigId, user,
+                TomUsageMode.PROJECT_AND_SYSTEM_TOM);
+    }
+
+    public TestScopeResult buildTestScope(Long projectId, String requirementText, Long modelConfigId,
+                                          CurrentUser user, TomUsageMode tomMode) {
+        TomUsageMode resolvedMode = tomMode == null
+                ? TomUsageMode.PROJECT_AND_SYSTEM_TOM : tomMode;
+        if (!resolvedMode.usesTom()) {
+            TestScopeResult empty = new TestScopeResult();
+            empty.requirementText = requirementText;
+            return empty;
+        }
         // 1. 读取并融合 Project/System ACTIVE TOM
         List<TestObjectModelRecord> projectToms = loadProjectActiveToms(projectId, null);
-        List<TestObjectModelRecord> systemToms = loadSystemActiveToms(null);
+        List<TestObjectModelRecord> systemToms = resolvedMode.includesSystemTom()
+                ? loadSystemActiveToms(null) : List.of();
         List<TestObjectModelRecord> activeToms = mergeActiveToms(projectToms, systemToms);
 
         TestScopeResult result = new TestScopeResult();
@@ -868,17 +894,22 @@ public class MiniTomService {
             byType.computeIfAbsent(tom.modelType(), k -> new ArrayList<>()).add(tom);
         }
 
-        // 尝试 LLM 语义匹配（大候选集先做预筛，且超时自动降级）
+        // 默认不再为测试范围构建额外发起一轮 LLM 语义匹配。
+        // 真实使用中一次需求分析已经会调用 REQ_CLARIFY；这里再串行调用 TOM_SEMANTIC_MATCH 会显著放大超时概率。
+        // 如需更强召回，可通过 aitest.tom.semantic-match.enabled=true 打开，仍会按候选数和超时降级。
         List<TestObjectModelRecord> allMatched = null;
-        List<String> keywords = expandKeywordsWithSemanticContext(projectId, requirementText, extractKeywords(requirementText));
-        Long resolvedModelId = resolveModelConfigId(modelConfigId);
-        List<TestObjectModelRecord> semanticCandidates = selectSemanticCandidates(activeToms, keywords);
-        if (resolvedModelId != null && !semanticCandidates.isEmpty()) {
-            try {
-                allMatched = matchSemanticallyWithTimeout(
-                        requirementText, semanticCandidates, resolvedModelId, projectId, user);
-            } catch (Exception e) {
-                log.warn("TOM 语义匹配异常，降级为关键词匹配: {}", e.getMessage());
+        List<String> keywords = expandKeywordsWithSemanticContext(
+                projectId, requirementText, extractKeywords(requirementText), resolvedMode);
+        if (semanticMatchEnabled) {
+            Long resolvedModelId = resolveModelConfigId(modelConfigId);
+            List<TestObjectModelRecord> semanticCandidates = selectSemanticCandidates(activeToms, keywords);
+            if (resolvedModelId != null && !semanticCandidates.isEmpty()) {
+                try {
+                    allMatched = matchSemanticallyWithTimeout(
+                            requirementText, semanticCandidates, resolvedModelId, projectId, user);
+                } catch (Exception e) {
+                    log.warn("TOM 语义匹配异常，降级为关键词匹配: {}", e.getMessage());
+                }
             }
         }
 
@@ -936,10 +967,12 @@ public class MiniTomService {
         return result;
     }
 
-    private List<String> expandKeywordsWithSemanticContext(Long projectId, String requirementText, List<String> baseKeywords) {
+    private List<String> expandKeywordsWithSemanticContext(Long projectId, String requirementText,
+                                                           List<String> baseKeywords,
+                                                           TomUsageMode tomMode) {
         LinkedHashSet<String> expanded = new LinkedHashSet<>(baseKeywords);
         ProjectSemanticContextService.BuildResult semanticContext =
-                semanticContextService.build(projectId, requirementText, List.of(), 8);
+                semanticContextService.build(projectId, requirementText, List.of(), 8, tomMode);
         for (ProjectSemanticContextService.SemanticSignal signal : semanticContext.signals()) {
             expanded.addAll(extractKeywords(signal.title()));
             expanded.addAll(extractKeywords(signal.summary()));
@@ -1000,13 +1033,13 @@ public class MiniTomService {
     }
 
     private List<TestObjectModelRecord> selectSemanticCandidates(List<TestObjectModelRecord> activeToms, List<String> keywords) {
-        if (activeToms.size() <= SEMANTIC_MATCH_MAX_CANDIDATES) {
+        if (activeToms.size() <= semanticMatchCandidateLimit()) {
             return activeToms;
         }
         List<TestObjectModelRecord> prefiltered = matchToms(activeToms, keywords);
         if (!prefiltered.isEmpty()) {
-            if (prefiltered.size() > SEMANTIC_MATCH_MAX_CANDIDATES) {
-                log.info("TOM 语义匹配候选从 {} 预筛到 {}，截断为 {}", activeToms.size(), prefiltered.size(), SEMANTIC_MATCH_MAX_CANDIDATES);
+            if (prefiltered.size() > semanticMatchCandidateLimit()) {
+                log.info("TOM 语义匹配候选从 {} 预筛到 {}，截断为 {}", activeToms.size(), prefiltered.size(), semanticMatchCandidateLimit());
                 return limitSemanticCandidatesWithCoverage(prefiltered);
             }
             log.info("TOM 语义匹配候选从 {} 预筛到 {}", activeToms.size(), prefiltered.size());
@@ -1019,7 +1052,7 @@ public class MiniTomService {
     }
 
     private List<TestObjectModelRecord> limitSemanticCandidatesWithCoverage(List<TestObjectModelRecord> toms) {
-        if (toms.size() <= SEMANTIC_MATCH_MAX_CANDIDATES) {
+        if (toms.size() <= semanticMatchCandidateLimit()) {
             return toms;
         }
         Map<String, List<TestObjectModelRecord>> groups = new LinkedHashMap<>();
@@ -1040,7 +1073,7 @@ public class MiniTomService {
                     if (tom.id() == null || seen.add(tom.id())) {
                         limited.add(tom);
                         added = true;
-                        if (limited.size() >= SEMANTIC_MATCH_MAX_CANDIDATES) {
+                        if (limited.size() >= semanticMatchCandidateLimit()) {
                             return limited;
                         }
                     }
@@ -1051,6 +1084,15 @@ public class MiniTomService {
         return limited;
     }
 
+
+    private int semanticMatchCandidateLimit() {
+        return semanticMatchMaxCandidates > 0 ? semanticMatchMaxCandidates : DEFAULT_SEMANTIC_MATCH_MAX_CANDIDATES;
+    }
+
+    private int semanticMatchTimeoutSeconds() {
+        return semanticMatchTimeoutSeconds > 0 ? semanticMatchTimeoutSeconds : DEFAULT_SEMANTIC_MATCH_TIMEOUT_SECONDS;
+    }
+
     private List<TestObjectModelRecord> matchSemanticallyWithTimeout(String requirementText,
                                                                      List<TestObjectModelRecord> candidates,
                                                                      Long modelConfigId,
@@ -1059,10 +1101,10 @@ public class MiniTomService {
         try {
             return CompletableFuture.supplyAsync(() ->
                             semanticMatcher.matchSemantically(requirementText, candidates, modelConfigId, projectId, user))
-                    .orTimeout(SEMANTIC_MATCH_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                    .orTimeout(semanticMatchTimeoutSeconds(), TimeUnit.SECONDS)
                     .join();
         } catch (Exception e) {
-            log.warn("TOM 语义匹配超时/失败，{} 秒后降级为关键词匹配: {}", SEMANTIC_MATCH_TIMEOUT_SECONDS, e.getMessage());
+            log.warn("TOM 语义匹配超时/失败，{} 秒后降级为关键词匹配: {}", semanticMatchTimeoutSeconds(), e.getMessage());
             return null;
         }
     }

@@ -20,6 +20,10 @@ const statusColors: Record<string, string> = {
   ARCHIVED: 'bg-gray-100 text-gray-400',
 };
 
+function asArray<T>(value: unknown): T[] {
+  return Array.isArray(value) ? value : [];
+}
+
 export default function WikiPackages() {
   const { projectId } = useParams<{ projectId: string }>();
   const { showToast } = useApp();
@@ -39,7 +43,7 @@ export default function WikiPackages() {
     if (!projectId) return;
     setLoading(true);
     listWikiPacks(Number(projectId))
-      .then(setPacks)
+      .then(result => setPacks(asArray<WikiPack>(result)))
       .catch(() => setPacks([]))
       .finally(() => setLoading(false));
   }, [projectId]);
@@ -57,9 +61,10 @@ export default function WikiPackages() {
 
   const handleSelectPack = async (pack: WikiPack) => {
     setSelectedPack(pack);
+    setEntries([]);
     try {
       const items = await listWikiEntries(pack.id);
-      setEntries(items);
+      setEntries(asArray<WikiEntry>(items));
     } catch { setEntries([]); }
   };
 

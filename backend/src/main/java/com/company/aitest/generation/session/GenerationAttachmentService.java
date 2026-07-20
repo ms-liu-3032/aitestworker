@@ -32,7 +32,6 @@ public class GenerationAttachmentService {
 
     public GenerationAttachmentRecord uploadAndRegister(Long sessionId, MultipartFile file, CurrentUser user) throws IOException {
         LocalDateTime now = timeProvider.now();
-        String storagePath = fileStorageService.store(file, 0L); // projectId resolved from session later
         String originalName = file.getOriginalFilename() != null ? file.getOriginalFilename() : "unknown";
         String ext = "";
         int dot = originalName.lastIndexOf('.');
@@ -41,24 +40,46 @@ public class GenerationAttachmentService {
         // Resolve projectId from session
         Long projectId = jdbc.sql("SELECT project_id FROM generation_session WHERE id = :sid")
                 .param("sid", sessionId).query(Long.class).single();
-        // Re-store with correct projectId
-        storagePath = fileStorageService.store(file, projectId);
+        String storagePath = fileStorageService.store(file, projectId);
 
         jdbcTemplate.update("""
                 INSERT INTO generation_attachment(session_id, file_name, file_type, file_size, storage_path, content_hash, parse_status, created_by, created_at)
                 VALUES (?, ?, ?, ?, ?, '', 'PENDING', ?, ?)
                 """, sessionId, originalName, ext, file.getSize(), storagePath, user.id(), now);
         Long id = jdbc.sql("SELECT last_insert_id()").query(Long.class).single();
-        return getById(id);
+        return getSafeById(id);
     }
 
     public List<GenerationAttachmentRecord> listBySession(Long sessionId) {
+        return jdbc.sql("""
+                SELECT id, session_id, message_id, file_name, file_type, file_size,
+                       NULL AS storage_path, content_hash, parse_status,
+                       NULL AS parsed_content, parse_error, NULL AS vision_result,
+                       created_by, created_at
+                FROM generation_attachment
+                WHERE session_id = :sid ORDER BY id ASC
+                """)
+                .param("sid", sessionId).query(this::map).list();
+    }
+
+    public List<GenerationAttachmentRecord> listBySessionForAnalysis(Long sessionId) {
         return jdbc.sql("SELECT * FROM generation_attachment WHERE session_id = :sid ORDER BY id ASC")
                 .param("sid", sessionId).query(this::map).list();
     }
 
     public GenerationAttachmentRecord getById(Long id) {
         return jdbc.sql("SELECT * FROM generation_attachment WHERE id = :id").param("id", id).query(this::map).single();
+    }
+
+    private GenerationAttachmentRecord getSafeById(Long id) {
+        return jdbc.sql("""
+                SELECT id, session_id, message_id, file_name, file_type, file_size,
+                       NULL AS storage_path, content_hash, parse_status,
+                       NULL AS parsed_content, parse_error, NULL AS vision_result,
+                       created_by, created_at
+                FROM generation_attachment WHERE id = :id
+                """)
+                .param("id", id).query(this::map).single();
     }
 
     public String getParsedContent(Long attachmentId) {

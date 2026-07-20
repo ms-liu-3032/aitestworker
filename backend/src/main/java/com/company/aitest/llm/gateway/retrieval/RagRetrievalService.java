@@ -122,10 +122,10 @@ public class RagRetrievalService {
                     asLong(r.get("id")),
                     "KNOWLEDGE_CHUNK",
                     asStringOrDefault(r.get("scope"), "PROJECT"),
-                    asStringOrDefault(r.get("source_type"), "YUQUE"),
+                    asStringOrDefault(r.get("source_type"), "DOCUMENT"),
                     "knowledge_document#" + asLong(r.get("document_id")),
                     asStringOrDefault(r.get("doc_status"), "IMPORTED"),
-                    asStringOrDefault(r.get("trust_level"), "YUQUE_DOC"),
+                    asStringOrDefault(r.get("trust_level"), "KNOWLEDGE_DOC"),
                     asStringOrDefault(r.get("title"), asString(r.get("doc_title"))),
                     snippet(content, 240),
                     asString(r.get("content_hash")),
@@ -237,7 +237,7 @@ public class RagRetrievalService {
         return switch (level) {
             case "SYSTEM_RULE" -> 100;
             case "PROJECT_APPROVED" -> 80;
-            case "YUQUE_DOC" -> 70;
+            case "KNOWLEDGE_DOC" -> 70;
             case "HISTORICAL_CASE" -> 60;
             case "TRACE_CONFIRMED" -> 55;
             case "USER_DRAFT" -> 30;

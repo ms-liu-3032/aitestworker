@@ -17,6 +17,7 @@ export interface GenerationSession {
   promptTemplateId: number | null
   promptSnapshot: string | null
   useMiniTom: boolean
+  tomMode: 'DIRECT' | 'PROJECT_TOM' | 'PROJECT_AND_SYSTEM_TOM'
   latestAnalysisVersion: number
   executionTaskId: number | null
   createdBy: number
@@ -58,7 +59,7 @@ export interface GenerationAttachment {
   fileName: string
   fileType: string
   fileSize: number
-  storagePath: string
+  storagePath: string | null
   parseStatus: string
   parsedContent: string | null
   parseError: string | null
@@ -84,7 +85,7 @@ export function listSessions(projectId: number, params: { page?: number; size?: 
   return api<PageResult<GenerationSession>>(`${base(projectId)}${query ? '?' + query : ''}`)
 }
 
-export function createSession(projectId: number, body: { sessionTitle: string; modelConfigId?: number; promptTemplateId?: number; useMiniTom?: boolean }) {
+export function createSession(projectId: number, body: { sessionTitle: string; modelConfigId?: number; promptTemplateId?: number; useMiniTom?: boolean; tomMode?: 'DIRECT' | 'PROJECT_TOM' | 'PROJECT_AND_SYSTEM_TOM' }) {
   return api<GenerationSession>(base(projectId), { method: 'POST', body: JSON.stringify(body) })
 }
 

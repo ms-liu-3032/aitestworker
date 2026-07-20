@@ -6,14 +6,19 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 import com.company.aitest.common.BusinessException;
 import com.company.aitest.common.CurrentUser;
 import com.company.aitest.common.TimeProvider;
+import com.company.aitest.common.TomUsageMode;
 import com.company.aitest.llm.gateway.LlmGateway;
+import com.company.aitest.llm.gateway.JsonOutputParser;
+import com.company.aitest.llm.gateway.LlmErrorCode;
 import com.company.aitest.llm.gateway.LlmInvocationRequest;
 import com.company.aitest.llm.gateway.LlmInvocationResponse;
 import com.company.aitest.llm.gateway.LlmInvocationStatus;
+import com.company.aitest.llm.gateway.LlmRuntimeException;
 import com.company.aitest.llm.gateway.LlmStage;
 import com.company.aitest.minitom.MiniTomService;
 import com.company.aitest.minitom.TestObjectModelRecord;
@@ -27,11 +32,16 @@ import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class DirectCaseGenerationService {
+    private static final int CASE_GENERATION_MAX_TOKENS = 8192;
+    private static final int CASE_TEST_POINT_BATCH_SIZE = 4;
+    private static final int CASE_PLAN_NODE_BATCH_SIZE = 4;
     private static final String SYSTEM_PROMPT = """
             你是资深测试工程师。请根据输入需求直接生成功能测试用例草稿。
-            你必须只返回 JSON 数组，不要输出任何额外解释，不要输出 markdown。
-            数组每个对象字段固定为：
-            caseTitle, moduleName, precondition, steps, expectedResult, priority, sourceTestPoint, sourceBasis, unsupportedItems, confidence
+            你必须严格只返回 JSON 对象，不要输出任何额外解释，不要输出 markdown。
+            JSON 对象只允许包含 cases 一个键，格式为：
+            {"cases":[{"caseTitle":"...","moduleName":"...","precondition":"...","steps":"1. ...","expectedResult":"1. ...","priority":"P1","caseStrategy":"NODE_FOCUSED/FLOW_COMPOSED","sourceCasePlan":"CP1","sourceCaseDesign":"CD1","sourceTestPoint":"...","sourceTestPointRefs":["TP1"],"sourceBasis":["..."],"unsupportedItems":[],"confidence":0.8}]}
+            cases 数组每个对象字段固定为：
+            caseTitle, moduleName, precondition, steps, expectedResult, priority, caseStrategy, sourceCasePlan, sourceCaseDesign, sourceTestPoint, sourceTestPointRefs, sourceBasis, unsupportedItems, confidence
 
             【要求】
             1. caseTitle：用例名称，简洁概括测试场景。
@@ -40,13 +50,25 @@ public class DirectCaseGenerationService {
             4. steps：测试步骤，必须按 "1. xxx 2. xxx 3. xxx" 格式，每一步写清楚具体操作对象和动作（如"点击XX按钮"、"在XX输入框输入YY"、"查看XX列表"），不能笼统概括。
             5. expectedResult：预期结果，必须按 "1. xxx 2. xxx 3. xxx" 格式，与 steps 一一对应，每步写明页面应展示的具体状态、字段值或交互反馈（如"列表显示N条记录"、"弹出确认弹窗"、"状态变为已取消"）。
             6. priority：P0/P1/P2/P3/P4。
-            7. sourceTestPoint：该用例对应的测试点标题，必须来自输入中的测试点或需求目标。
-            8. sourceBasis：数组，写明来自需求、TOM、业务包、页面画像、轨迹摘要中的依据名称。
-            9. unsupportedItems：数组，写明没有证据支撑但为了可执行性暂时假设的内容；没有则返回空数组。
-            10. confidence：0~1 数字。证据不足或 unsupportedItems 非空时不得高于 0.65。
+            7. sourceCasePlan：该用例对应的 CP 用例编排计划编号；计划生成时必须原样返回。
+            8. sourceCaseDesign：该用例对应的 CD 用例设计编号；必须原样引用当前计划中的 case_designs.id。
+            9. sourceTestPoint：该用例对应的测试点标题，必须来自输入中的测试点或需求目标。
+            10. sourceTestPointRefs：数组，填写本用例实际覆盖的 TP 编号；NODE_FOCUSED 可覆盖同一测试主题内一个连贯验证目标的多个 TP，FLOW_COMPOSED 可覆盖多个主题 TP，必须来自当前 CP 计划。
+            11. sourceBasis：数组，写明来自需求、TOM、业务包、页面画像、轨迹摘要中的依据名称。
+            12. unsupportedItems：数组，写明没有证据支撑但为了可执行性暂时假设的内容；没有则返回空数组。
+            13. confidence：0~1 数字。证据不足或 unsupportedItems 非空时不得高于 0.65。
+            14. caseStrategy=NODE_FOCUSED 时，已完成的前置测试点只能写入 precondition，步骤与预期只验证当前节点；caseStrategy=FLOW_COMPOSED 时，按测试点依赖顺序覆盖完整端到端流程。不得根据具体业务名称硬编码任何流程。
 
             steps 和 expectedResult 的条数必须一致，确保每一步都有对应预期。
             不允许生成与输入分析/测试点无关的业务场景；没有证据时宁可输出低置信草稿，也不要编造为事实。
+            不得因为测试点较多而只返回代表性样例；当前批次中每个测试点都必须有对应的用例。
+            每条用例保持 2~4 个关键步骤和对应预期，确保完整覆盖的同时控制单条长度。
+
+            【测试方法论约束】
+            1. 按三层递进设计：先覆盖核心主流程，再覆盖异常/分支，最后补边界、数据一致性、权限、并发、幂等。
+            2. 按测试点选择方法：流程用场景法，字段/规则用等价类+边界值，多条件用判定表，状态变化用状态迁移，历史高风险或复杂异常用错误推测。
+            3. 防冗余：状态差异但步骤相同要参数化合并；同一表单多个字段校验要聚合；同类入口同一操作只保留一个验证目标；取消/关闭/返回预期一致时不要拆成多条核心用例。
+            4. P0 仅用于核心业务 Happy Path；字段校验、权限拦截、取消关闭、样式布局、纯异常路径通常不得标为 P0。
             """;
 
     private static final String MINI_TOM_SYSTEM_PROMPT_EXTENSION = """
@@ -106,11 +128,13 @@ public class DirectCaseGenerationService {
         String systemPrompt;
         String userPrompt;
         int tomHitCount = 0;
+        TomUsageMode tomMode = TomUsageMode.resolve(
+                task.generationMode(), Boolean.TRUE.equals(task.useMiniTom()));
 
-        if (Boolean.TRUE.equals(task.useMiniTom())) {
-            // --- Mini-TOM 辅助生成路径（Project + System 融合） ---
+        if (tomMode.usesTom()) {
+            // --- Mini-TOM assisted generation, scoped by the session's explicit mode. ---
             MiniTomService.TestScopeResult scope = miniTomService.buildTestScope(
-                    projectId, task.requirementText(), user);
+                    projectId, task.requirementText(), task.modelConfigId(), user, tomMode);
 
             String tomContext = buildTomContextString(scope);
             tomHitCount = countTomHits(scope);
@@ -142,24 +166,41 @@ public class DirectCaseGenerationService {
                     """.formatted(emptySafe(task.requirementText()), emptySafe(task.promptSnapshot()));
         }
 
-        // LLM 调用（不在事务中）
+        List<Map<String, Object>> sourceTestPoints = extractTestPointsFromRequirement(task.requirementText());
+        List<Map<String, Object>> casePlan = extractCasePlanFromRequirement(task.requirementText());
+        if (!casePlan.isEmpty()) {
+            return generateByCasePlanNodes(projectId, task, user, systemPrompt, userPrompt, casePlan,
+                    sourceTestPoints, tomHitCount);
+        }
+        if (!sourceTestPoints.isEmpty()) {
+            return generateByTestPointBatches(projectId, task, user, systemPrompt, userPrompt, sourceTestPoints, tomHitCount);
+        }
+
+        // 兼容没有结构化测试点的历史任务；新需求分析主链路不会走这个分支。
         LlmInvocationResponse response = llmGateway.invoke(new LlmInvocationRequest(
                 null, user.id(), projectId, task.id(),
                 "GENERATION", LlmStage.TEST_CASE_GEN,
                 task.modelConfigId(), null, null, Map.of(
                         "requirementText", emptySafe(task.requirementText()),
                         "promptSnapshot", emptySafe(task.promptSnapshot()),
-                        "useMiniTom", Boolean.TRUE.equals(task.useMiniTom()),
+                        "useMiniTom", tomMode.usesTom(),
+                        "tomMode", tomMode.name(),
                         "tomHitCount", tomHitCount),
-                systemPrompt, userPrompt, null, 16384));
+                systemPrompt, userPrompt, null, CASE_GENERATION_MAX_TOKENS));
 
         if (response.status() != LlmInvocationStatus.OK) {
-            throw new BusinessException("生成失败：" + emptySafe(response.errorMessage()));
+            throw new LlmRuntimeException(parseErrorCode(response.errorCode()),
+                    "生成失败：" + emptySafe(response.errorMessage()));
         }
         String output = response.content();
 
+        if (generationTaskService.isCanceled(taskId)) {
+            throw new BusinessException("生成任务已取消，结果未保存");
+        }
+
         // 解析 + 持久化草稿（单独事务）
         List<TestCaseDraftView> saved = saveDrafts(projectId, taskId, output, user);
+        generationTaskService.touchProgress(taskId);
 
         // 收集假设
         List<String> assumptions = List.of();
@@ -173,6 +214,305 @@ public class DirectCaseGenerationService {
         loopIntegrationService.onChineseLocalizationCheck(projectId, output, "CASE_GENERATION", user);
 
         return new GenerateResult(task.id(), output, saved, tomHitCount, false, List.of(), assumptions);
+    }
+
+    private GenerateResult generateByTestPointBatches(Long projectId,
+                                                       GenerationTaskRecord task,
+                                                       CurrentUser user,
+                                                       String systemPrompt,
+                                                       String fullUserPrompt,
+                                                       List<Map<String, Object>> testPoints,
+                                                       int tomHitCount) {
+        List<TestCaseDraftView> allDrafts = new ArrayList<>();
+        List<String> outputs = new ArrayList<>();
+        String context = removeTestPointSection(fullUserPrompt);
+        java.util.Set<String> completedSources = completedSourceTestPoints(task.id());
+        for (int from = 0, nodeIndex = 1; from < testPoints.size(); from += CASE_TEST_POINT_BATCH_SIZE, nodeIndex++) {
+            List<Map<String, Object>> batch = testPoints.subList(from,
+                    Math.min(from + CASE_TEST_POINT_BATCH_SIZE, testPoints.size())).stream()
+                    .filter(point -> !completedSources.contains(str(point.get("title"), "")))
+                    .toList();
+            if (batch.isEmpty()) {
+                continue;
+            }
+            String batchJson;
+            try {
+                batchJson = objectMapper.writeValueAsString(batch);
+            } catch (JsonProcessingException e) {
+                throw new BusinessException("测试点批次序列化失败");
+            }
+            String userPrompt = """
+                    %s
+
+                    【本节点必须完成的测试点】
+                    %s
+
+                    只为本节点的每条测试点生成用例。每条测试点至少一条用例，case.sourceTestPoint 必须原样引用测试点 title；
+                    不得输出代表性样例后提前结束，也不得生成下一节点的用例。
+                    """.formatted(context, batchJson);
+            generationTaskService.touchProgress(task.id());
+            LlmInvocationResponse response = llmGateway.invoke(new LlmInvocationRequest(
+                    UUID.randomUUID().toString(), user.id(), projectId, task.id(),
+                    "GENERATION_CASES_NODE_" + nodeIndex, LlmStage.TEST_CASE_GEN,
+                    task.modelConfigId(), null, null, Map.of("nodeIndex", nodeIndex, "testPointCount", batch.size()),
+                    systemPrompt, userPrompt, null, CASE_GENERATION_MAX_TOKENS));
+            if (response.status() != LlmInvocationStatus.OK) {
+                throw new LlmRuntimeException(parseErrorCode(response.errorCode()),
+                        "用例生成节点 " + nodeIndex + " 失败：" + emptySafe(response.errorMessage()));
+            }
+            List<CaseDraftInput> inputs = parseOutput(response.content(), task.id());
+            List<String> missing = missingSourceTestPoints(batch, inputs);
+            if (!missing.isEmpty()) {
+                throw new LlmRuntimeException(LlmErrorCode.OUTPUT_PARSE_ERROR,
+                        "用例生成节点 " + nodeIndex + " 未覆盖测试点：" + String.join("、", missing));
+            }
+            allDrafts.addAll(saveDraftInputs(projectId, task.id(), inputs, user));
+            generationTaskService.touchProgress(task.id());
+            completedSources.addAll(inputs.stream().map(CaseDraftInput::sourceTestPoint).toList());
+            outputs.add(response.content());
+        }
+        String output = String.join("\n", outputs);
+        loopIntegrationService.onGenerationCompleted(projectId, task.requirementText(), null, output, user);
+        loopIntegrationService.onChineseLocalizationCheck(projectId, output, "CASE_GENERATION", user);
+        return new GenerateResult(task.id(), output, allDrafts, tomHitCount, false, List.of(), List.of());
+    }
+
+    /**
+     * Batch independent node plans only as a transport optimization.  A FLOW_COMPOSED plan is
+     * always isolated, and every response is still validated/persisted by its own CP identity.
+     */
+    private List<List<Map<String, Object>>> partitionCasePlans(List<Map<String, Object>> casePlan,
+                                                                 java.util.Set<String> completedPlans) {
+        List<List<Map<String, Object>>> batches = new ArrayList<>();
+        List<Map<String, Object>> currentNodeBatch = new ArrayList<>();
+        for (Map<String, Object> plan : casePlan) {
+            String planId = str(plan.get("id"), "");
+            if (planId.isBlank()) {
+                throw new LlmRuntimeException(LlmErrorCode.OUTPUT_PARSE_ERROR, "用例编排计划缺少 CP 编号，无法生成可恢复草稿。");
+            }
+            if (completedPlans.contains(planId)) continue;
+            boolean nodeFocused = "NODE_FOCUSED".equals(str(plan.get("case_strategy"), ""));
+            if (!nodeFocused) {
+                if (!currentNodeBatch.isEmpty()) {
+                    batches.add(new ArrayList<>(currentNodeBatch));
+                    currentNodeBatch.clear();
+                }
+                batches.add(List.of(plan));
+                continue;
+            }
+            currentNodeBatch.add(plan);
+            if (currentNodeBatch.size() >= CASE_PLAN_NODE_BATCH_SIZE) {
+                batches.add(new ArrayList<>(currentNodeBatch));
+                currentNodeBatch.clear();
+            }
+        }
+        if (!currentNodeBatch.isEmpty()) batches.add(currentNodeBatch);
+        return batches;
+    }
+
+    private void generateCasePlanBatch(Long projectId,
+                                       GenerationTaskRecord task,
+                                       CurrentUser user,
+                                       String systemPrompt,
+                                       String context,
+                                       Map<String, Map<String, Object>> pointsById,
+                                       List<Map<String, Object>> plans,
+                                       int batchIndex,
+                                       List<TestCaseDraftView> allDrafts,
+                                       List<String> outputs,
+                                       java.util.Set<String> completedPlans) {
+        try {
+            CasePlanBatchPayload payload = buildCasePlanBatchPayload(plans, pointsById);
+            generationTaskService.touchProgress(task.id());
+            LlmInvocationResponse response = llmGateway.invoke(new LlmInvocationRequest(
+                    UUID.randomUUID().toString(), user.id(), projectId, task.id(),
+                    "GENERATION_CASES_BATCH_" + batchIndex, LlmStage.TEST_CASE_GEN,
+                    task.modelConfigId(), null, null,
+                    Map.of("batchIndex", batchIndex, "casePlanCount", plans.size(), "testPointCount", payload.pointCount()),
+                    systemPrompt, buildCasePlanBatchPrompt(context, payload), null, CASE_GENERATION_MAX_TOKENS));
+            if (response.status() != LlmInvocationStatus.OK) {
+                throw new LlmRuntimeException(parseErrorCode(response.errorCode()),
+                        "用例生成批次 " + batchIndex + " 失败：" + emptySafe(response.errorMessage()));
+            }
+            List<CaseDraftInput> inputs = parseOutput(response.content(), task.id());
+            validateBatchCases(payload, inputs);
+            allDrafts.addAll(saveDraftInputs(projectId, task.id(), inputs, user));
+            generationTaskService.touchProgress(task.id());
+            completedPlans.addAll(payload.planIds());
+            outputs.add(response.content());
+        } catch (LlmRuntimeException ex) {
+            // A malformed or capacity-limited batch must become smaller durable work units, not
+            // a generic fallback. Provider/network failures keep their normal retry semantics.
+            if (plans.size() > 1 && ex.errorCode() == LlmErrorCode.OUTPUT_PARSE_ERROR) {
+                int middle = plans.size() / 2;
+                generateCasePlanBatch(projectId, task, user, systemPrompt, context, pointsById,
+                        new ArrayList<>(plans.subList(0, middle)), batchIndex * 10 + 1, allDrafts, outputs, completedPlans);
+                generateCasePlanBatch(projectId, task, user, systemPrompt, context, pointsById,
+                        new ArrayList<>(plans.subList(middle, plans.size())), batchIndex * 10 + 2, allDrafts, outputs, completedPlans);
+                return;
+            }
+            throw ex;
+        }
+    }
+
+    private CasePlanBatchPayload buildCasePlanBatchPayload(List<Map<String, Object>> plans,
+                                                             Map<String, Map<String, Object>> pointsById) {
+        Map<String, List<Map<String, Object>>> pointsByPlan = new java.util.LinkedHashMap<>();
+        Map<String, List<Map<String, Object>>> preconditionsByPlan = new java.util.LinkedHashMap<>();
+        Map<String, List<Map<String, Object>>> designsByPlan = new java.util.LinkedHashMap<>();
+        int pointCount = 0;
+        for (Map<String, Object> plan : plans) {
+            String planId = str(plan.get("id"), "");
+            List<String> pointRefs = listValue(plan.get("source_test_point_refs"));
+            List<Map<String, Object>> planPoints = pointRefs.stream().map(pointsById::get)
+                    .filter(java.util.Objects::nonNull).toList();
+            if (planPoints.isEmpty() || planPoints.size() != pointRefs.size()) {
+                throw new LlmRuntimeException(LlmErrorCode.OUTPUT_PARSE_ERROR,
+                        "用例编排计划 " + planId + " 引用了不存在的测试点，无法生成。");
+            }
+            List<Map<String, Object>> designs = readObjectList(plan.get("case_designs"));
+            if (designs.isEmpty()) {
+                throw new LlmRuntimeException(LlmErrorCode.OUTPUT_PARSE_ERROR,
+                        "用例编排计划 " + planId + " 缺少 case_designs，不能生成代表性样例。");
+            }
+            pointsByPlan.put(planId, planPoints);
+            preconditionsByPlan.put(planId, summarizePreconditionPoints(listValue(plan.get("precondition_test_point_refs")), pointsById));
+            designsByPlan.put(planId, designs);
+            pointCount += planPoints.size();
+        }
+        return new CasePlanBatchPayload(plans, pointsByPlan, preconditionsByPlan, designsByPlan, pointCount);
+    }
+
+    private String buildCasePlanBatchPrompt(String context, CasePlanBatchPayload payload) {
+        try {
+            return """
+                    %s
+
+                    【当前用例编排计划批次】
+                    %s
+
+                    【每个计划引用的测试点】
+                    %s
+
+                    【每个计划的上游前置状态素材】
+                    %s
+
+                    【每个计划必须完成的用例设计项】
+                    %s
+
+                    只生成本批次 CP 计划的用例。每条 case.sourceCasePlan 必须原样填写所属计划编号；
+                    每个计划中的每个 case_designs.id 至少生成一条对应草稿，case.sourceCaseDesign 必须原样引用该 CD 编号；
+                    每个计划的 source_test_point_refs 都必须至少被一条草稿引用；同一 NODE_FOCUSED 计划中的多个 TP 是一个连贯验证目标，可合并为一条或多条不重复草稿。NODE_FOCUSED 的前序点只能根据“上游前置状态素材”写成可读业务状态的 precondition，
+                    不得把 TP/CP/CD 等内部编号写入 precondition、steps 或 expectedResult，也不得把前序节点动作重复写入步骤；
+                    FLOW_COMPOSED 按计划依赖顺序生成完整流程。不得输出代表性样例后提前结束，不得生成批次外计划的用例。
+                    """.formatted(context,
+                    objectMapper.writeValueAsString(payload.plans()),
+                    objectMapper.writeValueAsString(payload.pointsByPlan()),
+                    objectMapper.writeValueAsString(payload.preconditionsByPlan()),
+                    objectMapper.writeValueAsString(payload.designsByPlan()));
+        } catch (JsonProcessingException e) {
+            throw new BusinessException("用例编排批次序列化失败");
+        }
+    }
+
+    private void validateBatchCases(CasePlanBatchPayload payload, List<CaseDraftInput> inputs) {
+        java.util.Set<String> planIds = new java.util.LinkedHashSet<>(payload.planIds());
+        if (inputs.stream().anyMatch(input -> !planIds.contains(input.sourceCasePlan()))) {
+            throw new LlmRuntimeException(LlmErrorCode.OUTPUT_PARSE_ERROR, "用例生成批次返回了批次外 sourceCasePlan，结果未入库。");
+        }
+        for (Map<String, Object> plan : payload.plans()) {
+            String planId = str(plan.get("id"), "");
+            List<CaseDraftInput> planInputs = inputs.stream()
+                    .filter(input -> planId.equals(input.sourceCasePlan())).toList();
+            List<Map<String, Object>> planPoints = payload.pointsByPlan().getOrDefault(planId, List.of());
+            List<String> missingPoints = missingPlanTestPoints(planPoints, planInputs);
+            if (!missingPoints.isEmpty()) {
+                throw new LlmRuntimeException(LlmErrorCode.OUTPUT_PARSE_ERROR,
+                        "用例生成计划节点 " + planId + " 未覆盖测试点：" + String.join("、", missingPoints));
+            }
+            java.util.Set<String> allowedRefs = new java.util.LinkedHashSet<>(listValue(plan.get("source_test_point_refs")));
+            if (planInputs.stream().flatMap(input -> input.sourceTestPointRefs().stream())
+                    .anyMatch(ref -> !allowedRefs.contains(ref))) {
+                throw new LlmRuntimeException(LlmErrorCode.OUTPUT_PARSE_ERROR,
+                        "用例生成计划节点 " + planId + " 返回了计划外测试点引用，结果未入库。");
+            }
+            List<String> missingDesigns = missingCaseDesigns(payload.designsByPlan().getOrDefault(planId, List.of()), planInputs);
+            if (!missingDesigns.isEmpty()) {
+                throw new LlmRuntimeException(LlmErrorCode.OUTPUT_PARSE_ERROR,
+                        "用例生成计划节点 " + planId + " 未覆盖用例设计项：" + String.join("、", missingDesigns));
+            }
+        }
+    }
+
+    private record CasePlanBatchPayload(List<Map<String, Object>> plans,
+                                        Map<String, List<Map<String, Object>>> pointsByPlan,
+                                        Map<String, List<Map<String, Object>>> preconditionsByPlan,
+                                        Map<String, List<Map<String, Object>>> designsByPlan,
+                                        int pointCount) {
+        List<String> planIds() {
+            return plans.stream().map(plan -> String.valueOf(plan.get("id"))).toList();
+        }
+    }
+
+    /**
+     * 新主链路：每个 case_plan 是一个可独立重试的生成节点。计划引用的前置测试点只作为前置条件，
+     * FLOW_COMPOSED 计划才生成端到端组合用例，避免把每条用例重复扩成完整业务流程。
+     */
+    private GenerateResult generateByCasePlanNodes(Long projectId,
+                                                   GenerationTaskRecord task,
+                                                   CurrentUser user,
+                                                   String systemPrompt,
+                                                   String fullUserPrompt,
+                                                   List<Map<String, Object>> casePlan,
+                                                   List<Map<String, Object>> allTestPoints,
+                                                   int tomHitCount) {
+        Map<String, Map<String, Object>> pointsById = new java.util.LinkedHashMap<>();
+        for (Map<String, Object> point : allTestPoints) {
+            String id = str(point.get("id"), "");
+            if (!id.isBlank()) pointsById.put(id, point);
+        }
+        List<TestCaseDraftView> allDrafts = new ArrayList<>();
+        List<String> outputs = new ArrayList<>();
+        java.util.Set<String> completedPlans = completedSourceCasePlans(task.id(), casePlan);
+        String context = removeSection(removeTestPointSection(fullUserPrompt), "## 用例编排计划");
+
+        int batchIndex = 1;
+        for (List<Map<String, Object>> batch : partitionCasePlans(casePlan, completedPlans)) {
+            generateCasePlanBatch(projectId, task, user, systemPrompt, context, pointsById, batch,
+                    batchIndex++, allDrafts, outputs, completedPlans);
+        }
+        String output = String.join("\n", outputs);
+        loopIntegrationService.onGenerationCompleted(projectId, task.requirementText(), null, output, user);
+        loopIntegrationService.onChineseLocalizationCheck(projectId, output, "CASE_GENERATION", user);
+        return new GenerateResult(task.id(), output, allDrafts, tomHitCount, false, List.of(), List.of());
+    }
+
+    /**
+     * Internal TP ids are useful for traceability but are not valid user-facing preconditions.
+     * Pass a compact, business-readable summary to the case writer without widening the current
+     * plan's source-test-point coverage.
+     */
+    private List<Map<String, Object>> summarizePreconditionPoints(List<String> refs,
+                                                                    Map<String, Map<String, Object>> pointsById) {
+        List<Map<String, Object>> summaries = new ArrayList<>();
+        for (String ref : refs) {
+            Map<String, Object> point = pointsById.get(ref);
+            if (point == null) continue;
+            Map<String, Object> summary = new java.util.LinkedHashMap<>();
+            summary.put("trace_ref", ref);
+            copyIfPresent(point, summary, "title");
+            copyIfPresent(point, summary, "description");
+            copyIfPresent(point, summary, "test_unit_ref");
+            copyIfPresent(point, summary, "requirement_refs");
+            copyIfPresent(point, summary, "source_basis");
+            summaries.add(summary);
+        }
+        return summaries;
+    }
+
+    private void copyIfPresent(Map<String, Object> source, Map<String, Object> target, String key) {
+        Object value = source.get(key);
+        if (value != null) target.put(key, value);
     }
 
     @Transactional
@@ -206,9 +546,14 @@ public class DirectCaseGenerationService {
     @Transactional
     protected List<TestCaseDraftView> saveDrafts(Long projectId, Long taskId, String llmOutput, CurrentUser user) {
         List<CaseDraftInput> parsed = parseOutput(llmOutput, taskId);
+        return saveDraftInputs(projectId, taskId, parsed, user);
+    }
+
+    private List<TestCaseDraftView> saveDraftInputs(Long projectId, Long taskId, List<CaseDraftInput> parsed, CurrentUser user) {
         LocalDateTime now = timeProvider.now();
         List<TestCaseDraftView> saved = new ArrayList<>();
-        int i = 1;
+        int i = jdbc.sql("SELECT COUNT(*) FROM test_case_draft WHERE task_id = :taskId")
+                .param("taskId", taskId).query(Integer.class).single() + 1;
         for (CaseDraftInput item : parsed) {
             String caseNo = "TC-" + taskId + "-" + i++;
             jdbcTemplate.update("""
@@ -225,6 +570,186 @@ public class DirectCaseGenerationService {
             saved.add(getDraftById(id));
         }
         return saved;
+    }
+
+    private List<Map<String, Object>> extractTestPointsFromRequirement(String requirementText) {
+        if (requirementText == null) return List.of();
+        int marker = requirementText.indexOf("## 测试点");
+        if (marker < 0) return List.of();
+        int arrayStart = requirementText.indexOf('[', marker);
+        if (arrayStart < 0) return List.of();
+        int arrayEnd = matchingJsonArrayEnd(requirementText, arrayStart);
+        if (arrayEnd < 0) return List.of();
+        try {
+            return objectMapper.readValue(requirementText.substring(arrayStart, arrayEnd + 1), new TypeReference<>() {});
+        } catch (Exception ignored) {
+            return List.of();
+        }
+    }
+
+    private List<Map<String, Object>> extractCasePlanFromRequirement(String requirementText) {
+        return extractJsonArraySection(requirementText, "## 用例编排计划", "case_plan");
+    }
+
+    private List<Map<String, Object>> extractJsonArraySection(String text, String markerText, String propertyName) {
+        if (text == null) return List.of();
+        int marker = text.indexOf(markerText);
+        if (marker < 0) return List.of();
+        int property = text.indexOf("\"" + propertyName + "\"", marker);
+        int arrayStart = text.indexOf('[', property >= 0 ? property : marker);
+        if (arrayStart < 0) return List.of();
+        int arrayEnd = matchingJsonArrayEnd(text, arrayStart);
+        if (arrayEnd < 0) return List.of();
+        try {
+            return objectMapper.readValue(text.substring(arrayStart, arrayEnd + 1), new TypeReference<>() {});
+        } catch (Exception ignored) {
+            return List.of();
+        }
+    }
+
+    private int matchingJsonArrayEnd(String text, int start) {
+        int depth = 0;
+        boolean inString = false;
+        boolean escaped = false;
+        for (int i = start; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (inString) {
+                if (escaped) escaped = false;
+                else if (c == '\\') escaped = true;
+                else if (c == '"') inString = false;
+                continue;
+            }
+            if (c == '"') inString = true;
+            else if (c == '[') depth++;
+            else if (c == ']' && --depth == 0) return i;
+        }
+        return -1;
+    }
+
+    private String removeTestPointSection(String prompt) {
+        return removeSection(prompt, "## 测试点");
+    }
+
+    private String removeSection(String prompt, String markerText) {
+        if (prompt == null) return "";
+        int start = prompt.indexOf(markerText);
+        if (start < 0) return prompt;
+        int next = prompt.indexOf("\n## ", start + 1);
+        return next < 0 ? prompt.substring(0, start) : prompt.substring(0, start) + prompt.substring(next);
+    }
+
+    private List<String> missingSourceTestPoints(List<Map<String, Object>> testPoints, List<CaseDraftInput> cases) {
+        List<String> sources = cases.stream().map(CaseDraftInput::sourceTestPoint).toList();
+        return testPoints.stream().map(point -> str(point.get("title"), ""))
+                .filter(title -> !title.isBlank())
+                .filter(title -> sources.stream().noneMatch(source -> source.equals(title)))
+                .toList();
+    }
+
+    private List<String> missingPlanTestPoints(List<Map<String, Object>> testPoints, List<CaseDraftInput> cases) {
+        java.util.Set<String> coveredIds = cases.stream()
+                .flatMap(input -> input.sourceTestPointRefs().stream())
+                .collect(java.util.stream.Collectors.toSet());
+        return testPoints.stream()
+                .filter(point -> !coveredIds.contains(str(point.get("id"), "")))
+                .map(point -> str(point.get("id"), str(point.get("title"), "")))
+                .filter(id -> !id.isBlank())
+                .toList();
+    }
+
+    private List<String> missingCaseDesigns(List<Map<String, Object>> designs, List<CaseDraftInput> cases) {
+        List<String> completed = cases.stream().map(CaseDraftInput::sourceCaseDesign).toList();
+        return designs.stream().map(design -> str(design.get("id"), ""))
+                .filter(id -> !id.isBlank())
+                .filter(id -> completed.stream().noneMatch(id::equals))
+                .toList();
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> readObjectList(Object value) {
+        if (!(value instanceof List<?> list)) return List.of();
+        List<Map<String, Object>> rows = new ArrayList<>();
+        for (Object item : list) {
+            if (item instanceof Map<?, ?> map) {
+                rows.add((Map<String, Object>) map);
+            }
+        }
+        return rows;
+    }
+
+    private java.util.Set<String> completedSourceTestPoints(Long taskId) {
+        java.util.Set<String> sources = new java.util.LinkedHashSet<>();
+        List<String> refs = jdbc.sql("SELECT source_refs_json FROM test_case_draft WHERE task_id = :taskId")
+                .param("taskId", taskId).query(String.class).list();
+        for (String ref : refs) {
+            try {
+                var node = objectMapper.readTree(ref);
+                String source = node.path("sourceTestPoint").asText("");
+                if (!source.isBlank()) {
+                    sources.add(source);
+                }
+                var sourceRefs = node.path("sourceTestPointRefs");
+                if (sourceRefs.isArray()) {
+                    sourceRefs.forEach(item -> {
+                        String refId = item.asText("");
+                        if (!refId.isBlank()) sources.add(refId);
+                    });
+                }
+            } catch (Exception ignored) {
+                // Historical drafts without source refs cannot be used as a resume checkpoint.
+            }
+        }
+        return sources;
+    }
+
+    private java.util.Set<String> completedSourceCasePlans(Long taskId, List<Map<String, Object>> casePlans) {
+        List<String> refs = jdbc.sql("SELECT source_refs_json FROM test_case_draft WHERE task_id = :taskId")
+                .param("taskId", taskId).query(String.class).list();
+        return completedSourceCasePlansFromRefs(refs, casePlans);
+    }
+
+    private java.util.Set<String> completedSourceCasePlansFromRefs(List<String> refs,
+                                                                    List<Map<String, Object>> casePlans) {
+        Map<String, java.util.Set<String>> coveredPointsByPlan = new java.util.LinkedHashMap<>();
+        Map<String, java.util.Set<String>> coveredDesignsByPlan = new java.util.LinkedHashMap<>();
+        for (String ref : refs) {
+            try {
+                var node = objectMapper.readTree(ref);
+                String plan = node.path("sourceCasePlan").asText("");
+                if (plan.isBlank()) continue;
+                var pointRefs = coveredPointsByPlan.computeIfAbsent(plan, ignored -> new java.util.LinkedHashSet<>());
+                var sourcePointRefs = node.path("sourceTestPointRefs");
+                if (sourcePointRefs.isArray()) {
+                    sourcePointRefs.forEach(item -> {
+                        String pointId = item.asText("");
+                        if (!pointId.isBlank()) pointRefs.add(pointId);
+                    });
+                }
+                String design = node.path("sourceCaseDesign").asText("");
+                if (!design.isBlank()) {
+                    coveredDesignsByPlan.computeIfAbsent(plan, ignored -> new java.util.LinkedHashSet<>()).add(design);
+                }
+            } catch (Exception ignored) {
+                // Historical drafts cannot be used as a case-plan checkpoint.
+            }
+        }
+        java.util.Set<String> completed = new java.util.LinkedHashSet<>();
+        for (Map<String, Object> plan : casePlans) {
+            String planId = str(plan.get("id"), "");
+            if (planId.isBlank()) continue;
+            java.util.Set<String> requiredPoints = new java.util.LinkedHashSet<>(listValue(plan.get("source_test_point_refs")));
+            java.util.Set<String> requiredDesigns = readObjectList(plan.get("case_designs")).stream()
+                    .map(item -> str(item.get("id"), ""))
+                    .filter(id -> !id.isBlank())
+                    .collect(java.util.stream.Collectors.toCollection(java.util.LinkedHashSet::new));
+            if (!requiredPoints.isEmpty()
+                    && !requiredDesigns.isEmpty()
+                    && coveredPointsByPlan.getOrDefault(planId, java.util.Set.of()).containsAll(requiredPoints)
+                    && coveredDesignsByPlan.getOrDefault(planId, java.util.Set.of()).containsAll(requiredDesigns)) {
+                completed.add(planId);
+            }
+        }
+        return completed;
     }
 
     public List<TestCaseDraftView> listDrafts(Long projectId, Long taskId) {
@@ -328,58 +853,60 @@ public class DirectCaseGenerationService {
     // =====================================================================
 
     private List<CaseDraftInput> parseOutput(String rawOutput, Long taskId) {
-        String jsonText = extractJson(rawOutput);
+        String jsonText = JsonOutputParser.extractJson(rawOutput);
         try {
-            List<Map<String, Object>> rows = objectMapper.readValue(jsonText, new TypeReference<>() {
-            });
+            List<Map<String, Object>> rows = readCaseRows(jsonText);
             List<CaseDraftInput> result = new ArrayList<>();
             for (Map<String, Object> row : rows) {
+                String caseTitle = str(row.get("caseTitle"), "");
+                String steps = normalizeNumberedActions(str(row.get("steps"), ""));
+                String expectedResult = normalizeNumberedActions(str(row.get("expectedResult"), ""));
+                if (caseTitle.isBlank() || steps.isBlank() || expectedResult.isBlank()) {
+                    throw new LlmRuntimeException(LlmErrorCode.OUTPUT_PARSE_ERROR,
+                            "模型返回用例缺少 caseTitle、steps 或 expectedResult");
+                }
                 result.add(new CaseDraftInput(
-                        str(row.get("caseTitle"), "用例-" + taskId),
+                        caseTitle,
                         str(row.get("moduleName"), "默认模块"),
                         str(row.get("precondition"), ""),
-                        str(row.get("steps"), ""),
-                        str(row.get("expectedResult"), ""),
+                        steps,
+                        expectedResult,
                         str(row.get("priority"), "P2"),
+                        str(row.get("sourceCasePlan"), ""),
+                        str(row.get("sourceCaseDesign"), ""),
                         str(row.get("sourceTestPoint"), ""),
+                        listValue(row.get("sourceTestPointRefs")),
                         listValue(row.get("sourceBasis")),
                         listValue(row.get("unsupportedItems")),
                         confidenceValue(row.get("confidence"))
                 ));
             }
             if (result.isEmpty()) {
-                throw new BusinessException("模型未返回可用用例");
+                throw new LlmRuntimeException(LlmErrorCode.OUTPUT_PARSE_ERROR, "模型未返回可用用例");
             }
             return result;
         } catch (JsonProcessingException ex) {
-            return List.of(new CaseDraftInput(
-                    "模型返回原文（待人工整理）",
-                    "默认模块",
-                    "",
-                    rawOutput == null ? "" : rawOutput,
-                    "请人工确认并整理为标准测试用例",
-                    "P2",
-                    "",
-                    List.of("模型原始输出"),
-                    List.of("模型输出未能解析为标准 JSON"),
-                    0.2
-            ));
+            throw new LlmRuntimeException(LlmErrorCode.OUTPUT_PARSE_ERROR, "模型输出不是有效的用例 JSON");
         }
     }
 
-    private String extractJson(String raw) {
-        if (raw == null) {
-            return "[]";
+    private List<Map<String, Object>> readCaseRows(String jsonText) throws JsonProcessingException {
+        var root = objectMapper.readTree(jsonText);
+        if (root.isArray()) {
+            return objectMapper.convertValue(root, new TypeReference<>() {});
         }
-        String text = raw.trim();
-        if (text.startsWith("```")) {
-            int start = text.indexOf('\n');
-            int end = text.lastIndexOf("```");
-            if (start > 0 && end > start) {
-                text = text.substring(start + 1, end).trim();
-            }
+        if (root.isObject() && root.has("cases") && root.get("cases").isArray()) {
+            return objectMapper.convertValue(root.get("cases"), new TypeReference<>() {});
         }
-        return text;
+        throw new JsonProcessingException("模型未返回 cases 数组") {};
+    }
+
+    /** Keep every model-provided step, but make inline numbered actions readable in the draft UI. */
+    private String normalizeNumberedActions(String value) {
+        if (value == null || value.isBlank()) return "";
+        return value.trim()
+                .replaceAll("(?:[；;]|\\s)+(?=\\d+[.、)]\\s*)", "\n")
+                .replaceAll("\\r?\\n[ \\t]+", "\n");
     }
 
     private String normalizePriority(String value) {
@@ -443,18 +970,32 @@ public class DirectCaseGenerationService {
         return value == null ? "" : value;
     }
 
+    private LlmErrorCode parseErrorCode(String value) {
+        if (value == null || value.isBlank()) {
+            return LlmErrorCode.UNKNOWN_ERROR;
+        }
+        try {
+            return LlmErrorCode.valueOf(value);
+        } catch (IllegalArgumentException ignored) {
+            return LlmErrorCode.UNKNOWN_ERROR;
+        }
+    }
+
     private String buildSourceRefsJson(Long taskId, CaseDraftInput item) {
         try {
-            return objectMapper.writeValueAsString(Map.of(
-                    "source", "LLM_DIRECT",
-                    "taskId", taskId,
-                    "sourceTestPoint", item.sourceTestPoint(),
-                    "sourceBasis", item.sourceBasis(),
-                    "unsupportedItems", item.unsupportedItems(),
-                    "confidence", item.confidence(),
-                    "stepCount", countActionLines(item.steps()),
-                    "expectedCount", countActionLines(item.expectedResult())
-            ));
+            Map<String, Object> refs = new java.util.LinkedHashMap<>();
+            refs.put("source", "LLM_DIRECT");
+            refs.put("taskId", taskId);
+            refs.put("sourceCasePlan", item.sourceCasePlan());
+            refs.put("sourceCaseDesign", item.sourceCaseDesign());
+            refs.put("sourceTestPoint", item.sourceTestPoint());
+            refs.put("sourceTestPointRefs", item.sourceTestPointRefs());
+            refs.put("sourceBasis", item.sourceBasis());
+            refs.put("unsupportedItems", item.unsupportedItems());
+            refs.put("confidence", item.confidence());
+            refs.put("stepCount", countActionLines(item.steps()));
+            refs.put("expectedCount", countActionLines(item.expectedResult()));
+            return objectMapper.writeValueAsString(refs);
         } catch (Exception ignored) {
             return "{\"source\":\"LLM_DIRECT\",\"taskId\":" + taskId + "}";
         }
@@ -481,8 +1022,8 @@ public class DirectCaseGenerationService {
     }
 
     record CaseDraftInput(String caseTitle, String moduleName, String precondition, String steps,
-                          String expectedResult, String priority, String sourceTestPoint,
-                          List<String> sourceBasis, List<String> unsupportedItems, double confidence) {
+                          String expectedResult, String priority, String sourceCasePlan, String sourceCaseDesign, String sourceTestPoint,
+                          List<String> sourceTestPointRefs, List<String> sourceBasis, List<String> unsupportedItems, double confidence) {
     }
 
     public record TestCaseDraftView(Long id, Long taskId, String caseNo, String caseTitle, String moduleName,

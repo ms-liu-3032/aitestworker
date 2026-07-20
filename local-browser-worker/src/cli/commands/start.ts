@@ -108,7 +108,7 @@ export function registerStart(program: Command): void {
         console.log('本地服务已启动: ' + handle.url);
         console.log('健康检查地址: ' + handle.url + '/health');
         if (config.localToken) {
-          console.log('本地访问令牌: ' + config.localToken);
+          console.log('本地访问令牌已配置（不会输出到日志）。');
         }
         console.log('请不要关闭此窗口，关闭后本地采集器会停止。');
         console.log('');

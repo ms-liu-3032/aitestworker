@@ -16,6 +16,8 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
+import com.company.aitest.common.TomUsageMode;
+
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -69,13 +71,20 @@ public class ProjectSemanticContextService {
     }
 
     public BuildResult build(Long projectId, String focusText, List<String> pageUrls, int maxSignals) {
+        return build(projectId, focusText, pageUrls, maxSignals, TomUsageMode.PROJECT_AND_SYSTEM_TOM);
+    }
+
+    public BuildResult build(Long projectId, String focusText, List<String> pageUrls, int maxSignals,
+                             TomUsageMode tomMode) {
         if (projectId == null) {
             return new BuildResult("", List.of());
         }
         Set<String> keywords = extractKeywords(focusText);
         Set<String> routeHints = normalizeRouteHints(pageUrls);
 
-        List<SemanticSignal> candidates = collectSignals(projectId, routeHints);
+        TomUsageMode resolvedMode = tomMode == null ? TomUsageMode.PROJECT_AND_SYSTEM_TOM : tomMode;
+        List<SemanticSignal> candidates = filterSignalsForTomMode(
+                collectSignals(projectId, routeHints), resolvedMode);
 
         List<SemanticSignal> ranked = rankSignals(candidates, keywords, routeHints, maxSignals);
 
@@ -83,6 +92,19 @@ public class ProjectSemanticContextService {
         recordBusinessPackConsumption(projectId, ranked);
 
         return new BuildResult(buildPromptSection(ranked), ranked);
+    }
+
+    private boolean allowsSignalForTomMode(SemanticSignal signal, TomUsageMode mode) {
+        String category = signal == null ? null : signal.category();
+        if (category == null || !category.startsWith("TOM:")) return true;
+        if (mode == TomUsageMode.DIRECT) return false;
+        return mode.includesSystemTom() || !category.startsWith("TOM:系统");
+    }
+
+    List<SemanticSignal> filterSignalsForTomMode(List<SemanticSignal> signals, TomUsageMode mode) {
+        if (signals == null || signals.isEmpty()) return List.of();
+        TomUsageMode resolvedMode = mode == null ? TomUsageMode.PROJECT_AND_SYSTEM_TOM : mode;
+        return signals.stream().filter(signal -> allowsSignalForTomMode(signal, resolvedMode)).toList();
     }
 
     private void recordBusinessPackConsumption(Long projectId, List<SemanticSignal> signals) {

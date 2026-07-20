@@ -5,7 +5,9 @@ import java.sql.SQLException;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import com.company.aitest.common.BusinessException;
 import com.company.aitest.common.CurrentUser;
@@ -77,11 +79,134 @@ public class GenerationCaseLibraryService {
         return result;
     }
 
+    /**
+     * The library list is intentionally a light-weight, paged projection. Long steps, expected
+     * results and source JSON are loaded only through getOwnedDraft when a user opens a detail.
+     */
+    public LocalCaseDraftPage listPage(Long projectId, int page, int size, String keyword,
+                                       List<String> modules, List<String> priorities, List<String> statuses,
+                                       List<String> sources, CurrentUser user) {
+        int safePage = Math.max(0, page);
+        int safeSize = Math.max(10, Math.min(size, 100));
+        int offset = safePage * safeSize;
+        String unionSql = """
+                (
+                    SELECT id, task_id, project_id, case_no, case_title, project_name, module_name,
+                           NULL AS precondition, NULL AS steps, NULL AS expected_result,
+                           priority, case_type, design_method, NULL AS source_refs_json,
+                           case_scope, case_status, created_by, created_at, updated_at, session_id,
+                           'GENERATION' AS source_type
+                    FROM test_case_draft
+                    WHERE project_id = :projectId AND created_by = :createdBy
+                    UNION ALL
+                    SELECT -tgc.id AS id, 0 AS task_id, tgc.project_id, CONCAT('TRACE-', tgc.id) AS case_no,
+                           COALESCE(tgc.case_title, CONCAT('轨迹草稿 #', tgc.id)) AS case_title,
+                           COALESCE(p.project_name, '') AS project_name, tgc.module_name,
+                           NULL AS precondition, NULL AS steps, NULL AS expected_result,
+                           tgc.priority, tgc.case_type, '轨迹回放法' AS design_method, NULL AS source_refs_json,
+                           tgc.case_scope, tgc.case_status, tgc.user_id AS created_by,
+                           tgc.created_at, tgc.updated_at, tgc.trace_session_id AS session_id,
+                           'TRACE' AS source_type
+                    FROM trace_generated_case tgc
+                    LEFT JOIN project p ON p.id = tgc.project_id
+                    WHERE tgc.project_id = :projectId AND tgc.user_id = :createdBy
+                )
+                """;
+        Map<String, Object> params = new HashMap<>();
+        params.put("projectId", projectId);
+        params.put("createdBy", user.id());
+        String filterSql = appendLocalCaseFilters(new StringBuilder(" WHERE 1=1"), params,
+                keyword, modules, priorities, statuses, sources).toString();
+        Integer total = jdbc.sql("SELECT COUNT(*) FROM " + unionSql + " local_case" + filterSql)
+                .params(params).query(Integer.class).single();
+        params.put("limit", safeSize);
+        params.put("offset", offset);
+        List<LocalCaseDraftView> items = jdbc.sql(buildLocalCasePageSql(unionSql, filterSql))
+                .params(params)
+                .query(this::mapGenerationDraft).list();
+        String moduleSql = "SELECT DISTINCT module_name FROM " + unionSql + " local_case "
+                + "WHERE module_name IS NOT NULL AND module_name <> '' ORDER BY module_name";
+        List<String> moduleOptions = jdbc.sql(moduleSql)
+                .param("projectId", projectId).param("createdBy", user.id())
+                .query(String.class).list();
+        return new LocalCaseDraftPage(items, total == null ? 0 : total, safePage, safeSize, moduleOptions);
+    }
+
+    String buildLocalCasePageSql(String unionSql, String filterSql) {
+        return String.join("\n",
+                "SELECT * FROM " + unionSql + " local_case",
+                filterSql.trim(),
+                "ORDER BY updated_at DESC, id DESC",
+                "LIMIT :limit OFFSET :offset");
+    }
+
+    StringBuilder appendLocalCaseFilters(StringBuilder sql, Map<String, Object> params,
+                                         String keyword, List<String> modules, List<String> priorities,
+                                         List<String> statuses, List<String> sources) {
+        if (keyword != null && !keyword.isBlank()) {
+            sql.append(" AND (case_title LIKE :keyword OR case_no LIKE :keyword OR module_name LIKE :keyword")
+                    .append(" OR case_type LIKE :keyword OR case_scope LIKE :keyword OR source_type LIKE :keyword)");
+            params.put("keyword", "%" + keyword.trim() + "%");
+        }
+        appendInFilter(sql, params, "module_name", "modules", modules);
+        appendInFilter(sql, params, "priority", "priorities", priorities);
+        appendInFilter(sql, params, "case_status", "statuses", statuses);
+        appendInFilter(sql, params, "source_type", "sources", sources);
+        return sql;
+    }
+
+    private void appendInFilter(StringBuilder sql, Map<String, Object> params, String column,
+                                String parameter, List<String> values) {
+        List<String> normalized = values == null ? List.of() : values.stream()
+                .filter(value -> value != null && !value.isBlank()).map(String::trim).distinct().toList();
+        if (!normalized.isEmpty()) {
+            sql.append(" AND ").append(column).append(" IN (:").append(parameter).append(")");
+            params.put(parameter, normalized);
+        }
+    }
+
     public LocalCaseDraftView getOwnedDraft(Long projectId, Long draftId, CurrentUser user) {
         if (draftId != null && draftId < 0) {
             return getOwnedTraceDraft(projectId, Math.abs(draftId), user);
         }
         return getOwnedGenerationDraft(projectId, draftId, user);
+    }
+
+    @Transactional
+    public LocalCaseDraftView duplicate(Long projectId, Long draftId, CurrentUser user) {
+        LocalCaseDraftView source = getOwnedDraft(projectId, draftId, user);
+        ensureNotSubmitted(source);
+        LocalDateTime now = timeProvider.now();
+        if ("TRACE".equalsIgnoreCase(source.sourceType())) {
+            jdbcTemplate.update("""
+                    INSERT INTO trace_generated_case(project_id, user_id, trace_group_id, trace_session_id, issue_clip_id,
+                      case_type, case_title, module_name, precondition, steps, expected_result, priority,
+                      case_scope, case_status, source_refs_json, model_config_id, prompt_snapshot, created_at, updated_at)
+                    SELECT project_id, user_id, trace_group_id, trace_session_id, issue_clip_id,
+                      case_type, CONCAT('副本 - ', case_title), module_name, precondition, steps, expected_result, priority,
+                      'PERSONAL', 'DRAFT', source_refs_json, model_config_id, prompt_snapshot, ?, ?
+                    FROM trace_generated_case
+                    WHERE id = ? AND project_id = ? AND user_id = ?
+                    """, now, now, Math.abs(draftId), projectId, user.id());
+            Long id = jdbc.sql("SELECT LAST_INSERT_ID()").query(Long.class).single();
+            return getOwnedTraceDraft(projectId, id, user);
+        }
+        jdbcTemplate.update("""
+                INSERT INTO test_case_draft(task_id, project_id, test_point_id, case_no, case_title, project_name,
+                  module_name, precondition, steps, expected_result, priority, case_type, design_method,
+                  source_refs_json, is_assumption, assumption_note, compliance_mark, user_feedback, quality_status,
+                  version_no, asset_status, case_scope, case_status, created_by, created_at, updated_at, session_id,
+                  analysis_id, analysis_version, analysis_sub_version)
+                SELECT task_id, project_id, test_point_id, CONCAT(case_no, '-COPY-', id), CONCAT('副本 - ', case_title), project_name,
+                  module_name, precondition, steps, expected_result, priority, case_type, design_method,
+                  source_refs_json, is_assumption, assumption_note, compliance_mark, user_feedback, quality_status,
+                  1, 'DRAFT', 'PERSONAL', 'DRAFT', created_by, ?, ?, session_id,
+                  analysis_id, analysis_version, analysis_sub_version
+                FROM test_case_draft
+                WHERE id = ? AND project_id = ? AND created_by = ?
+                """, now, now, draftId, projectId, user.id());
+        Long id = jdbc.sql("SELECT LAST_INSERT_ID()").query(Long.class).single();
+        return getOwnedGenerationDraft(projectId, id, user);
     }
 
     private LocalCaseDraftView getOwnedGenerationDraft(Long projectId, Long draftId, CurrentUser user) {
@@ -230,12 +355,50 @@ public class GenerationCaseLibraryService {
     public LocalCaseDraftView deprecate(Long projectId, Long draftId, CurrentUser user) {
         LocalCaseDraftView draft = getOwnedDraft(projectId, draftId, user);
         ensureNotSubmitted(draft);
+        int deleted;
         if ("TRACE".equalsIgnoreCase(draft.sourceType())) {
-            updateTraceStatus(projectId, draftId, user.id(), "DEPRECATED");
+            deleted = jdbcTemplate.update("""
+                    DELETE FROM trace_generated_case
+                    WHERE id = ? AND project_id = ? AND user_id = ?
+                    """, Math.abs(draftId), projectId, user.id());
         } else {
-            updateGenerationStatus(projectId, draftId, user.id(), "DEPRECATED");
+            deleted = jdbcTemplate.update("""
+                    DELETE FROM test_case_draft
+                    WHERE id = ? AND project_id = ? AND created_by = ?
+                    """, draftId, projectId, user.id());
         }
-        return getOwnedDraft(projectId, draftId, user);
+        if (deleted != 1) {
+            throw new BusinessException("舍弃草稿失败");
+        }
+        // Keep the legacy endpoint response shape for older clients; the row has been physically removed.
+        return draft;
+    }
+
+    @Transactional
+    public BatchOperationResult batchConfirm(Long projectId, List<Long> draftIds, CurrentUser user) {
+        List<Long> ids = normalizeBatchIds(draftIds);
+        for (Long draftId : ids) {
+            confirm(projectId, draftId, user);
+        }
+        return new BatchOperationResult(ids.size());
+    }
+
+    @Transactional
+    public BatchOperationResult batchDeprecate(Long projectId, List<Long> draftIds, CurrentUser user) {
+        List<Long> ids = normalizeBatchIds(draftIds);
+        for (Long draftId : ids) {
+            deprecate(projectId, draftId, user);
+        }
+        return new BatchOperationResult(ids.size());
+    }
+
+    @Transactional
+    public BatchOperationResult batchSubmitToFormal(Long projectId, List<Long> draftIds, CurrentUser user) {
+        List<Long> ids = normalizeBatchIds(draftIds);
+        for (Long draftId : ids) {
+            submitToFormal(projectId, draftId, user);
+        }
+        return new BatchOperationResult(ids.size());
     }
 
     @Transactional
@@ -348,6 +511,20 @@ public class GenerationCaseLibraryService {
         if ("SUBMITTED".equalsIgnoreCase(draft.caseStatus())) {
             throw new BusinessException("该用例已提交到正式库");
         }
+    }
+
+    private List<Long> normalizeBatchIds(List<Long> draftIds) {
+        List<Long> ids = draftIds == null ? List.of() : draftIds.stream()
+                .filter(id -> id != null && id != 0)
+                .distinct()
+                .toList();
+        if (ids.isEmpty()) {
+            throw new BusinessException("请至少选择一条用例");
+        }
+        if (ids.size() > 200) {
+            throw new BusinessException("一次最多批量处理 200 条用例");
+        }
+        return ids;
     }
 
     private String normalizePriority(String priority) {
@@ -472,5 +649,12 @@ public class GenerationCaseLibraryService {
             Long sessionId,
             String sourceType
     ) {
+    }
+
+    public record LocalCaseDraftPage(List<LocalCaseDraftView> items, int total, int page, int size,
+                                     List<String> moduleOptions) {
+    }
+
+    public record BatchOperationResult(int affectedCount) {
     }
 }

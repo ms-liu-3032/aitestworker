@@ -63,4 +63,5 @@ export const ADMIN_NAV_ITEMS: AdminNavItem[] = [
   { key: 'candidates', label: '候选资产审核', icon: '📝' },
   { key: 'scan', label: '系统配置', icon: '🔍' },
   { key: 'loop', label: '学习回灌', icon: '🔄' },
+  { key: 'diagnostics', label: '运行诊断', icon: '🩺' },
 ];

@@ -14,6 +14,7 @@ import java.util.stream.Collectors;
 import com.company.aitest.common.BusinessException;
 import com.company.aitest.common.CurrentUser;
 import com.company.aitest.common.TimeProvider;
+import com.company.aitest.generation.session.GenerationCaseLibraryService;
 import com.company.aitest.llm.gateway.LlmGateway;
 import com.company.aitest.llm.gateway.LlmInvocationRequest;
 import com.company.aitest.llm.gateway.LlmInvocationResponse;
@@ -212,6 +213,33 @@ public class TraceAssetService {
                 """).param("projectId", projectId).param("userId", user.id()).query(this::mapTraceGeneratedCase).list();
     }
 
+    /** Trace group assets are paged and projected without long case bodies for list rendering. */
+    public GeneratedCasePage listGeneratedCasePage(Long projectId, Long traceGroupId, int page, int size,
+                                                    CurrentUser user) {
+        int safePage = Math.max(0, page);
+        int safeSize = Math.max(10, Math.min(size, 100));
+        int offset = safePage * safeSize;
+        Integer total = jdbc.sql("""
+                SELECT COUNT(*) FROM trace_generated_case
+                WHERE project_id = :projectId AND user_id = :userId AND trace_group_id = :traceGroupId
+                """).param("projectId", projectId).param("userId", user.id()).param("traceGroupId", traceGroupId)
+                .query(Integer.class).single();
+        List<TraceGeneratedCaseRecord> items = jdbc.sql("""
+                SELECT id, project_id, user_id, trace_group_id, trace_session_id, issue_clip_id,
+                       case_type, case_title, module_name, NULL AS precondition, NULL AS steps,
+                       NULL AS expected_result, priority, case_scope, case_status,
+                       NULL AS source_refs_json, model_config_id, NULL AS prompt_snapshot,
+                       created_at, updated_at
+                FROM trace_generated_case
+                WHERE project_id = :projectId AND user_id = :userId AND trace_group_id = :traceGroupId
+                ORDER BY updated_at DESC, id DESC
+                LIMIT :limit OFFSET :offset
+                """).param("projectId", projectId).param("userId", user.id()).param("traceGroupId", traceGroupId)
+                .param("limit", safeSize).param("offset", offset)
+                .query(this::mapTraceGeneratedCase).list();
+        return new GeneratedCasePage(items, total == null ? 0 : total, safePage, safeSize);
+    }
+
     @Transactional
     public TestSkillTemplateRecord generateSkillTemplate(Long groupId, GenerateAssetCommand command, CurrentUser user) {
         TraceDataService.TraceGroupDetail detail = traceDataService.detail(groupId, user);
@@ -296,6 +324,121 @@ public class TraceAssetService {
                 where project_id = :projectId
                 order by id desc
                 """).param("projectId", projectId).query(this::mapTestCaseAsset).list();
+    }
+
+    /** Library rows omit long case bodies; fetch a single record only when the detail drawer opens. */
+    public FormalCasePage listFormalCasePage(Long projectId, int page, int size, String keyword,
+                                             List<String> modules, List<String> priorities, List<String> statuses,
+                                             List<String> sources, CurrentUser user) {
+        int safePage = Math.max(0, page);
+        int safeSize = Math.max(10, Math.min(size, 100));
+        int offset = safePage * safeSize;
+        Map<String, Object> params = new HashMap<>();
+        params.put("projectId", projectId);
+        StringBuilder where = new StringBuilder(" WHERE project_id = :projectId");
+        appendFormalCaseFilters(where, params, keyword, modules, priorities, statuses, sources);
+        Integer total = jdbc.sql("SELECT COUNT(*) FROM test_case_asset" + where)
+                .params(params).query(Integer.class).single();
+        params.put("limit", safeSize);
+        params.put("offset", offset);
+        List<TestCaseAssetView> items = jdbc.sql(buildFormalCasePageSql(where.toString()))
+                .params(params)
+                .query(this::mapTestCaseAsset).list();
+        List<String> moduleOptions = jdbc.sql("""
+                SELECT DISTINCT module_name FROM test_case_asset
+                WHERE project_id = :projectId AND module_name IS NOT NULL AND module_name <> ''
+                ORDER BY module_name
+                """).param("projectId", projectId).query(String.class).list();
+        return new FormalCasePage(items, total == null ? 0 : total, safePage, safeSize, moduleOptions);
+    }
+
+    String buildFormalCasePageSql(String whereSql) {
+        String projection = """
+                SELECT id, project_id, case_no, case_title, module_name,
+                       NULL AS precondition, NULL AS steps, NULL AS expected_result,
+                       priority, case_type, case_scope, case_status, submitted_by, submitted_at, exported_at,
+                       source_trace_group_id, source_trace_session_id, source_issue_clip_id, created_at, updated_at
+                FROM test_case_asset
+                """;
+        return String.join("\n",
+                projection.stripTrailing(),
+                whereSql.trim(),
+                "ORDER BY updated_at DESC, id DESC",
+                "LIMIT :limit OFFSET :offset");
+    }
+
+    void appendFormalCaseFilters(StringBuilder sql, Map<String, Object> params,
+                                 String keyword, List<String> modules, List<String> priorities,
+                                 List<String> statuses, List<String> sources) {
+        if (keyword != null && !keyword.isBlank()) {
+            sql.append(" AND (case_title LIKE :keyword OR case_no LIKE :keyword OR module_name LIKE :keyword")
+                    .append(" OR case_type LIKE :keyword OR case_scope LIKE :keyword)");
+            params.put("keyword", "%" + keyword.trim() + "%");
+        }
+        appendCaseAssetInFilter(sql, params, "module_name", "modules", modules);
+        appendCaseAssetInFilter(sql, params, "priority", "priorities", priorities);
+        List<String> normalizedStatuses = statuses == null ? new ArrayList<>() : new ArrayList<>(statuses);
+        normalizedStatuses.removeIf(value -> value == null || value.isBlank());
+        if (normalizedStatuses.remove("ACTIVE")) {
+            normalizedStatuses.add("ACTIVE");
+            normalizedStatuses.add("SUBMITTED");
+        }
+        appendCaseAssetInFilter(sql, params, "case_status", "statuses", normalizedStatuses);
+        List<String> normalizedSources = sources == null ? List.of() : sources.stream()
+                .filter(value -> value != null && !value.isBlank()).map(String::trim).distinct().toList();
+        if (!normalizedSources.isEmpty()) {
+            List<String> conditions = new ArrayList<>();
+            if (normalizedSources.contains("TRACE")) {
+                conditions.add("(source_trace_group_id IS NOT NULL OR source_trace_session_id IS NOT NULL OR source_issue_clip_id IS NOT NULL)");
+            }
+            if (normalizedSources.contains("GENERATION") || normalizedSources.contains("MANUAL")) {
+                conditions.add("(source_trace_group_id IS NULL AND source_trace_session_id IS NULL AND source_issue_clip_id IS NULL)");
+            }
+            if (!conditions.isEmpty()) sql.append(" AND (").append(String.join(" OR ", conditions)).append(")");
+        }
+    }
+
+    private void appendCaseAssetInFilter(StringBuilder sql, Map<String, Object> params, String column,
+                                         String parameter, List<String> values) {
+        List<String> normalized = values == null ? List.of() : values.stream()
+                .filter(value -> value != null && !value.isBlank()).map(String::trim).distinct().toList();
+        if (!normalized.isEmpty()) {
+            sql.append(" AND ").append(column).append(" IN (:").append(parameter).append(")");
+            params.put(parameter, normalized);
+        }
+    }
+
+    public TestCaseAssetView getFormalCase(Long projectId, Long caseId, CurrentUser user) {
+        List<TestCaseAssetView> rows = jdbc.sql("SELECT * FROM test_case_asset WHERE id = :id AND project_id = :projectId")
+                .param("id", caseId).param("projectId", projectId).query(this::mapTestCaseAsset).list();
+        if (rows.isEmpty()) throw new BusinessException("正式用例不存在");
+        return rows.get(0);
+    }
+
+    @Transactional
+    public void deleteFormalCase(Long projectId, Long caseId, CurrentUser user) {
+        TestCaseAssetView asset = getFormalCase(projectId, caseId, user);
+        boolean administrator = user != null && ("ADMIN".equals(user.roleCode()) || "SUB_ADMIN".equals(user.roleCode()));
+        if (!administrator && !Objects.equals(asset.submittedBy(), user.id())) {
+            throw new BusinessException("只能删除自己提交的正式用例");
+        }
+        int deleted = jdbcTemplate.update("DELETE FROM test_case_asset WHERE id = ? AND project_id = ?", caseId, projectId);
+        if (deleted != 1) throw new BusinessException("正式用例删除失败");
+    }
+
+    @Transactional
+    public GenerationCaseLibraryService.BatchOperationResult deleteFormalCases(Long projectId, List<Long> caseIds,
+                                                                                 CurrentUser user) {
+        List<Long> ids = caseIds == null ? List.of() : caseIds.stream()
+                .filter(id -> id != null && id > 0)
+                .distinct()
+                .toList();
+        if (ids.isEmpty()) throw new BusinessException("请至少选择一条正式用例");
+        if (ids.size() > 200) throw new BusinessException("一次最多批量删除 200 条正式用例");
+        for (Long caseId : ids) {
+            deleteFormalCase(projectId, caseId, user);
+        }
+        return new GenerationCaseLibraryService.BatchOperationResult(ids.size());
     }
 
     @Transactional
@@ -980,6 +1123,13 @@ public class TraceAssetService {
                                     LocalDateTime submittedAt, LocalDateTime exportedAt, Long sourceTraceGroupId,
                                     Long sourceTraceSessionId, Long sourceIssueClipId, LocalDateTime createdAt,
                                     LocalDateTime updatedAt) {
+    }
+
+    public record FormalCasePage(List<TestCaseAssetView> items, int total, int page, int size,
+                                 List<String> moduleOptions) {
+    }
+
+    public record GeneratedCasePage(List<TraceGeneratedCaseRecord> items, int total, int page, int size) {
     }
 
     /**

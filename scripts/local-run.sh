@@ -8,13 +8,27 @@ FRONTEND_DIR="${AITEST_FRONTEND_DIR:-$ROOT_DIR/frontend-react}"
 MYSQL_CONTAINER="aitest-mysql"
 MYSQL_VOLUME="aitest_mysql_data"
 MYSQL_IMAGE="mysql:8.4"
-MAVEN_REPO="${AITEST_MAVEN_REPO:-$RUN_DIR/m2/repository}"
+MAVEN_REPO="${AITEST_MAVEN_REPO:-/private/tmp/aitesthub-m2/repository}"
+LOCAL_ENV_FILE="$RUN_DIR/dev-secrets.env"
 
 BACKEND_PID=""
 FRONTEND_PID=""
 WORKER_PID=""
 
 mkdir -p "$LOG_DIR"
+
+ensure_local_secrets() {
+  if [[ ! -f "$LOCAL_ENV_FILE" ]]; then
+    need_cmd openssl "OpenSSL"
+    umask 077
+    cat > "$LOCAL_ENV_FILE" <<EOF
+MYSQL_ROOT_PASSWORD=$(openssl rand -hex 24)
+APP_SECRET_KEY=$(openssl rand -base64 32 | tr -d '\n')
+JWT_SECRET=$(openssl rand -hex 48)
+EOF
+  fi
+  source "$LOCAL_ENV_FILE"
+}
 
 print_step() {
   echo ""
@@ -59,12 +73,6 @@ http_ready() {
   curl -fsS "$url" >/dev/null 2>&1
 }
 
-read_worker_local_token() {
-  local config_path="$HOME/Library/Application Support/AI-Test-Worker/config.json"
-  [[ -f "$config_path" ]] || return
-  node -e 'const fs=require("fs"); const p=process.argv[1]; const c=JSON.parse(fs.readFileSync(p,"utf8")); if (c.localToken) console.log(c.localToken);' "$config_path" 2>/dev/null || true
-}
-
 trap cleanup INT TERM EXIT
 
 print_step "检查本地依赖"
@@ -74,6 +82,7 @@ need_cmd mvn "Maven"
 need_cmd node "Node.js 18+"
 need_cmd npm "npm"
 need_cmd curl "curl"
+ensure_local_secrets
 
 print_step "启动 MySQL"
 if docker ps --format '{{.Names}}' | grep -qx "$MYSQL_CONTAINER"; then
@@ -84,7 +93,7 @@ elif docker ps -a --format '{{.Names}}' | grep -qx "$MYSQL_CONTAINER"; then
 else
   docker run -d \
     --name "$MYSQL_CONTAINER" \
-    -e MYSQL_ROOT_PASSWORD=root \
+    -e MYSQL_ROOT_PASSWORD="$MYSQL_ROOT_PASSWORD" \
     -e MYSQL_DATABASE=aitest \
     -p 3306:3306 \
     -v "$MYSQL_VOLUME:/var/lib/mysql" \
@@ -94,7 +103,7 @@ fi
 
 echo "等待 MySQL 就绪..."
 for i in $(seq 1 90); do
-  if docker exec "$MYSQL_CONTAINER" mysqladmin ping -uroot -proot --silent >/dev/null 2>&1; then
+  if docker exec "$MYSQL_CONTAINER" mysqladmin ping -uroot -p"$MYSQL_ROOT_PASSWORD" --silent >/dev/null 2>&1; then
     echo "MySQL 已就绪。"
     break
   fi
@@ -111,7 +120,7 @@ print_step "启动主平台"
 if http_ready "http://localhost:8080/api/auth/init-status"; then
   echo "后端已有可用服务，复用：http://localhost:8080"
 else
-  (cd "$ROOT_DIR/backend" && mvn -Dmaven.repo.local="$MAVEN_REPO" spring-boot:run >"$LOG_DIR/backend.log" 2>&1) &
+  (cd "$ROOT_DIR/backend" && DB_PASSWORD="$MYSQL_ROOT_PASSWORD" APP_SECRET_KEY="$APP_SECRET_KEY" JWT_SECRET="$JWT_SECRET" mvn -Dmaven.repo.local="$MAVEN_REPO" spring-boot:run >"$LOG_DIR/backend.log" 2>&1) &
   BACKEND_PID=$!
 fi
 
@@ -135,11 +144,7 @@ if [[ -f "$WORKER_CONFIG" ]] && grep -q '"bindStatus"[[:space:]]*:[[:space:]]*"B
     WORKER_PID=$!
   fi
   wait_http "http://127.0.0.1:17321/health" "本地采集器" 30
-  WORKER_LOCAL_TOKEN="$(read_worker_local_token)"
-  if [[ -n "$WORKER_LOCAL_TOKEN" ]]; then
-    echo "本地访问令牌：$WORKER_LOCAL_TOKEN"
-    echo "请填到前端“执行轨迹 -> 快速采集 -> 本地令牌”。"
-  fi
+  echo "本地采集器已启动。本地访问令牌不会输出到终端日志。"
 else
   echo ""
   echo "本地采集器尚未绑定，进入前端“执行轨迹”页面生成绑定码后，另开终端执行："
