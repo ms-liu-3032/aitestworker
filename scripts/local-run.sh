@@ -8,7 +8,7 @@ FRONTEND_DIR="${AITEST_FRONTEND_DIR:-$ROOT_DIR/frontend-react}"
 MYSQL_CONTAINER="aitest-mysql"
 MYSQL_VOLUME="aitest_mysql_data"
 MYSQL_IMAGE="mysql:8.4"
-MAVEN_REPO="${AITEST_MAVEN_REPO:-/private/tmp/aitesthub-m2/repository}"
+MAVEN_REPO="${AITEST_MAVEN_REPO:-${TMPDIR:-/tmp}/aitest-m2/repository}"
 LOCAL_ENV_FILE="$RUN_DIR/dev-secrets.env"
 
 BACKEND_PID=""

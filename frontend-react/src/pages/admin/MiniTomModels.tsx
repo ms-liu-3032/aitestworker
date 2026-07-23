@@ -565,7 +565,7 @@ export default function MiniTomModels() {
                       <div key={reference.taskId} className="px-3 py-3">
                         <div className="break-words text-sm font-medium text-gray-900">{reference.taskName || `任务 #${reference.taskId}`}</div>
                         <div className="text-[11px] text-gray-500 mt-1">
-                          #{reference.taskId} · {reference.status || '-'} · {formatDateTime(reference.createdAt)}
+                          #{reference.taskId} · {statusLabel(reference.status)} · {formatDateTime(reference.createdAt)}
                         </div>
                       </div>
                     ))}

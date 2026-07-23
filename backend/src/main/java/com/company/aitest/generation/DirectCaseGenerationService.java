@@ -39,9 +39,9 @@ public class DirectCaseGenerationService {
             你是资深测试工程师。请根据输入需求直接生成功能测试用例草稿。
             你必须严格只返回 JSON 对象，不要输出任何额外解释，不要输出 markdown。
             JSON 对象只允许包含 cases 一个键，格式为：
-            {"cases":[{"caseTitle":"...","moduleName":"...","precondition":"...","steps":"1. ...","expectedResult":"1. ...","priority":"P1","caseStrategy":"NODE_FOCUSED/FLOW_COMPOSED","sourceCasePlan":"CP1","sourceCaseDesign":"CD1","sourceTestPoint":"...","sourceTestPointRefs":["TP1"],"sourceBasis":["..."],"unsupportedItems":[],"confidence":0.8}]}
+            {"cases":[{"caseTitle":"...","moduleName":"...","precondition":"...","steps":"1. ...","expectedResult":"1. ...","priority":"P1","caseStrategy":"NODE_FOCUSED/FLOW_COMPOSED","scenarioType":"POSITIVE","designMethods":["场景法"],"designCoverage":["VALID_FLOW"],"sourceCasePlan":"CP1","sourceCaseDesign":"CD1","sourceTestPoint":"...","sourceTestPointRefs":["TP1"],"sourceBasis":["..."],"unsupportedItems":[],"confidence":0.8}]}
             cases 数组每个对象字段固定为：
-            caseTitle, moduleName, precondition, steps, expectedResult, priority, caseStrategy, sourceCasePlan, sourceCaseDesign, sourceTestPoint, sourceTestPointRefs, sourceBasis, unsupportedItems, confidence
+            caseTitle, moduleName, precondition, steps, expectedResult, priority, caseStrategy, scenarioType, designMethods, designCoverage, sourceCasePlan, sourceCaseDesign, sourceTestPoint, sourceTestPointRefs, sourceBasis, unsupportedItems, confidence
 
             【要求】
             1. caseTitle：用例名称，简洁概括测试场景。
@@ -58,6 +58,8 @@ public class DirectCaseGenerationService {
             12. unsupportedItems：数组，写明没有证据支撑但为了可执行性暂时假设的内容；没有则返回空数组。
             13. confidence：0~1 数字。证据不足或 unsupportedItems 非空时不得高于 0.65。
             14. caseStrategy=NODE_FOCUSED 时，已完成的前置测试点只能写入 precondition，步骤与预期只验证当前节点；caseStrategy=FLOW_COMPOSED 时，按测试点依赖顺序覆盖完整端到端流程。不得根据具体业务名称硬编码任何流程。
+            15. caseType 固定属于功能用例，但 scenarioType 必须表达场景性质，只允许 POSITIVE/NEGATIVE/BOUNDARY/COMBINATION/STATE/RECOVERY；不能把所有功能用例都标成 POSITIVE。
+            16. designMethods 必须列出本条用例实际使用的设计方法；designCoverage 必须列出本条用例实际兑现的覆盖义务。一个 CD 可以返回多条用例共同完成其全部 design_methods 和 coverage_requirements，但不得只返回代表性正向样例。
 
             steps 和 expectedResult 的条数必须一致，确保每一步都有对应预期。
             不允许生成与输入分析/测试点无关的业务场景；没有证据时宁可输出低置信草稿，也不要编造为事实。
@@ -335,7 +337,32 @@ public class DirectCaseGenerationService {
                         "用例生成批次 " + batchIndex + " 失败：" + emptySafe(response.errorMessage()));
             }
             List<CaseDraftInput> inputs = parseOutput(response.content(), task.id());
-            validateBatchCases(payload, inputs);
+            try {
+                validateBatchCases(payload, inputs);
+            } catch (LlmRuntimeException incomplete) {
+                if (incomplete.errorCode() != LlmErrorCode.OUTPUT_PARSE_ERROR) throw incomplete;
+                generationTaskService.touchProgress(task.id());
+                LlmInvocationResponse repair = llmGateway.invoke(new LlmInvocationRequest(
+                        UUID.randomUUID().toString(), user.id(), projectId, task.id(),
+                        "GENERATION_CASES_COVERAGE_REPAIR_" + batchIndex, LlmStage.TEST_CASE_GEN,
+                        task.modelConfigId(), null, null,
+                        Map.of("batchIndex", batchIndex, "repair", true, "casePlanCount", plans.size()),
+                        systemPrompt,
+                        buildCasePlanBatchPrompt(context, payload)
+                                + "\n\n【上轮已生成用例】\n" + response.content()
+                                + "\n\n【必须补齐】\n" + incomplete.getMessage()
+                                + "\n只返回新增且不重复的补齐用例，不要复写上轮已完成用例。",
+                        null, CASE_GENERATION_MAX_TOKENS));
+                if (repair.status() != LlmInvocationStatus.OK) {
+                    throw new LlmRuntimeException(parseErrorCode(repair.errorCode()),
+                            "用例覆盖补齐失败：" + emptySafe(repair.errorMessage()));
+                }
+                List<CaseDraftInput> repairedInputs = parseOutput(repair.content(), task.id());
+                List<CaseDraftInput> merged = mergeDistinctCaseInputs(inputs, repairedInputs);
+                validateBatchCases(payload, merged);
+                inputs = merged;
+                outputs.add(repair.content());
+            }
             allDrafts.addAll(saveDraftInputs(projectId, task.id(), inputs, user));
             generationTaskService.touchProgress(task.id());
             completedPlans.addAll(payload.planIds());
@@ -402,6 +429,7 @@ public class DirectCaseGenerationService {
 
                     只生成本批次 CP 计划的用例。每条 case.sourceCasePlan 必须原样填写所属计划编号；
                     每个计划中的每个 case_designs.id 至少生成一条对应草稿，case.sourceCaseDesign 必须原样引用该 CD 编号；
+                    每个 CD 的 design_methods 和 coverage_requirements 是强制完成清单：可由多条不重复功能用例共同完成，返回 case.designMethods 与 case.designCoverage 标明本条兑现项；
                     每个计划的 source_test_point_refs 都必须至少被一条草稿引用；同一 NODE_FOCUSED 计划中的多个 TP 是一个连贯验证目标，可合并为一条或多条不重复草稿。NODE_FOCUSED 的前序点只能根据“上游前置状态素材”写成可读业务状态的 precondition，
                     不得把 TP/CP/CD 等内部编号写入 precondition、steps 或 expectedResult，也不得把前序节点动作重复写入步骤；
                     FLOW_COMPOSED 按计划依赖顺序生成完整流程。不得输出代表性样例后提前结束，不得生成批次外计划的用例。
@@ -425,6 +453,12 @@ public class DirectCaseGenerationService {
             List<CaseDraftInput> planInputs = inputs.stream()
                     .filter(input -> planId.equals(input.sourceCasePlan())).toList();
             List<Map<String, Object>> planPoints = payload.pointsByPlan().getOrDefault(planId, List.of());
+            List<String> qualityProblems = caseExecutionQualityProblems(planInputs);
+            if (!qualityProblems.isEmpty()) {
+                throw new LlmRuntimeException(LlmErrorCode.OUTPUT_PARSE_ERROR,
+                        "用例生成计划节点 " + planId + " 存在不可执行用例："
+                                + String.join("、", qualityProblems));
+            }
             List<String> missingPoints = missingPlanTestPoints(planPoints, planInputs);
             if (!missingPoints.isEmpty()) {
                 throw new LlmRuntimeException(LlmErrorCode.OUTPUT_PARSE_ERROR,
@@ -441,7 +475,65 @@ public class DirectCaseGenerationService {
                 throw new LlmRuntimeException(LlmErrorCode.OUTPUT_PARSE_ERROR,
                         "用例生成计划节点 " + planId + " 未覆盖用例设计项：" + String.join("、", missingDesigns));
             }
+            List<String> missingObligations = missingDesignObligations(
+                    payload.designsByPlan().getOrDefault(planId, List.of()), planInputs);
+            if (!missingObligations.isEmpty()) {
+                throw new LlmRuntimeException(LlmErrorCode.OUTPUT_PARSE_ERROR,
+                        "用例生成计划节点 " + planId + " 未完成测试方法或覆盖义务："
+                                + String.join("、", missingObligations));
+            }
         }
+    }
+
+    private List<String> caseExecutionQualityProblems(List<CaseDraftInput> cases) {
+        List<String> problems = new ArrayList<>();
+        java.util.regex.Pattern internalRef = java.util.regex.Pattern.compile("(?i)\\b(?:TP|CP|CD)\\d+\\b");
+        for (CaseDraftInput item : cases) {
+            String label = item.caseTitle().isBlank() ? "未命名用例" : item.caseTitle();
+            int stepCount = countActionLines(item.steps());
+            int expectedCount = countActionLines(item.expectedResult());
+            if (stepCount == 0 || expectedCount == 0 || stepCount != expectedCount) {
+                problems.add(label + "/步骤与预期未一一对应");
+            }
+            if (item.sourceTestPointRefs().isEmpty()) {
+                problems.add(label + "/缺少测试点来源");
+            }
+            if (item.sourceBasis().isEmpty()) {
+                problems.add(label + "/缺少需求或资产依据");
+            }
+            if (item.designMethods().isEmpty() || item.designCoverage().isEmpty()) {
+                problems.add(label + "/缺少设计方法或覆盖声明");
+            }
+            String visibleText = item.precondition() + "\n" + item.steps() + "\n" + item.expectedResult();
+            if (internalRef.matcher(visibleText).find()) {
+                problems.add(label + "/用户可见内容包含内部编排编号");
+            }
+        }
+        return problems.stream().distinct().toList();
+    }
+
+    private List<String> missingDesignObligations(List<Map<String, Object>> designs, List<CaseDraftInput> cases) {
+        List<String> missing = new ArrayList<>();
+        for (Map<String, Object> design : designs) {
+            String designId = str(design.get("id"), "");
+            List<CaseDraftInput> designCases = cases.stream()
+                    .filter(item -> designId.equals(item.sourceCaseDesign())).toList();
+            java.util.Set<String> methods = designCases.stream().flatMap(item -> item.designMethods().stream())
+                    .collect(java.util.stream.Collectors.toCollection(java.util.LinkedHashSet::new));
+            java.util.Set<String> coverage = designCases.stream().flatMap(item -> item.designCoverage().stream())
+                    .collect(java.util.stream.Collectors.toCollection(java.util.LinkedHashSet::new));
+            List<String> requiredMethods = listValue(design.get("design_methods"));
+            List<String> requiredCoverage = listValue(design.get("coverage_requirements"));
+            requiredMethods.stream().filter(item -> !methods.contains(item))
+                    .forEach(item -> missing.add(designId + "/方法:" + item));
+            requiredCoverage.stream().filter(item -> !coverage.contains(item))
+                    .forEach(item -> missing.add(designId + "/覆盖:" + item));
+            String requiredScenario = FunctionalTestDesignPolicy.normalizeScenarioType(str(design.get("scenario_type"), "POSITIVE"));
+            if (!designCases.isEmpty() && designCases.stream().noneMatch(item -> requiredScenario.equals(item.scenarioType()))) {
+                missing.add(designId + "/场景:" + requiredScenario);
+            }
+        }
+        return missing;
     }
 
     private record CasePlanBatchPayload(List<Map<String, Object>> plans,
@@ -558,13 +650,14 @@ public class DirectCaseGenerationService {
             String caseNo = "TC-" + taskId + "-" + i++;
             jdbcTemplate.update("""
                     insert into test_case_draft(task_id, project_id, test_point_id, case_no, case_title, project_name,
-                      module_name, precondition, steps, expected_result, priority, case_type, design_method,
+                      module_name, precondition, steps, expected_result, priority, case_type, scenario_type, design_method,
                       source_refs_json, is_assumption, assumption_note, compliance_mark, user_feedback, quality_status,
                       version_no, asset_status, case_scope, case_status, created_by, created_at, updated_at)
-                    values (?, ?, null, ?, ?, null, ?, ?, ?, ?, ?, 'FUNCTIONAL', '场景法', ?, 0, null, 'UNMARKED',
+                    values (?, ?, null, ?, ?, null, ?, ?, ?, ?, ?, 'FUNCTIONAL', ?, ?, ?, 0, null, 'UNMARKED',
                       null, ?, 1, 'DRAFT', 'PERSONAL', 'DRAFT', ?, ?, ?)
                     """, taskId, projectId, caseNo, item.caseTitle(), item.moduleName(), item.precondition(),
                     item.steps(), item.expectedResult(), normalizePriority(item.priority()),
+                    item.scenarioType(), String.join(" + ", item.designMethods()),
                     buildSourceRefsJson(taskId, item), draftQualityStatus(item), user.id(), now, now);
             Long id = jdbc.sql("select last_insert_id()").query(Long.class).single();
             saved.add(getDraftById(id));
@@ -712,6 +805,8 @@ public class DirectCaseGenerationService {
                                                                     List<Map<String, Object>> casePlans) {
         Map<String, java.util.Set<String>> coveredPointsByPlan = new java.util.LinkedHashMap<>();
         Map<String, java.util.Set<String>> coveredDesignsByPlan = new java.util.LinkedHashMap<>();
+        Map<String, java.util.Set<String>> coveredMethodsByDesign = new java.util.LinkedHashMap<>();
+        Map<String, java.util.Set<String>> coveredRequirementsByDesign = new java.util.LinkedHashMap<>();
         for (String ref : refs) {
             try {
                 var node = objectMapper.readTree(ref);
@@ -728,6 +823,11 @@ public class DirectCaseGenerationService {
                 String design = node.path("sourceCaseDesign").asText("");
                 if (!design.isBlank()) {
                     coveredDesignsByPlan.computeIfAbsent(plan, ignored -> new java.util.LinkedHashSet<>()).add(design);
+                    String key = plan + "|" + design;
+                    addJsonArrayValues(node.path("designMethods"), coveredMethodsByDesign
+                            .computeIfAbsent(key, ignored -> new java.util.LinkedHashSet<>()));
+                    addJsonArrayValues(node.path("designCoverage"), coveredRequirementsByDesign
+                            .computeIfAbsent(key, ignored -> new java.util.LinkedHashSet<>()));
                 }
             } catch (Exception ignored) {
                 // Historical drafts cannot be used as a case-plan checkpoint.
@@ -742,14 +842,31 @@ public class DirectCaseGenerationService {
                     .map(item -> str(item.get("id"), ""))
                     .filter(id -> !id.isBlank())
                     .collect(java.util.stream.Collectors.toCollection(java.util.LinkedHashSet::new));
+            boolean obligationsComplete = readObjectList(plan.get("case_designs")).stream().allMatch(design -> {
+                String designId = str(design.get("id"), "");
+                String key = planId + "|" + designId;
+                return coveredMethodsByDesign.getOrDefault(key, java.util.Set.of())
+                                .containsAll(listValue(design.get("design_methods")))
+                        && coveredRequirementsByDesign.getOrDefault(key, java.util.Set.of())
+                                .containsAll(listValue(design.get("coverage_requirements")));
+            });
             if (!requiredPoints.isEmpty()
                     && !requiredDesigns.isEmpty()
                     && coveredPointsByPlan.getOrDefault(planId, java.util.Set.of()).containsAll(requiredPoints)
-                    && coveredDesignsByPlan.getOrDefault(planId, java.util.Set.of()).containsAll(requiredDesigns)) {
+                    && coveredDesignsByPlan.getOrDefault(planId, java.util.Set.of()).containsAll(requiredDesigns)
+                    && obligationsComplete) {
                 completed.add(planId);
             }
         }
         return completed;
+    }
+
+    private void addJsonArrayValues(com.fasterxml.jackson.databind.JsonNode node, java.util.Set<String> target) {
+        if (!node.isArray()) return;
+        node.forEach(item -> {
+            String value = item.asText("");
+            if (!value.isBlank()) target.add(value);
+        });
     }
 
     public List<TestCaseDraftView> listDrafts(Long projectId, Long taskId) {
@@ -872,6 +989,9 @@ public class DirectCaseGenerationService {
                         steps,
                         expectedResult,
                         str(row.get("priority"), "P2"),
+                        FunctionalTestDesignPolicy.normalizeScenarioType(str(row.get("scenarioType"), "POSITIVE")),
+                        normalizedDesignMethods(row),
+                        listValue(row.get("designCoverage")),
                         str(row.get("sourceCasePlan"), ""),
                         str(row.get("sourceCaseDesign"), ""),
                         str(row.get("sourceTestPoint"), ""),
@@ -916,6 +1036,25 @@ public class DirectCaseGenerationService {
             case "P0", "P1", "P2", "P3", "P4" -> v;
             default -> "P2";
         };
+    }
+
+    private List<String> normalizedDesignMethods(Map<String, Object> row) {
+        List<String> methods = listValue(row.get("designMethods"));
+        if (!methods.isEmpty()) return methods.stream()
+                .map(FunctionalTestDesignPolicy::normalizeDesignMethod).distinct().toList();
+        String legacy = str(row.get("designMethod"), "场景法");
+        return List.of(FunctionalTestDesignPolicy.normalizeDesignMethod(legacy));
+    }
+
+    private List<CaseDraftInput> mergeDistinctCaseInputs(List<CaseDraftInput> original,
+                                                          List<CaseDraftInput> supplements) {
+        Map<String, CaseDraftInput> unique = new java.util.LinkedHashMap<>();
+        java.util.stream.Stream.concat(original.stream(), supplements.stream()).forEach(item -> {
+            String key = item.sourceCasePlan() + "|" + item.sourceCaseDesign() + "|"
+                    + item.caseTitle().trim() + "|" + item.steps().trim();
+            unique.putIfAbsent(key, item);
+        });
+        return new ArrayList<>(unique.values());
     }
 
     private String str(Object value, String defaultValue) {
@@ -988,6 +1127,9 @@ public class DirectCaseGenerationService {
             refs.put("taskId", taskId);
             refs.put("sourceCasePlan", item.sourceCasePlan());
             refs.put("sourceCaseDesign", item.sourceCaseDesign());
+            refs.put("scenarioType", item.scenarioType());
+            refs.put("designMethods", item.designMethods());
+            refs.put("designCoverage", item.designCoverage());
             refs.put("sourceTestPoint", item.sourceTestPoint());
             refs.put("sourceTestPointRefs", item.sourceTestPointRefs());
             refs.put("sourceBasis", item.sourceBasis());
@@ -1022,7 +1164,9 @@ public class DirectCaseGenerationService {
     }
 
     record CaseDraftInput(String caseTitle, String moduleName, String precondition, String steps,
-                          String expectedResult, String priority, String sourceCasePlan, String sourceCaseDesign, String sourceTestPoint,
+                          String expectedResult, String priority, String scenarioType,
+                          List<String> designMethods, List<String> designCoverage,
+                          String sourceCasePlan, String sourceCaseDesign, String sourceTestPoint,
                           List<String> sourceTestPointRefs, List<String> sourceBasis, List<String> unsupportedItems, double confidence) {
     }
 

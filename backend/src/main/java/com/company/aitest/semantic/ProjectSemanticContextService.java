@@ -517,7 +517,8 @@ public class ProjectSemanticContextService {
                 SELECT we.entry_type, we.title, we.content, we.confidence, wp.scope
                 FROM wiki_entry we
                 JOIN wiki_pack wp ON we.pack_id = wp.id
-                WHERE wp.status = 'ACTIVE' AND we.effective_status = 'ACTIVE'
+                WHERE wp.status = 'ACTIVE' AND wp.review_status = 'APPROVED'
+                  AND we.review_status = 'APPROVED' AND we.effective_status = 'ACTIVE'
                   AND (wp.project_id = ? OR wp.scope IN ('REUSABLE', 'SYSTEM'))
                 ORDER BY
                     CASE wp.scope WHEN 'PROJECT' THEN 1 WHEN 'REUSABLE' THEN 2 WHEN 'SYSTEM' THEN 3 END,

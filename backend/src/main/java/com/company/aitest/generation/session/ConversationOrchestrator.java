@@ -531,6 +531,10 @@ public class ConversationOrchestrator {
 
     private String buildNextStepPrompt(RequirementAnalysisRecord analysis) {
         if (analysis != null && "NEED_SCOPE_CONFIRMATION".equals(analysis.status())) {
+            if (hasClarificationQuestions(analysis)) {
+                return "\n\n上方【需要澄清】会影响本期范围和后续测试点。请先在输入框补充答案，"
+                        + "系统只会重新执行需求理解与范围识别，不会重复生成测试点；澄清完成后再确认右侧本期范围。";
+            }
             return "\n\n请先在右侧【本期需求范围】中确认哪些需求需要生成测试点、哪些仅作参考或排除。"
                     + "确认后系统会继续生成覆盖矩阵和测试点；范围确认前不会展开后续模型节点。";
         }

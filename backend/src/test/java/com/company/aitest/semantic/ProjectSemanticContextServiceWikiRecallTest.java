@@ -27,6 +27,10 @@ class ProjectSemanticContextServiceWikiRecallTest {
                 contains("project_id = ? OR wp.scope IN ('REUSABLE', 'SYSTEM')"),
                 any(org.springframework.jdbc.core.RowMapper.class),
                 eq(10L));
+        verify(jdbcTemplate).query(
+                contains("we.review_status = 'APPROVED'"),
+                any(org.springframework.jdbc.core.RowMapper.class),
+                eq(10L));
     }
 
     @Test

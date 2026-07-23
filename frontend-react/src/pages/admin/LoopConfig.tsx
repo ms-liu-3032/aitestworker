@@ -6,6 +6,7 @@ import {
   approveLoopCluster, rejectLoopCluster, consumeLoopCandidates,
   type LoopEvent, type LoopCluster
 } from '../../services/api';
+import { statusLabel } from '../../utils/displayLabels';
 
 const statusColors: Record<string, string> = {
   PENDING: 'bg-yellow-50 text-yellow-700',
@@ -105,7 +106,7 @@ export default function LoopConfig() {
                 <div className="flex items-center gap-2 mb-1">
                   <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-600">{event.eventType}</span>
                   <span className={`text-[10px] px-1.5 py-0.5 rounded ${statusColors[event.status] || 'bg-gray-100 text-gray-600'}`}>
-                    {event.status}
+                    {statusLabel(event.status)}
                   </span>
                   {event.suggestedAssetType && (
                     <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-50 text-purple-700">{event.suggestedAssetType}</span>
@@ -130,7 +131,7 @@ export default function LoopConfig() {
                   <span className="text-sm font-medium text-gray-900">{cluster.theme || '未命名聚类'}</span>
                   <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-600">{cluster.eventCount} 条事件</span>
                   <span className={`text-[10px] px-1.5 py-0.5 rounded ${statusColors[cluster.status] || 'bg-gray-100 text-gray-600'}`}>
-                    {cluster.status}
+                    {statusLabel(cluster.status)}
                   </span>
                 </div>
                 {cluster.suggestedAction && <div className="text-xs text-gray-500 mt-1">{cluster.suggestedAction}</div>}

@@ -11,6 +11,7 @@ import {
   type FormalCase,
   type LocalCaseDraft,
 } from '../../services/api';
+import { statusLabel } from '../../utils/displayLabels';
 
 type TabKey = 'summaries' | 'drafts' | 'formal' | 'skills' | 'tools';
 
@@ -298,7 +299,7 @@ export default function TestAssets() {
                   </div>
                 </div>
                   <div className="flex shrink-0 flex-wrap items-center gap-3 sm:justify-end">
-                    <span className="text-[11px] font-medium px-2 py-0.5 rounded bg-gray-100 text-gray-700">{item.status || 'UNKNOWN'}</span>
+                    <span className="text-[11px] font-medium px-2 py-0.5 rounded bg-gray-100 text-gray-700">{statusLabel(item.status)}</span>
                     {item.traceGroupId && (
                       <Link
                         to={`/projects/${pid}/trace`}
@@ -402,7 +403,7 @@ export default function TestAssets() {
                     <div className="text-xs text-gray-500 mt-1">{item.description || '暂无说明'}</div>
                   </div>
                   <div className="flex shrink-0 flex-wrap items-center gap-3 sm:justify-end">
-                    <span className="text-[11px] font-medium px-2 py-0.5 rounded bg-gray-100 text-gray-700">{item.status || 'ACTIVE'}</span>
+                    <span className="text-[11px] font-medium px-2 py-0.5 rounded bg-gray-100 text-gray-700">{statusLabel(item.status || 'ACTIVE')}</span>
                     <Link to={`/projects/${pid}/trace`} className="text-xs text-sky-600 hover:text-sky-800 transition-colors">
                       去轨迹页继续沉淀
                     </Link>
@@ -420,7 +421,7 @@ export default function TestAssets() {
                     <div className="text-xs text-gray-500 mt-1">{item.description || '暂无说明'}</div>
                   </div>
                   <div className="flex shrink-0 flex-wrap items-center gap-3 sm:justify-end">
-                    <span className="text-[11px] font-medium px-2 py-0.5 rounded bg-gray-100 text-gray-700">{item.status || 'ACTIVE'}</span>
+                    <span className="text-[11px] font-medium px-2 py-0.5 rounded bg-gray-100 text-gray-700">{statusLabel(item.status || 'ACTIVE')}</span>
                     <Link to={`/projects/${pid}/trace`} className="text-xs text-sky-600 hover:text-sky-800 transition-colors">
                       去轨迹页继续沉淀
                     </Link>

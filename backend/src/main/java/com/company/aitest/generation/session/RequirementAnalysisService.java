@@ -19,9 +19,11 @@ import com.company.aitest.common.TomUsageMode;
 import com.company.aitest.generation.DirectCaseGenerationService;
 import com.company.aitest.generation.GenerationTaskCheckpointService;
 import com.company.aitest.generation.GenerationTaskService;
+import com.company.aitest.generation.FunctionalTestDesignPolicy;
 import com.company.aitest.llm.gateway.*;
 import com.company.aitest.minitom.MiniTomService;
 import com.company.aitest.semantic.ProjectSemanticContextService;
+import com.company.aitest.knowledge.KnowledgeDepositionService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -50,6 +52,7 @@ public class RequirementAnalysisService {
     private static final int MAX_ANALYSIS_NODE_EXECUTION_ATTEMPTS = 2;
     private static final int MAX_CORE_PATCH_ATTEMPTS = 5;
     private static final int MAX_TEST_UNIT_REPAIR_ATTEMPTS = 3;
+    private static final int MAX_COVERAGE_REPAIR_ATTEMPTS = 3;
     private static final int MAX_COVERAGE_BATCH_CHARS = 8_000;
     private static final int MAX_COVERAGE_WORK_ITEMS_PER_CALL = 4;
     private static final int MAX_COVERAGE_DIMENSIONS_PER_TEST_POINT_NODE = 1;
@@ -72,6 +75,7 @@ public class RequirementAnalysisService {
     private final ProjectSemanticContextService semanticContextService;
     private final com.company.aitest.loop.LoopIntegrationService loopIntegrationService;
     private final GenerationTaskCheckpointService taskCheckpointService;
+    private KnowledgeDepositionService knowledgeDepositionService;
 
     @org.springframework.beans.factory.annotation.Autowired
     public RequirementAnalysisService(JdbcClient jdbc, JdbcTemplate jdbcTemplate, TimeProvider timeProvider,
@@ -108,6 +112,11 @@ public class RequirementAnalysisService {
         this(jdbc, jdbcTemplate, timeProvider, llmGateway, sessionService, messageService, attachmentService,
                 miniTomService, taskService, directCaseGenerationService, semanticContextService,
                 loopIntegrationService, null);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setKnowledgeDepositionService(KnowledgeDepositionService knowledgeDepositionService) {
+        this.knowledgeDepositionService = knowledgeDepositionService;
     }
 
     public RequirementAnalysisRecord analyze(Long sessionId, CurrentUser user) {
@@ -535,7 +544,7 @@ public class RequirementAnalysisService {
                                                               int version,
                                                               List<RequirementScopeDecision> decisions,
                                                               CurrentUser user) {
-        sessionService.get(null, sessionId, user);
+        GenerationSessionRecord session = sessionService.get(null, sessionId, user);
         RequirementAnalysisRecord analysis = getAnalysis(sessionId, version);
         if (!"NEED_SCOPE_CONFIRMATION".equals(analysis.status())
                 && !"SCOPE_CONFIRMED".equals(analysis.status())) {
@@ -591,6 +600,10 @@ public class RequirementAnalysisService {
                 "reviewed_at", timeProvider.now().toString()));
         jdbcTemplate.update("UPDATE requirement_analysis SET analysis_result = ?, status = 'SCOPE_CONFIRMED', updated_at = ? WHERE id = ?",
                 toJson(result), timeProvider.now(), analysis.id());
+        if (knowledgeDepositionService != null) {
+            knowledgeDepositionService.depositConfirmedRequirement(session.projectId(), analysis.id(), analysis.version(),
+                    toJson(result), analysis.clarificationQuestions(), analysis.clarificationAnswers(), user);
+        }
         messageService.appendSystemMessage(sessionId,
                 "需求范围已确认：本期生成 " + generate + " 项，仅参考 " + reference + " 项，排除 " + excluded + " 项。正在等待生成测试点。");
         return getAnalysis(sessionId, version);
@@ -696,7 +709,7 @@ public class RequirementAnalysisService {
                                                             int version,
                                                             List<TestPointScopeDecision> decisions,
                                                             CurrentUser user) {
-        sessionService.get(null, sessionId, user);
+        GenerationSessionRecord session = sessionService.get(null, sessionId, user);
         RequirementAnalysisRecord analysis = getAnalysis(sessionId, version);
         if (analysis == null) throw new BusinessException("没有对应版本的分析结果");
         if ("GENERATED".equals(analysis.status())) {
@@ -761,6 +774,10 @@ public class RequirementAnalysisService {
         String analysisResultJson = toJson(result);
         jdbcTemplate.update("UPDATE requirement_analysis SET test_points = ?, analysis_result = ?, status = 'TEST_POINT_SCOPE_CONFIRMED', updated_at = ? WHERE id = ?",
                 testPointsJson, analysisResultJson, timeProvider.now(), analysis.id());
+        if (knowledgeDepositionService != null) {
+            knowledgeDepositionService.depositConfirmedTestPoints(session.projectId(), analysis.id(), analysis.version(),
+                    testPointsJson, user);
+        }
         messageService.appendSystemMessage(sessionId,
                 "测试点范围已确认：生成 " + generateCount + " 项，仅参考 " + referenceCount + " 项，排除 " + excludedCount + " 项。");
         return getAnalysis(sessionId, version);
@@ -1283,7 +1300,7 @@ public class RequirementAnalysisService {
                         "question": "评审前建议确认的问题",
                         "reason": "为什么要问",
                         "impact": "不确认会影响什么",
-                        "source_basis": ["引用的 TOM/页面/业务包/轨迹依据"]
+                        "source_basis": ["引用的 TOM/LLM Wiki/页面/业务包/轨迹依据"]
                       }
                     ],
                     "risk_scenarios": ["异常/状态/数据/权限/幂等等风险场景"],
@@ -1359,9 +1376,10 @@ public class RequirementAnalysisService {
                       "related_module": "关联模块",
                       "related_page": "关联页面",
                       "related_flow": "关联流程",
-                      "source_basis": ["必须引用下方 TOM/页面/业务包/轨迹证据中的原文名称"],
+                      "source_basis": ["必须引用下方 TOM/LLM Wiki/页面/业务包/轨迹证据中的原文名称"],
                       "source_refs": {
                         "tom_node_refs": ["TOM 节点名称"],
+                        "wiki_refs": ["LLM Wiki 条目名称"],
                         "page_refs": ["页面或路由"],
                         "business_pack_refs": ["业务包条目"],
                         "trace_refs": ["轨迹/步骤/摘要依据"]
@@ -1398,7 +1416,7 @@ public class RequirementAnalysisService {
                 5. review_risk_questions 是评审/分析阶段的风险确认问题，与 clarification_questions 分离输出
                 6. 如果某个风险问题足以阻断准确分析，应同时进入 clarification_questions
                 7. 测试点只是分析结果，不是最终用例
-                8. 必须优先使用"项目证据上下文"中的 TOM、页面画像、业务包、轨迹摘要作为 source_basis
+                8. 必须优先使用"项目证据上下文"中的 TOM、LLM Wiki、页面画像、业务包、轨迹摘要作为 source_basis
                 9. 没有证据支持的内容必须标记 needs_confirmation=true 和 coverage_status=LOW_EVIDENCE，不允许伪装成已确认事实
                 10. 测试点之间不要混合多个业务目标；每个测试点只描述一个可验证目标
                 11. 原型/页面上已有控件，不等于本次新增测试范围
@@ -1419,7 +1437,7 @@ public class RequirementAnalysisService {
                     - UNKNOWN：无法判断
                 14. 当 input_sources 包含 BLUEPRINT 或 PROTO_OR_DESIGN 时，必须在 review_risk_questions 中追加：
                     "原型/设计稿控件存在不等于本次新增测试范围，需确认具体需求变更点"
-                15. review_risk_questions 中的问题必须标注 source_basis（引用 TOM/页面/业务包/轨迹依据），不允许无依据的风险问题
+                15. review_risk_questions 中的问题必须标注 source_basis（引用 TOM/LLM Wiki/页面/业务包/轨迹依据），不允许无依据的风险问题
                 16. 测试点必须按三层递进拆解：
                     - FUNCTIONAL：核心主流程 / Happy Path，对应 MAIN_FLOW/BRANCH
                     - EXCEPTION：异常、失败、权限、状态异常，对应 EXCEPTION/AUTH/STATE
@@ -1778,13 +1796,25 @@ public class RequirementAnalysisService {
                 promptTemplateId, taskTypePrefix, requirementText, tomSnapshot, semanticContext,
                 userSupplement, previousContext);
         String questions = ensureClarificationQuestions(coreStage.coreJson(), coreStage.clarificationQuestions());
-        String scopedCore = initializeRequirementAtomScopes(coreStage.coreJson());
+        String scopedCore = initializeRequirementAtomScopes(stripDownstreamAnalysisAssets(coreStage.coreJson()));
         scopedCore = initializeRequirementScopeReview(scopedCore);
         String analysisResult = enrichAnalysisResult(scopedCore, semanticContext, questions);
         ensureUsableAnalysisResult(analysisResult);
         return new StagedAnalysisResult(coreStage.rawOutput(), analysisResult, questions,
                 coreStage.assumptions(), "[]", coreStage.affectedCases(), coreStage.changeScope(),
                 coreStage.newCasesNeeded());
+    }
+
+    private String stripDownstreamAnalysisAssets(String coreJson) {
+        Map<String, Object> root = readJsonObject(coreJson);
+        if (root == null) return coreJson;
+        root.remove("coverage_matrix");
+        root.remove("matrix_review_notes");
+        root.remove("test_points");
+        root.remove("test_point_scope_review");
+        root.remove("skill_self_check");
+        root.remove("case_plan");
+        return toJson(root);
     }
 
     private StagedAnalysisResult runStagedRequirementAnalysis(CurrentUser user,
@@ -2311,23 +2341,35 @@ public class RequirementAnalysisService {
             List<String> repairedUnits = new ArrayList<>();
             for (CoverageWorkItem item : batch) {
                 List<Map<String, Object>> unitRows = coverageRowsForWorkItem(batchRows, item, batch.size() == 1);
-                if (!isUsableCoverageForWorkItem(unitRows, item)) {
+                for (int repairAttempt = 1;
+                     !isUsableCoverageForWorkItem(unitRows, item)
+                             && repairAttempt <= MAX_COVERAGE_REPAIR_ATTEMPTS;
+                     repairAttempt++) {
+                    String problems = describeCoverageProblems(unitRows, item);
                     String repairOutput = invokeAnalysisStage(user, projectId, taskId, modelConfigId, promptTemplateId,
-                            taskTypePrefix + "_COVERAGE_MATRIX_REPAIR_" + currentNode + "_" + safeStageSuffix(item.unitId()),
+                            taskTypePrefix + "_COVERAGE_MATRIX_REPAIR_" + currentNode + "_"
+                                    + safeStageSuffix(item.unitId()) + "_" + repairAttempt,
                             buildCoverageMatrixSystemPrompt(),
                             buildCoverageMatrixBatchUserPrompt(List.of(item), semanticContext)
-                                    + "\n\n上一次批量结果遗漏或未完整覆盖本主题。请逐条覆盖本节点 R*，不得只返回主流程和异常。",
+                                    + "\n\n上一次结果存在以下确定问题：" + problems
+                                    + "\n请返回本主题的完整替换矩阵，不要只返回差异。逐条覆盖本节点 R*；"
+                                    + "不得用空数组、只有 count 的对象或通用模板占位。",
                             ANALYSIS_CONTINUATION_MAX_TOKENS,
-                            "覆盖矩阵补齐（主题 " + item.unitId() + "）");
+                            "覆盖矩阵补齐（主题 " + item.unitId() + "，第 " + repairAttempt + "/"
+                                    + MAX_COVERAGE_REPAIR_ATTEMPTS + " 次）");
                     String repairedMatrix = normalizeCoverageMatrixJson(
                             normalizeJsonColumn(extractJson(repairOutput, "coverage_matrix")));
                     unitRows = coverageRowsForWorkItem(readJsonObjectList(repairedMatrix), item, true);
-                    nodeRecord.put("repair_" + item.unitId(), safeJsonValue(repairOutput));
-                    repairedUnits.add(item.unitId());
+                    nodeRecord.put("repair_" + item.unitId() + "_" + repairAttempt,
+                            safeJsonValue(repairOutput));
+                    if (!repairedUnits.contains(item.unitId())) repairedUnits.add(item.unitId());
                 }
                 if (!isUsableCoverageForWorkItem(unitRows, item)) {
                     throw new LlmRuntimeException(LlmErrorCode.OUTPUT_PARSE_ERROR,
-                            "主题节点 " + item.unitId() + " 未形成可执行覆盖矩阵，不能以通用模板继续生成测试点。");
+                            "主题节点 " + item.unitId() + " 连续 " + MAX_COVERAGE_REPAIR_ATTEMPTS
+                                    + " 次补齐后仍未形成可执行覆盖矩阵："
+                                    + describeCoverageProblems(unitRows, item)
+                                    + "。未使用通用模板伪造测试点，可从当前失败节点继续。");
                 }
                 addCoverageRows(mergedRows, unitRows, item);
             }
@@ -2385,7 +2427,32 @@ public class RequirementAnalysisService {
         if (matched.isEmpty() && allowSingleItemCompatibility) {
             matched = rows;
         }
+        if (allowSingleItemCompatibility && !matched.isEmpty()) {
+            List<String> expectedRefs = item.atoms().stream()
+                    .map(atom -> String.valueOf(atom.get("id"))).distinct().toList();
+            matched = matched.stream().map(row -> {
+                Map<String, Object> normalized = new LinkedHashMap<>(row);
+                // A single-work-item call has an unambiguous source. Bind provenance here
+                // instead of rejecting useful model content because it omitted redundant IDs.
+                normalized.put("test_unit_ref", item.unitId());
+                normalized.put("requirement_refs", expectedRefs);
+                return normalized;
+            }).toList();
+        }
         return matched;
+    }
+
+    private String describeCoverageProblems(List<Map<String, Object>> rows, CoverageWorkItem item) {
+        if (rows == null || rows.isEmpty()) return "未返回 coverage_matrix 行";
+        List<String> problems = new ArrayList<>();
+        if (!isUsableUnitCoverageMatrix(toJson(rows))) problems.add("没有带具体 items 的可执行覆盖维度");
+        Set<String> returnedRefs = rows.stream()
+                .flatMap(row -> toStringList(row.get("requirement_refs")).stream())
+                .collect(Collectors.toSet());
+        List<String> missingRefs = item.atoms().stream().map(atom -> String.valueOf(atom.get("id")))
+                .filter(ref -> !returnedRefs.contains(ref)).toList();
+        if (!missingRefs.isEmpty()) problems.add("缺少需求引用 " + String.join("、", missingRefs));
+        return problems.isEmpty() ? "矩阵结构不符合约束" : String.join("；", problems);
     }
 
     private void addCoverageRows(List<Map<String, Object>> target,
@@ -2433,19 +2500,20 @@ public class RequirementAnalysisService {
         List<Map<String, Object>> rows = readJsonObjectList(matrixJson);
         if (rows == null || rows.isEmpty()) return false;
         int total = 0;
-        int nonMain = 0;
+        int concreteItems = 0;
         for (Map<String, Object> row : rows) {
             total += numberValue(row.get("total"));
-            for (String key : List.of("branch", "boundary", "exception", "state", "data", "auth", "concurrency", "idempotent")) {
+            for (String key : List.of("main_flow", "branch", "boundary", "exception", "state", "data", "auth", "concurrency", "idempotent")) {
                 Object dimension = row.get(key);
                 if (dimension instanceof Map<?, ?> map) {
                     int count = numberValue(map.get("count"));
-                    if (count > toStringList(map.get("items")).size()) return false;
-                    if (count > 0) nonMain++;
+                    int itemCount = toStringList(map.get("items")).size();
+                    if (count > itemCount) return false;
+                    concreteItems += itemCount;
                 }
             }
         }
-        return total > 0 && nonMain > 0;
+        return total > 0 && concreteItems > 0;
     }
 
     /**
@@ -2458,9 +2526,16 @@ public class RequirementAnalysisService {
         List<Map<String, Object>> rows = readJsonObjectList(matrixJson);
         if (rows == null) return matrixJson;
         List<String> dimensions = List.of("main_flow", "branch", "boundary", "exception", "state", "data", "auth", "concurrency", "idempotent");
-        Map<String, List<String>> aliases = Map.of(
-                "auth", List.of("authorization", "permission", "permissions"),
-                "idempotent", List.of("idempotency", "idempotence")
+        Map<String, List<String>> aliases = Map.ofEntries(
+                Map.entry("main_flow", List.of("mainFlow", "mainflow", "happy_path")),
+                Map.entry("branch", List.of("branches", "condition", "conditions")),
+                Map.entry("boundary", List.of("boundaries", "boundary_value")),
+                Map.entry("exception", List.of("abnormal", "error", "negative")),
+                Map.entry("state", List.of("status", "state_transition")),
+                Map.entry("data", List.of("data_validation", "consistency")),
+                Map.entry("auth", List.of("authorization", "permission", "permissions")),
+                Map.entry("concurrency", List.of("concurrent", "parallel")),
+                Map.entry("idempotent", List.of("idempotency", "idempotence"))
         );
         List<Map<String, Object>> normalizedRows = new ArrayList<>();
         for (Map<String, Object> source : rows) {
@@ -2471,7 +2546,8 @@ public class RequirementAnalysisService {
                 if (!(value instanceof Map<?, ?>)) {
                     for (String alias : aliases.getOrDefault(dimension, List.of())) {
                         Object candidate = row.get(alias);
-                        if (candidate instanceof Map<?, ?>) {
+                        if (candidate instanceof Map<?, ?> || candidate instanceof Collection<?>
+                                || (candidate instanceof String text && !text.isBlank())) {
                             value = candidate;
                             break;
                         }
@@ -2482,6 +2558,10 @@ public class RequirementAnalysisService {
                     Object count = map.get("count");
                     if (count != null) detail.put("count", numberValue(count));
                     detail.put("items", toStringList(map.get("items")));
+                } else if (value instanceof Collection<?> || (value instanceof String text && !text.isBlank())) {
+                    List<String> items = toStringList(value);
+                    detail.put("count", items.size());
+                    detail.put("items", items);
                 } else {
                     detail.put("count", 0);
                     detail.put("items", List.of());
@@ -2675,7 +2755,7 @@ public class RequirementAnalysisService {
         point.put("case_strategy", "NODE_FOCUSED");
         point.put("compose_with_test_point_refs", List.of());
         point.put("source_basis", sourceBasis);
-        point.put("source_refs", Map.of("tom_node_refs", List.of(), "page_refs", List.of(),
+        point.put("source_refs", Map.of("tom_node_refs", List.of(), "wiki_refs", List.of(), "page_refs", List.of(),
                 "business_pack_refs", List.of(), "trace_refs", List.of()));
         point.put("coverage_status", needsConfirmation ? "LOW_EVIDENCE" : "SUPPORTED");
         point.put("unsupported_items", List.of());
@@ -2699,9 +2779,8 @@ public class RequirementAnalysisService {
                     .filter(reason -> !reason.isBlank() && !"null".equals(reason)).distinct()
                     .collect(Collectors.joining("；")));
             point.put("generation_scope", switch (recommendation) {
-                case "IN_SCOPE" -> SCOPE_GENERATE;
                 case "OUT_OF_SCOPE" -> SCOPE_EXCLUDED;
-                default -> SCOPE_REFERENCE_ONLY;
+                default -> SCOPE_GENERATE;
             });
             point.put("scope_decision_source", "AI_RECOMMENDATION");
         }
@@ -2720,9 +2799,8 @@ public class RequirementAnalysisService {
             }
             atom.put("scope_recommendation", recommendation);
             atom.put("generation_scope", switch (recommendation) {
-                case "IN_SCOPE" -> SCOPE_GENERATE;
                 case "OUT_OF_SCOPE" -> SCOPE_EXCLUDED;
-                default -> SCOPE_REFERENCE_ONLY;
+                default -> SCOPE_GENERATE;
             });
             atom.put("scope_decision_source", "AI_RECOMMENDATION");
         }
@@ -2807,12 +2885,13 @@ public class RequirementAnalysisService {
 
     private String designMethodForPointType(String pointType) {
         return switch (pointType) {
-            case "MAIN_FLOW", "BRANCH" -> "场景法";
-            case "BOUNDARY" -> "边界值";
+            case "MAIN_FLOW" -> "场景法";
+            case "BRANCH", "AUTH" -> "判定表";
+            case "BOUNDARY" -> "等价类划分法 + 边界值分析法";
             case "STATE" -> "状态迁移";
             case "DATA" -> "数据一致性检查";
-            case "AUTH" -> "场景法";
-            case "CONCURRENCY", "IDEMPOTENT", "EXCEPTION" -> "错误推测";
+            case "CONCURRENCY" -> "正交实验设计法";
+            case "IDEMPOTENT", "EXCEPTION" -> "错误推测";
             default -> "场景法";
         };
     }
@@ -3087,14 +3166,20 @@ public class RequirementAnalysisService {
             List<String> preconditions = upstreamFlowPointRefs(unit, pointsByUnit);
             List<String> pointIds = objectivePoints.stream().map(point -> String.valueOf(point.get("id"))).toList();
             String title = buildVerificationObjectiveTitle(unit, objectivePoints);
-            String designMethod = String.valueOf(firstPoint.getOrDefault("design_method", "场景法"));
+            String pointType = String.valueOf(firstPoint.getOrDefault("point_type", "MAIN_FLOW"));
+            List<String> methods = FunctionalTestDesignPolicy.designMethods(
+                    pointType, String.valueOf(firstPoint.getOrDefault("design_method", "场景法")));
             Map<String, Object> design = new LinkedHashMap<>();
-            design.put("id", "CD1");
+            design.put("id", "CD");
             design.put("title", title);
             design.put("scenario", buildVerificationObjectiveScenario(objectivePoints, title));
-            design.put("design_method", designMethod);
+            design.put("scenario_type", FunctionalTestDesignPolicy.scenarioType(pointType));
+            design.put("design_method", String.join(" + ", methods));
+            design.put("design_methods", methods);
+            design.put("coverage_requirements", FunctionalTestDesignPolicy.coverageRequirements(pointType));
             design.put("source_test_point_refs", pointIds);
             design.put("priority_hint", highestPriorityHint(objectivePoints));
+            List<Map<String, Object>> designs = List.of(design);
 
             Map<String, Object> plan = new LinkedHashMap<>();
             plan.put("id", "CP");
@@ -3104,8 +3189,9 @@ public class RequirementAnalysisService {
             plan.put("source_test_point_refs", pointIds);
             plan.put("precondition_test_point_refs", preconditions);
             plan.put("depends_on_case_plan_refs", List.of());
-            plan.put("design_method", designMethod);
-            plan.put("case_designs", List.of(design));
+            plan.put("design_method", designs.stream()
+                    .map(item -> String.valueOf(item.get("design_method"))).distinct().collect(Collectors.joining(" + ")));
+            plan.put("case_designs", designs);
             plan.put("priority_hint", highestPriorityHint(objectivePoints));
             plan.put("coverage_status", mergedCoverageStatus(objectivePoints));
             plan.put("source_basis", mergePointSourceBasis(objectivePoints));
@@ -3433,8 +3519,26 @@ public class RequirementAnalysisService {
 
     /** CP 编号同样由平台按计划顺序固定，避免每个独立主题节点各自从 CP1 起号。 */
     private void assignStableCasePlanIds(List<Map<String, Object>> plans) {
+        int designIndex = 1;
         for (int index = 0; index < plans.size(); index++) {
-            plans.get(index).put("id", "CP" + (index + 1));
+            Map<String, Object> plan = plans.get(index);
+            plan.put("id", "CP" + (index + 1));
+            List<Map<String, Object>> designs = readJsonObjectList(toJson(plan.get("case_designs")));
+            for (Map<String, Object> design : designs) {
+                design.put("id", "CD" + designIndex++);
+                design.putIfAbsent("scenario_type", "POSITIVE");
+                List<String> methods = toStringList(design.get("design_methods"));
+                if (methods.isEmpty()) {
+                    methods = FunctionalTestDesignPolicy.designMethods("MAIN_FLOW",
+                            String.valueOf(design.getOrDefault("design_method", "场景法")));
+                    design.put("design_methods", methods);
+                }
+                design.putIfAbsent("design_method", String.join(" + ", methods));
+                if (toStringList(design.get("coverage_requirements")).isEmpty()) {
+                    design.put("coverage_requirements", FunctionalTestDesignPolicy.coverageRequirements("MAIN_FLOW"));
+                }
+            }
+            plan.put("case_designs", designs);
         }
     }
 
@@ -3748,10 +3852,16 @@ public class RequirementAnalysisService {
         }
         try {
             String taskType = taskService.get(projectId, taskId).taskType();
-            return taskType != null && taskType.startsWith("REQUIREMENT_ANALYSIS");
+            return isCheckpointTaskType(taskType);
         } catch (RuntimeException ignored) {
             return false;
         }
+    }
+
+    static boolean isCheckpointTaskType(String taskType) {
+        return taskType != null && (taskType.startsWith("REQUIREMENT_ANALYSIS")
+                || "REQUIREMENT_SCOPE_CONTINUATION".equals(taskType)
+                || "TEST_POINT_SCOPE_CONTINUATION".equals(taskType));
     }
 
     private String checkpointKey(String taskType, String systemPrompt, String userPrompt, int maxTokens) {
@@ -3832,7 +3942,7 @@ public class RequirementAnalysisService {
                 - affected_flows
                 - affected_roles
                 - requirement_atoms：每个独立业务规则、流程、状态、字段约束、权限规则、外部集成或数据同步必须是一条原子；每条含 id（R1...）、category、title、requirement、source_basis、needs_clarification、scope_recommendation、scope_reason
-                - test_units：面向测试执行的业务主题节点；每条含 id（U1...）、name、requirement_refs、summary、depends_on_unit_refs。示例：预约、审批、门禁、权限、人脸、外协、消息。必须按真实需求拆分，不能机械套用示例。
+                - test_units：面向测试执行的业务主题节点；每条含 id（U1...）、name、requirement_refs、summary、depends_on_unit_refs。示例：流程入口、规则校验、权限控制、状态流转、外部集成、通知反馈、数据一致性。必须按真实需求拆分，不能机械套用示例。
                 - review_risk_questions：最多 3 条，每条含 question/reason/impact/source_basis
                 - risk_scenarios：最多 5 条
                 - boundary_conditions：最多 5 条
@@ -4159,9 +4269,10 @@ public class RequirementAnalysisService {
                       "precondition_test_point_refs": [],
                       "case_strategy": "NODE_FOCUSED/FLOW_COMPOSED",
                       "compose_with_test_point_refs": [],
-                      "source_basis": ["TOM/页面/业务包/轨迹证据名称"],
+                      "source_basis": ["TOM/LLM Wiki/页面/业务包/轨迹证据名称"],
                       "source_refs": {
                         "tom_node_refs": [],
+                        "wiki_refs": [],
                         "page_refs": [],
                         "business_pack_refs": [],
                         "trace_refs": []
@@ -4603,6 +4714,7 @@ public class RequirementAnalysisService {
             if (!row.containsKey("source_refs")) {
                 row.put("source_refs", Map.of(
                         "tom_node_refs", evidenceSummary.getOrDefault("tom_node_refs", List.of()),
+                        "wiki_refs", evidenceSummary.getOrDefault("wiki_refs", List.of()),
                         "page_refs", evidenceSummary.getOrDefault("page_refs", List.of()),
                         "business_pack_refs", evidenceSummary.getOrDefault("business_pack_refs", List.of()),
                         "trace_refs", evidenceSummary.getOrDefault("trace_refs", List.of())
@@ -4659,6 +4771,7 @@ public class RequirementAnalysisService {
                 .toList();
         List<String> tomRefs = titlesByCategory(signals, "TOM");
         List<String> pageRefs = titlesByCategory(signals, "页面画像");
+        List<String> wikiRefs = titlesByCategory(signals, "Wiki");
         List<String> businessPackRefs = signals.stream()
                 .filter(signal -> signal.category() != null && signal.category().startsWith("业务包:"))
                 .map(ProjectSemanticContextService.SemanticSignal::title)
@@ -4685,6 +4798,7 @@ public class RequirementAnalysisService {
         summary.put("evidence_count", signals.size());
         summary.put("confidence_label", signals.isEmpty() ? "LOW" : (signals.size() >= 4 ? "HIGH" : "MEDIUM"));
         summary.put("tom_node_refs", tomRefs);
+        summary.put("wiki_refs", wikiRefs);
         summary.put("page_refs", pageRefs);
         summary.put("business_pack_refs", businessPackRefs);
         summary.put("trace_refs", traceRefs);
@@ -4832,7 +4946,7 @@ public class RequirementAnalysisService {
             }
         }
         if (sourceBasis.isEmpty()) {
-            warnings.add("该用例未声明生成依据，需补充 TOM/页面/业务包/轨迹证据。");
+            warnings.add("该用例未声明生成依据，需补充 TOM/LLM Wiki/页面/业务包/轨迹证据。");
             invalidStructure = true;
         } else if (!evidenceBasis.isEmpty() && sourceBasis.stream().noneMatch(basis ->
                 evidenceBasis.stream().anyMatch(evidence -> fuzzyContains(basis, evidence)))) {

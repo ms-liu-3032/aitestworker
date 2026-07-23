@@ -3,6 +3,7 @@ import { useApp } from '../../context/AppContext';
 import RichList from '../../components/RichList';
 import Modal from '../../components/Modal';
 import { listModelConfigs, createModelConfig, updateModelConfig, deleteModelConfig, type ModelConfigRecord } from '../../services/api';
+import { statusLabel } from '../../utils/displayLabels';
 
 export default function ModelConfig() {
   const { showToast } = useApp();
@@ -253,7 +254,7 @@ export default function ModelConfig() {
             <div className="font-mono text-sm text-gray-600" style={{ width: '150px' }}>{c.modelName}</div>
             <div style={{ width: '100px' }}>
               <span className={`text-[11px] font-medium px-2 py-0.5 rounded ${c.status === 'ACTIVE' ? 'bg-green-50 text-green-700' : 'bg-gray-100 text-gray-600'}`}>
-                {c.status === 'ACTIVE' ? '活跃' : c.status}
+                {statusLabel(c.status)}
               </span>
             </div>
             <div className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-3" style={{ width: '140px', flex: 1 }}>

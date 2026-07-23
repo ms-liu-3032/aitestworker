@@ -19,11 +19,12 @@ class TraceAssetCaseFilterTest {
         StringBuilder sql = new StringBuilder(" WHERE project_id = :projectId");
 
         service.appendFormalCaseFilters(sql, params, "门禁", List.of("权限"), List.of("P1"),
-                List.of("ACTIVE"), List.of("TRACE"));
+                List.of("ACTIVE"), List.of("TRACE"), List.of("BOUNDARY"));
 
         assertTrue(sql.toString().contains("case_title LIKE :keyword"));
         assertTrue(sql.toString().contains("module_name IN (:modules)"));
         assertTrue(sql.toString().contains("source_trace_group_id IS NOT NULL"));
+        assertTrue(sql.toString().contains("scenario_type IN (:scenarioTypes)"));
         assertEquals(List.of("ACTIVE", "SUBMITTED"), params.get("statuses"));
         assertEquals("%门禁%", params.get("keyword"));
     }
@@ -44,7 +45,7 @@ class TraceAssetCaseFilterTest {
         Map<String, Object> params = new HashMap<>();
         StringBuilder where = new StringBuilder(" WHERE project_id = :projectId");
         service.appendFormalCaseFilters(where, params, "审批", List.of("预约"), List.of("P0"),
-                List.of("ACTIVE"), List.of("TRACE"));
+                List.of("ACTIVE"), List.of("TRACE"), List.of("COMBINATION"));
 
         String sql = service.buildFormalCasePageSql(where.toString());
 

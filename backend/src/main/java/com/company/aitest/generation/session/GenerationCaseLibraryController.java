@@ -40,10 +40,11 @@ public class GenerationCaseLibraryController {
                                                                                   @org.springframework.web.bind.annotation.RequestParam(required = false) List<String> priorities,
                                                                                   @org.springframework.web.bind.annotation.RequestParam(required = false) List<String> statuses,
                                                                                   @org.springframework.web.bind.annotation.RequestParam(required = false) List<String> sources,
+                                                                                  @org.springframework.web.bind.annotation.RequestParam(required = false) List<String> scenarioTypes,
                                                                                   Authentication auth) {
         CurrentUser user = (CurrentUser) auth.getPrincipal();
         return ApiResponse.ok(caseLibraryService.listPage(projectId, page, size, keyword,
-                modules, priorities, statuses, sources, user));
+                modules, priorities, statuses, sources, scenarioTypes, user));
     }
 
     @GetMapping("/{draftId}")

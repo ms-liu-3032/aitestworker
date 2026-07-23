@@ -12,6 +12,7 @@ import {
   type LlmInvocationSnapshot,
   type SecurityEventLog,
 } from '../../services/api';
+import { displayLabel, errorCodeLabel, statusLabel } from '../../utils/displayLabels';
 
 type ActiveTab = 'llm' | 'security';
 
@@ -282,7 +283,7 @@ function LlmLogTable({
                 <td className="px-3 py-2 whitespace-nowrap text-gray-500">{formatTime(log.createdAt)}</td>
                 <td className="px-3 py-2">
                   <span className={`rounded px-1.5 py-0.5 text-[11px] ${llmStatusColors[log.status] || 'bg-gray-100 text-gray-600'}`}>
-                    {log.status}
+                    {statusLabel(log.status)}
                   </span>
                   {log.retryIndex !== null && <div className="mt-1 text-[11px] text-gray-400">retry #{log.retryIndex}</div>}
                 </td>
@@ -290,7 +291,7 @@ function LlmLogTable({
                   <div className="font-medium text-gray-800">{log.modelName || '-'}</div>
                   <div className="text-xs text-gray-400">{log.provider || '-'}</div>
                 </td>
-                <td className="px-3 py-2 text-gray-600">{log.stage || '-'}</td>
+                <td className="px-3 py-2 text-gray-600">{displayLabel(log.stage, '-')}</td>
                 <td className="px-3 py-2 text-xs text-gray-500">
                   <div>project: {log.projectId ?? '-'}</div>
                   <div>task: {log.taskId ?? '-'}</div>
@@ -298,7 +299,7 @@ function LlmLogTable({
                 </td>
                 <td className="px-3 py-2 whitespace-nowrap text-gray-600">{log.durationMs ?? '-'} ms</td>
                 <td className="px-3 py-2 min-w-48">
-                  <div className="text-xs font-medium text-red-600">{log.errorCode || '-'}</div>
+                  <div className="text-xs font-medium text-red-600" title={log.errorCode || undefined}>{errorCodeLabel(log.errorCode)}</div>
                   {log.errorMessage && <div className="mt-1 text-xs text-gray-500 line-clamp-3">{log.errorMessage}</div>}
                 </td>
                 <td className="px-3 py-2 min-w-72">
@@ -364,7 +365,7 @@ function ChainDrawer({ chain, onClose }: { chain: LlmInvocationChain; onClose: (
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="rounded bg-gray-100 px-1.5 py-0.5 text-[11px] text-gray-600">#{index + 1}</span>
                     <span className={`rounded px-1.5 py-0.5 text-[11px] ${llmStatusColors[entry.status] || 'bg-gray-100 text-gray-600'}`}>
-                      {entry.status}
+                      {statusLabel(entry.status)}
                     </span>
                     {entry.retryIndex !== null && (
                       <span className="rounded bg-yellow-50 px-1.5 py-0.5 text-[11px] text-yellow-700">retry #{entry.retryIndex}</span>
@@ -374,7 +375,7 @@ function ChainDrawer({ chain, onClose }: { chain: LlmInvocationChain; onClose: (
 
                   <div className="mt-2 grid gap-2 text-xs text-gray-600 sm:grid-cols-2">
                     <div>模型：{entry.provider || '-'} / {entry.modelName || '-'}</div>
-                    <div>阶段：{entry.stage || '-'}</div>
+                    <div>阶段：{displayLabel(entry.stage, '-')}</div>
                     <div>耗时：{entry.durationMs ?? '-'} ms</div>
                     <div>
                       Token：输入 {entry.tokenInput || 0} / 缓存 {entry.tokenCachedInput || 0} / 输出 {entry.tokenOutput || 0}
@@ -394,7 +395,7 @@ function ChainDrawer({ chain, onClose }: { chain: LlmInvocationChain; onClose: (
 
                   {(entry.errorCode || entry.errorMessage) && (
                     <div className="mt-3 rounded bg-red-50 p-2 text-xs text-red-700">
-                      <div className="font-medium">{entry.errorCode || 'UNKNOWN'}</div>
+                      <div className="font-medium" title={entry.errorCode || undefined}>{errorCodeLabel(entry.errorCode)}</div>
                       {entry.errorMessage && <div className="mt-1 whitespace-pre-wrap">{entry.errorMessage}</div>}
                     </div>
                   )}
@@ -421,9 +422,9 @@ function ChainDrawer({ chain, onClose }: { chain: LlmInvocationChain; onClose: (
             </div>
             <div className="grid gap-2 text-xs text-gray-600 sm:grid-cols-2">
               <div>日志 ID：{snapshot.id}</div>
-              <div>状态：{snapshot.status}</div>
+              <div>状态：{statusLabel(snapshot.status)}</div>
               <div>模型：{snapshot.provider || '-'} / {snapshot.modelName || '-'}</div>
-              <div>错误码：{snapshot.errorCode || '-'}</div>
+              <div title={snapshot.errorCode || undefined}>错误类型：{errorCodeLabel(snapshot.errorCode)}</div>
               <div className="sm:col-span-2 break-all">requestId：{snapshot.requestId}</div>
             </div>
             {snapshot.errorMessage && (

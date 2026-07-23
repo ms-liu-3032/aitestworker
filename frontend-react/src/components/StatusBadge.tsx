@@ -1,3 +1,5 @@
+import { statusLabel } from '../utils/displayLabels';
+
 interface StatusBadgeProps {
   status: 'online' | 'offline' | 'warning' | 'active' | 'archived' | string;
   label?: string;
@@ -7,12 +9,12 @@ const statusConfig: Record<string, { dotColor: string; textColor: string; label:
   online: { dotColor: 'bg-green-500', textColor: 'text-green-600', label: '在线' },
   offline: { dotColor: 'bg-gray-400', textColor: 'text-gray-500', label: '离线' },
   warning: { dotColor: 'bg-yellow-500', textColor: 'text-yellow-600', label: '警告' },
-  active: { dotColor: 'bg-green-500', textColor: 'text-gray-500', label: 'ACTIVE' },
-  archived: { dotColor: 'bg-gray-400', textColor: 'text-gray-500', label: 'ARCHIVED' },
+  active: { dotColor: 'bg-green-500', textColor: 'text-gray-500', label: '已生效' },
+  archived: { dotColor: 'bg-gray-400', textColor: 'text-gray-500', label: '已归档' },
 };
 
 export default function StatusBadge({ status, label }: StatusBadgeProps) {
-  const config = statusConfig[status] || { dotColor: 'bg-gray-400', textColor: 'text-gray-500', label: status };
+  const config = statusConfig[status] || { dotColor: 'bg-gray-400', textColor: 'text-gray-500', label: statusLabel(status) };
   const displayLabel = label || config.label;
 
   return (

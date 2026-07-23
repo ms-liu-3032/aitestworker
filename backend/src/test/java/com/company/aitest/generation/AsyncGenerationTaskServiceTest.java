@@ -111,6 +111,24 @@ class AsyncGenerationTaskServiceTest {
     }
 
     @Test
+    void getRepairsCaseTaskWhenSessionAndDraftOutputAreAlreadyCommitted() {
+        GenerationTaskRecord pending = task(305L, "PENDING");
+        GenerationTaskRecord succeeded = task(305L, "SUCCEEDED");
+        when(taskService.get(10L, 305L)).thenReturn(pending, succeeded);
+        when(taskService.draftCount(10L, 305L)).thenReturn(18);
+        when(sessionService.findByExecutionTaskId(305L))
+                .thenReturn(Optional.of(session("COMPLETED", "CASE_READY", 305L)));
+        when(taskService.markSucceededIfOutputCommitted(305L)).thenReturn(true);
+
+        AsyncGenerationTaskService.TaskView view = service.get(10L, 305L);
+
+        assertEquals("SUCCEEDED", view.status());
+        assertEquals(18, view.draftCount());
+        verify(taskService).markSucceededIfOutputCommitted(305L);
+        verify(taskService, times(2)).get(10L, 305L);
+    }
+
+    @Test
     void startSessionCaseGenerationCompletesTaskAndLinksDraftsToSession() throws Exception {
         CountDownLatch completed = new CountDownLatch(1);
         when(requirementAnalysisService.buildSessionGenerationPlan(20L, user)).thenReturn(plan());

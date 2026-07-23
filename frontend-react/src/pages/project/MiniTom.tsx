@@ -7,6 +7,7 @@ import {
   listTomCandidates, listActiveTomModels, confirmTomCandidate, rejectTomCandidate,
   upgradeTomCandidate, importManual, buildTestScope, type TestObjectModel
 } from '../../services/api';
+import { statusLabel as uiStatusLabel } from '../../utils/displayLabels';
 
 export default function MiniTom() {
   const { projectId } = useParams<{ projectId: string }>();
@@ -263,7 +264,7 @@ export default function MiniTom() {
                 tom.status === 'CANDIDATE' ? 'bg-yellow-50 text-yellow-700' :
                 'bg-gray-100 text-gray-600'
               }`}>
-                {tom.status === 'ACTIVE' ? '生效' : tom.status === 'CANDIDATE' ? '候选' : tom.status}
+                {uiStatusLabel(tom.status)}
               </span>
             </div>
             <div style={{ width: '140px' }} className="flex items-center gap-2">
@@ -297,7 +298,7 @@ export default function MiniTom() {
                 tom.status === 'CANDIDATE' ? 'bg-yellow-50 text-yellow-700' :
                 'bg-gray-100 text-gray-600'
               }`}>
-                {tom.status === 'ACTIVE' ? '生效' : tom.status === 'CANDIDATE' ? '候选' : tom.status}
+                {uiStatusLabel(tom.status)}
               </span>
             </div>
             <div style={{ width: '140px' }} className="flex items-center gap-2">

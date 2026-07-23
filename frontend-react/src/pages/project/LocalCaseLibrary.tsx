@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import Modal from '../../components/Modal';
 import MultiSelectFilter from '../../components/MultiSelectFilter';
+import { displayLabel } from '../../utils/displayLabels';
 import { useParams } from 'react-router-dom';
 import { useApp } from '../../context/AppContext';
 import RichList from '../../components/RichList';
@@ -12,6 +13,7 @@ import {
   batchSubmitLocalCases,
   deprecateLocalCase,
   duplicateLocalCase,
+  exportLocalCasesToXmind,
   getLocalCase,
   listLocalCasesPage,
   submitLocalCase,
@@ -44,11 +46,13 @@ export default function LocalCaseLibrary() {
   const [duplicatingId, setDuplicatingId] = useState<number | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [batchingAction, setBatchingAction] = useState<'confirm' | 'deprecate' | 'submit' | null>(null);
+  const [exporting, setExporting] = useState(false);
   const [keyword, setKeyword] = useState('');
   const [moduleFilter, setModuleFilter] = useState<string[]>([]);
   const [priorityFilter, setPriorityFilter] = useState<string[]>([]);
   const [statusFilter, setStatusFilter] = useState<string[]>([]);
   const [sourceFilter, setSourceFilter] = useState<string[]>([]);
+  const [scenarioFilter, setScenarioFilter] = useState<string[]>([]);
   const [editingCase, setEditingCase] = useState<LocalCaseDraft | null>(null);
   const [moduleOptions, setModuleOptions] = useState<string[]>([]);
   const loadRequestId = useRef(0);
@@ -75,6 +79,7 @@ export default function LocalCaseLibrary() {
         priorities: priorityFilter,
         statuses: statusFilter,
         sources: sourceFilter,
+        scenarioTypes: scenarioFilter,
       });
       if (requestId !== loadRequestId.current) return;
       setCases(data.items);
@@ -100,7 +105,7 @@ export default function LocalCaseLibrary() {
     const timer = window.setTimeout(() => void loadCases(0), keyword.trim() ? 250 : 0);
     return () => window.clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId, keyword, moduleFilter, priorityFilter, statusFilter, sourceFilter]);
+  }, [projectId, keyword, moduleFilter, priorityFilter, statusFilter, sourceFilter, scenarioFilter]);
 
   const openDetail = async (draft: LocalCaseDraft) => {
     if (!projectId) return;
@@ -233,6 +238,41 @@ export default function LocalCaseLibrary() {
     }
   };
 
+  const selectedExportableIds = useMemo(() => cases
+    .filter(item => selectedIds.has(item.id))
+    .filter(item => ['CONFIRMED', 'SUBMITTED'].includes(normalizeStatus(item.caseStatus)))
+    .map(item => item.id), [cases, selectedIds]);
+
+  const handleExport = async () => {
+    if (!projectId) return;
+    const exportingSelection = selectedIds.size > 0;
+    if (exportingSelection && selectedExportableIds.length === 0) {
+      showToast('所选用例中没有已确认或已提交的用例', 'error');
+      return;
+    }
+    setExporting(true);
+    try {
+      const blob = await exportLocalCasesToXmind(
+        Number(projectId), exportingSelection ? selectedExportableIds : undefined);
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = '本地用例库.xmind';
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+      const ignored = exportingSelection ? selectedIds.size - selectedExportableIds.length : 0;
+      showToast(ignored > 0
+        ? `导出完成，已忽略 ${ignored} 条未确认用例`
+        : '本地用例导出完成');
+    } catch (error: any) {
+      showToast(error.message || '导出失败', 'error');
+    } finally {
+      setExporting(false);
+    }
+  };
+
   const openEditModal = async (draft: LocalCaseDraft) => {
     if (!projectId) return;
     try {
@@ -306,12 +346,25 @@ export default function LocalCaseLibrary() {
           <h1 className="text-xl font-bold text-gray-900 tracking-tight">本地用例库</h1>
           <p className="text-sm text-gray-500 mt-1">统一查看需求生成和轨迹回放沉淀的草稿，并继续整理后提交到正式用例库。</p>
         </div>
-        <button
-          onClick={() => void loadCases(page)}
-          className="min-h-10 shrink-0 rounded-lg border border-gray-200 px-3 py-2 text-sm font-medium text-gray-700 transition-colors hover:border-gray-300 hover:bg-gray-50"
-        >
-          刷新列表
-        </button>
+        <div className="flex shrink-0 flex-wrap gap-2">
+          <button
+            onClick={() => void handleExport()}
+            disabled={exporting || (selectedIds.size > 0 && selectedExportableIds.length === 0)}
+            className="min-h-10 rounded-lg border border-blue-200 px-3 py-2 text-sm font-medium text-blue-700 transition-colors hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {exporting
+              ? '导出中...'
+              : selectedIds.size > 0
+                ? `导出已确认/已提交 (${selectedExportableIds.length})`
+                : '导出全部已确认/已提交'}
+          </button>
+          <button
+            onClick={() => void loadCases(page)}
+            className="min-h-10 rounded-lg border border-gray-200 px-3 py-2 text-sm font-medium text-gray-700 transition-colors hover:border-gray-300 hover:bg-gray-50"
+          >
+            刷新列表
+          </button>
+        </div>
       </div>
 
       {actionNotice && (
@@ -359,7 +412,7 @@ export default function LocalCaseLibrary() {
       </div>
 
       <div className="bg-white rounded-xl border border-gray-200 p-4 mb-4">
-        <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-3 xl:grid-cols-6">
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-1">关键词</label>
             <input
@@ -374,6 +427,7 @@ export default function LocalCaseLibrary() {
           <MultiSelectFilter label="优先级" options={['P0', 'P1', 'P2', 'P3']} value={priorityFilter} onChange={setPriorityFilter} />
           <MultiSelectFilter label="状态" options={['DRAFT', 'CONFIRMED', 'SUBMITTED', 'DEPRECATED']} value={statusFilter} onChange={setStatusFilter} />
           <MultiSelectFilter label="来源" options={['GENERATION', 'TRACE', 'MANUAL']} value={sourceFilter} onChange={setSourceFilter} />
+          <MultiSelectFilter label="场景" options={['POSITIVE', 'NEGATIVE', 'BOUNDARY', 'COMBINATION', 'STATE', 'RECOVERY']} value={scenarioFilter} onChange={setScenarioFilter} />
         </div>
       </div>
 
@@ -428,11 +482,14 @@ export default function LocalCaseLibrary() {
               <div style={{ width: '320px' }}>
                 <button onClick={() => void openDetail(testCase)} className="block max-w-full truncate text-left text-sm font-medium text-gray-900 hover:text-blue-600">{testCase.caseTitle}</button>
                 <div className="text-xs text-gray-500 truncate flex items-center gap-2">
-                  <span className={`inline-flex items-center px-2 py-0.5 rounded font-medium ${sourceClass}`}>{sourceType}</span>
+                  <span className={`inline-flex items-center px-2 py-0.5 rounded font-medium ${sourceClass}`}>{displayLabel(sourceType, '未知来源')}</span>
                   <span className="truncate">{testCase.moduleName || '未分模块'} · {testCase.caseScope || testCase.caseType || '未分类'}</span>
                 </div>
               </div>
-              <div className="text-sm text-gray-600" style={{ width: '100px' }}>{testCase.caseType || '-'}</div>
+              <div className="text-sm text-gray-600" style={{ width: '150px' }}>
+                <div>{displayLabel(testCase.scenarioType, '未分类场景')}</div>
+                <div className="truncate text-xs text-gray-400" title={testCase.designMethod || ''}>{testCase.designMethod || '-'}</div>
+              </div>
               <div style={{ width: '80px' }}>
                 {testCase.priority && (
                   <span className={`text-[11px] font-semibold px-2 py-0.5 rounded ${priorityConfig[testCase.priority]?.bg || 'bg-gray-100'} ${priorityConfig[testCase.priority]?.text || 'text-gray-500'}`}>
@@ -526,6 +583,7 @@ export default function LocalCaseLibrary() {
           <div className="space-y-4 text-sm">
             <div><div className="text-xs text-gray-500">用例名称</div><div className="mt-1 break-words font-medium">{detailCase.caseTitle}</div></div>
             <div className="grid grid-cols-2 gap-3"><div><div className="text-xs text-gray-500">模块</div><div>{detailCase.moduleName || '-'}</div></div><div><div className="text-xs text-gray-500">优先级</div><div>{detailCase.priority || '-'}</div></div></div>
+            <div className="grid grid-cols-2 gap-3"><div><div className="text-xs text-gray-500">场景类型</div><div>{displayLabel(detailCase.scenarioType, '未分类场景')}</div></div><div><div className="text-xs text-gray-500">设计方法</div><div>{detailCase.designMethod || '-'}</div></div></div>
             {detailCase.precondition && <div><div className="text-xs text-gray-500">前置条件</div><div className="mt-1 whitespace-pre-wrap break-words">{detailCase.precondition}</div></div>}
             <div><div className="text-xs text-gray-500">测试步骤</div><div className="mt-1 whitespace-pre-wrap break-words rounded-lg bg-gray-50 p-3">{detailCase.steps}</div></div>
             <div><div className="text-xs text-gray-500">预期结果</div><div className="mt-1 whitespace-pre-wrap break-words rounded-lg bg-gray-50 p-3">{detailCase.expectedResult}</div></div>

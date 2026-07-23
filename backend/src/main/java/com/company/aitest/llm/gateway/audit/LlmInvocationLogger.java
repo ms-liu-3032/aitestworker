@@ -55,7 +55,7 @@ public class LlmInvocationLogger {
                 setLong(ps, i++, entry.projectId());
                 setLong(ps, i++, entry.taskId());
                 ps.setString(i++, truncate(entry.taskType(), 128));
-                ps.setString(i++, truncate(entry.stage(), 64));
+                ps.setString(i++, truncate(entry.stage(), 128));
                 setLong(ps, i++, entry.modelConfigId());
                 setLong(ps, i++, entry.modelConfigId());
                 setLong(ps, i++, entry.modelConfigId());
@@ -70,8 +70,8 @@ public class LlmInvocationLogger {
                 ps.setInt(i++, entry.tokenInput());
                 ps.setInt(i++, entry.tokenCachedInput());
                 ps.setInt(i++, entry.tokenOutput());
-                ps.setString(i++, truncate(entry.status(), 32));
-                ps.setString(i++, truncate(entry.errorCode(), 64));
+                ps.setString(i++, truncate(entry.status(), 64));
+                ps.setString(i++, truncate(entry.errorCode(), 128));
                 ps.setString(i++, entry.errorMessage());
                 ps.setLong(i++, entry.durationMs());
                 ps.setObject(i, now);

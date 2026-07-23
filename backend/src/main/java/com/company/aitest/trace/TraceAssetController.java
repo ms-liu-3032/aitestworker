@@ -130,10 +130,11 @@ public class TraceAssetController {
                                                                               @org.springframework.web.bind.annotation.RequestParam(required = false) List<String> priorities,
                                                                               @org.springframework.web.bind.annotation.RequestParam(required = false) List<String> statuses,
                                                                               @org.springframework.web.bind.annotation.RequestParam(required = false) List<String> sources,
+                                                                              @org.springframework.web.bind.annotation.RequestParam(required = false) List<String> scenarioTypes,
                                                                               Authentication authentication) {
         CurrentUser user = (CurrentUser) authentication.getPrincipal();
         return ApiResponse.ok(traceAssetService.listFormalCasePage(projectId, page, size, keyword,
-                modules, priorities, statuses, sources, user));
+                modules, priorities, statuses, sources, scenarioTypes, user));
     }
 
     @GetMapping("/projects/{projectId}/formal-cases/{caseId}")

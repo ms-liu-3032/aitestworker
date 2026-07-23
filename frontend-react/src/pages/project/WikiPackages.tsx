@@ -3,9 +3,10 @@ import { useParams } from 'react-router-dom';
 import { useApp } from '../../context/AppContext';
 import {
   listWikiPacks, createWikiPack,
-  listWikiEntries, createWikiEntry, reviewWikiEntry,
+  listWikiEntries, createWikiEntry, reviewWikiEntry, reviewWikiPack, updateWikiPackStatus,
   type WikiPack, type WikiEntry
 } from '../../services/api';
+import { statusLabel, wikiEntryTypeLabel, wikiScopeLabel } from '../../utils/displayLabels';
 
 const scopeColors: Record<string, string> = {
   PROJECT: 'bg-blue-50 text-blue-700',
@@ -34,7 +35,7 @@ export default function WikiPackages() {
   const [showCreatePack, setShowCreatePack] = useState(false);
   const [showCreateEntry, setShowCreateEntry] = useState(false);
   const [newPackName, setNewPackName] = useState('');
-  const [newPackScope, setNewPackScope] = useState('PROJECT');
+  const [newPackScope] = useState('PROJECT');
   const [newEntryTitle, setNewEntryTitle] = useState('');
   const [newEntryContent, setNewEntryContent] = useState('');
   const [newEntryType, setNewEntryType] = useState('RULE');
@@ -68,6 +69,25 @@ export default function WikiPackages() {
     } catch { setEntries([]); }
   };
 
+  const replacePack = (updated: WikiPack) => {
+    setPacks(prev => prev.map(pack => pack.id === updated.id ? updated : pack));
+    setSelectedPack(prev => prev?.id === updated.id ? updated : prev);
+  };
+
+  const handleReviewPack = async (pack: WikiPack, reviewStatus: string) => {
+    try {
+      replacePack(await reviewWikiPack(pack.id, reviewStatus));
+      showToast(reviewStatus === 'APPROVED' ? '知识包审核通过，审核条目后可激活' : '知识包已驳回');
+    } catch (e: any) { showToast(e.message || '知识包审核失败', 'error'); }
+  };
+
+  const handlePackStatus = async (pack: WikiPack, status: string) => {
+    try {
+      replacePack(await updateWikiPackStatus(pack.id, status));
+      showToast(status === 'ACTIVE' ? '知识包已激活并进入后续语义召回' : '知识包已停用');
+    } catch (e: any) { showToast(e.message || '知识包状态更新失败', 'error'); }
+  };
+
   const handleCreateEntry = async () => {
     if (!selectedPack || !newEntryTitle.trim() || !newEntryContent.trim()) return;
     try {
@@ -93,7 +113,7 @@ export default function WikiPackages() {
   return (
     <div className="p-4 sm:p-6 space-y-4 animate-fade-in">
       <div className="flex items-center justify-between">
-        <h1 className="text-lg font-bold text-gray-900">知识库</h1>
+        <div><h1 className="text-lg font-bold text-gray-900">项目知识库</h1><div className="mt-1 text-xs text-gray-500">这里只管理当前项目级知识；跨项目复用级和系统级知识请在管理后台的正式测试资产库中管理。</div></div>
         <button onClick={() => setShowCreatePack(true)} className="bg-slate-900 text-white px-3 py-1.5 rounded-lg text-xs font-semibold hover:bg-slate-800">
           新建知识包
         </button>
@@ -106,10 +126,13 @@ export default function WikiPackages() {
             className={`p-4 rounded-xl border cursor-pointer transition-all ${selectedPack?.id === pack.id ? 'border-purple-300 bg-purple-50/50' : 'border-gray-200 hover:border-gray-300'}`}>
             <div className="flex items-center gap-2 mb-2">
               <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${scopeColors[pack.scope] || 'bg-gray-100 text-gray-600'}`}>
-                {pack.scope}
+                {wikiScopeLabel(pack.scope)}
               </span>
               <span className={`text-[10px] px-1.5 py-0.5 rounded ${statusColors[pack.status] || 'bg-gray-100 text-gray-600'}`}>
-                {pack.status}
+                {statusLabel(pack.status)}
+              </span>
+              <span className={`text-[10px] px-1.5 py-0.5 rounded ${pack.reviewStatus === 'APPROVED' ? 'bg-green-50 text-green-700' : pack.reviewStatus === 'REJECTED' ? 'bg-red-50 text-red-700' : 'bg-amber-50 text-amber-700'}`}>
+                {pack.reviewStatus === 'APPROVED' ? '已审核' : pack.reviewStatus === 'REJECTED' ? '已驳回' : '待审核'}
               </span>
             </div>
             <div className="text-sm font-semibold text-gray-900 truncate">{pack.name}</div>
@@ -123,20 +146,41 @@ export default function WikiPackages() {
       {selectedPack && (
         <div className="mt-4">
           <div className="flex items-center justify-between mb-3">
-            <h2 className="text-sm font-semibold text-gray-700">{selectedPack.name} — 条目 ({entries.length})</h2>
-            <button onClick={() => setShowCreateEntry(true)} className="text-xs text-purple-600 hover:text-purple-700 font-medium">+ 新建条目</button>
+            <div>
+              <h2 className="text-sm font-semibold text-gray-700">{selectedPack.name} — 条目 ({entries.length})</h2>
+              <div className="mt-1 text-xs text-gray-500">候选必须先审核条目和知识包，再激活后才会进入需求分析与用例生成。</div>
+            </div>
+            <div className="flex flex-wrap justify-end gap-2">
+              {selectedPack.reviewStatus === 'PENDING' && <>
+                <button onClick={() => handleReviewPack(selectedPack, 'APPROVED')} className="text-xs font-medium text-green-700">通过知识包</button>
+                <button onClick={() => handleReviewPack(selectedPack, 'REJECTED')} className="text-xs font-medium text-red-600">驳回知识包</button>
+              </>}
+              {selectedPack.reviewStatus === 'APPROVED' && selectedPack.status !== 'ACTIVE' && (
+                <button onClick={() => handlePackStatus(selectedPack, 'ACTIVE')} className="rounded bg-slate-900 px-2.5 py-1.5 text-xs font-semibold text-white">激活</button>
+              )}
+              {selectedPack.status === 'ACTIVE' && (
+                <button onClick={() => handlePackStatus(selectedPack, 'INACTIVE')} className="text-xs font-medium text-amber-700">停用</button>
+              )}
+              <button onClick={() => setShowCreateEntry(true)} className="text-xs text-purple-600 hover:text-purple-700 font-medium">+ 新建条目</button>
+            </div>
           </div>
           <div className="space-y-2">
             {entries.map(entry => (
               <div key={entry.id} className="p-3 bg-white rounded-lg border border-gray-200">
                 <div className="flex items-center gap-2 mb-1">
-                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-600">{entry.entryType}</span>
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-600">{wikiEntryTypeLabel(entry.entryType)}</span>
                   <span className={`text-[10px] px-1.5 py-0.5 rounded ${entry.reviewStatus === 'APPROVED' ? 'bg-green-50 text-green-700' : entry.reviewStatus === 'REJECTED' ? 'bg-red-50 text-red-700' : 'bg-yellow-50 text-yellow-700'}`}>
-                    {entry.reviewStatus}
+                    {statusLabel(entry.reviewStatus)}
                   </span>
                 </div>
                 <div className="text-sm font-medium text-gray-900">{entry.title}</div>
                 <div className="text-xs text-gray-500 mt-1 line-clamp-2">{entry.content}</div>
+                {entry.sourceRefsJson && (
+                  <details className="mt-2 text-xs text-gray-500">
+                    <summary className="cursor-pointer select-none">查看来源</summary>
+                    <pre className="mt-1 max-h-32 overflow-auto whitespace-pre-wrap rounded bg-gray-50 p-2">{entry.sourceRefsJson}</pre>
+                  </details>
+                )}
                 {entry.reviewStatus === 'PENDING' && (
                   <div className="flex gap-2 mt-2">
                     <button onClick={() => handleReviewEntry(entry.id, 'APPROVED')} className="text-xs text-green-600 hover:text-green-700 font-medium">通过</button>
@@ -161,11 +205,8 @@ export default function WikiPackages() {
                 <input value={newPackName} onChange={e => setNewPackName(e.target.value)} className="w-full h-9 px-3 bg-gray-50 border border-gray-200 rounded-lg text-sm" placeholder="知识包名称" />
               </div>
               <div>
-                <label className="text-xs text-gray-500 mb-1 block">范围</label>
-                <select value={newPackScope} onChange={e => setNewPackScope(e.target.value)} className="w-full h-9 px-3 bg-gray-50 border border-gray-200 rounded-lg text-sm">
-                  <option value="PROJECT">项目级</option>
-                  <option value="REUSABLE">复用参考级</option>
-                </select>
+                <label className="text-xs text-gray-500 mb-1 block">层级</label>
+                <div className="flex h-9 items-center rounded-lg border border-gray-200 bg-gray-50 px-3 text-sm text-gray-700">项目级</div>
               </div>
               <div className="flex justify-end gap-2">
                 <button onClick={() => setShowCreatePack(false)} className="px-3 py-1.5 text-sm text-gray-500">取消</button>

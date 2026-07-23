@@ -12,6 +12,7 @@ import {
   type GenerationSession, type GenerationMessage, type ModelConfigRecord, type CaseDraft, type PromptTemplateRecord, type RequirementAnalysis,
   type AsyncGenerationTask, type AsyncGenerationTaskStage, type RequirementScopeDecision, type TestPointScopeDecision
 } from '../../services/api';
+import { statusLabel as uiStatusLabel } from '../../utils/displayLabels';
 import {
   listAttachments as listGenerationAttachments,
   uploadAttachment as uploadGenerationAttachment,
@@ -75,6 +76,18 @@ const TEST_POINT_LABELS: Record<string, string> = {
   CORE: '核心',
   EXTENDED: '扩展',
   RISK: '风险',
+  POSITIVE: '正向场景', NEGATIVE: '反向场景',
+  COMBINATION: '组合场景', RECOVERY: '恢复与一致性',
+  VALID_FLOW: '有效主流程', EXPECTED_BUSINESS_RESULT: '业务结果',
+  CONDITION_TRUE: '条件成立', CONDITION_FALSE: '条件不成立', KEY_COMBINATIONS: '关键条件组合',
+  VALID_EQUIVALENCE_CLASS: '有效等价类', INVALID_EQUIVALENCE_CLASS: '无效等价类',
+  AT_BOUNDARY: '边界值', JUST_INSIDE_BOUNDARY: '边界内值', JUST_OUTSIDE_BOUNDARY: '边界外值',
+  FAILURE_TRIGGER: '失败触发', USER_FEEDBACK: '错误反馈', NO_UNEXPECTED_SIDE_EFFECT: '无异常副作用',
+  VALID_TRANSITION: '合法状态流转', INVALID_TRANSITION: '非法状态流转', RECOVERY_OR_ROLLBACK: '恢复或回滚',
+  WRITE_RESULT: '写入结果', READ_BACK_CONSISTENCY: '回读一致性', FAILURE_CONSISTENCY: '失败一致性',
+  AUTHORIZED: '有权限', UNAUTHORIZED: '无权限', DATA_SCOPE_ISOLATION: '数据范围隔离',
+  CONCURRENT_CONFLICT: '并发冲突', CONSISTENT_FINAL_RESULT: '最终结果一致',
+  NO_DUPLICATE_SIDE_EFFECT: '无重复副作用', FIRST_REQUEST: '首次请求', REPEATED_REQUEST: '重复请求',
 };
 
 const SCOPE_RECOMMENDATION_LABELS: Record<string, string> = {
@@ -87,6 +100,14 @@ const SCOPE_RECOMMENDATION_LABELS: Record<string, string> = {
 function testPointLabel(value: unknown): string {
   const raw = displayText(value).trim();
   return TEST_POINT_LABELS[raw.toUpperCase()] || raw;
+}
+
+function scenarioTypeLabel(value: unknown): string {
+  const raw = displayText(value).trim().toUpperCase();
+  return ({
+    POSITIVE: '正向场景', NEGATIVE: '反向场景', BOUNDARY: '边界场景',
+    COMBINATION: '组合场景', STATE: '状态场景', RECOVERY: '恢复与一致性',
+  } as Record<string, string>)[raw] || raw;
 }
 
 function formatRuleConfidence(value: unknown): string | null {
@@ -333,6 +354,13 @@ function asyncTaskRunning(task?: AsyncGenerationTask | null) {
   return task?.status === 'PENDING' || task?.status === 'RUNNING';
 }
 
+function asyncTaskFinished(task?: AsyncGenerationTask | null) {
+  return task?.status === 'SUCCEEDED'
+    || task?.status === 'FAILED'
+    || task?.status === 'TIMEOUT'
+    || task?.status === 'CANCELED';
+}
+
 
 function isRequirementAnalysisTask(task?: AsyncGenerationTask | null) {
   return task?.taskType === 'REQUIREMENT_ANALYSIS'
@@ -364,6 +392,18 @@ function shouldUseAsyncAnalysis(session: GenerationSession | null | undefined, c
     return true;
   }
   return false;
+}
+
+function requiresScopeConfirmation(session: GenerationSession | null | undefined,
+                                   analysis: RequirementAnalysis | null | undefined) {
+  const status = (analysis?.status || '').trim().toUpperCase();
+  if (['NEED_SCOPE_CONFIRMATION', 'SCOPE_CONFIRMED',
+    'NEED_TEST_POINT_SCOPE_CONFIRMATION', 'TEST_POINT_SCOPE_CONFIRMED', 'NEED_CONFIRMATION'].includes(status)) {
+    return true;
+  }
+  const stage = (session?.currentStage || '').trim().toUpperCase();
+  return stage === 'WAITING_REQUIREMENT_SCOPE'
+    || (stage === 'WAITING_USER_CONFIRMATION' && status !== 'CONFIRMED' && status !== 'GENERATED');
 }
 
 function asyncTaskTitle(task?: AsyncGenerationTask | null) {
@@ -449,7 +489,7 @@ function AsyncTaskStageCard({ stage }: { stage: AsyncGenerationTaskStage }) {
         <span className={`h-2 w-2 shrink-0 rounded-full ${stageDotTone(stage.status)}`} />
         <span className="truncate font-medium">{stage.label}</span>
       </div>
-      <div className="mt-1 font-mono text-[10px] opacity-80">{stage.status}</div>
+      <div className="mt-1 text-[10px] opacity-80">{uiStatusLabel(stage.status)}</div>
       {(stage.status === 'FAILED' || stage.status === 'TIMEOUT') && (
         <AsyncErrorDetails message={stage.errorMessage || stage.errorCode || '该阶段执行失败'} compact />
       )}
@@ -591,7 +631,7 @@ export function AnalysisMessageContent({ analysis }: { analysis: RequirementAnal
     risk_scenarios?: string[];
     boundary_conditions?: string[];
     coverage_matrix?: CoverageMatrixRow[];
-    case_plan?: { id?: string; title?: string; case_strategy?: string; source_test_point_refs?: string[]; precondition_test_point_refs?: string[]; case_designs?: { id?: string; title?: string; scenario?: string; design_method?: string }[] }[];
+    case_plan?: { id?: string; title?: string; case_strategy?: string; source_test_point_refs?: string[]; precondition_test_point_refs?: string[]; case_designs?: { id?: string; title?: string; scenario?: string; scenario_type?: string; design_method?: string; design_methods?: string[]; coverage_requirements?: string[] }[] }[];
   }>(analysis.analysisResult);
   const questions = result?.clarification_questions
     ?? safeJsonParse<any[]>(analysis.clarificationQuestions)
@@ -691,11 +731,12 @@ export function AnalysisMessageContent({ analysis }: { analysis: RequirementAnal
 type TestPointDisposition = TestPointScopeDecision['disposition'];
 
 function defaultTestPointDisposition(point: any): TestPointDisposition {
-  if (['GENERATE', 'REFERENCE_ONLY', 'EXCLUDED'].includes(point?.generation_scope)) {
+  if (point?.scope_decision_source === 'USER'
+      && ['GENERATE', 'REFERENCE_ONLY', 'EXCLUDED'].includes(point?.generation_scope)) {
     return point.generation_scope;
   }
-  if (point?.scope_recommendation === 'OUT_OF_SCOPE') return 'EXCLUDED';
-  return ['REFERENCE_ONLY', 'NEEDS_CONFIRMATION'].includes(point?.scope_recommendation) ? 'REFERENCE_ONLY' : 'GENERATE';
+  if (point?.generation_scope === 'EXCLUDED' || point?.scope_recommendation === 'OUT_OF_SCOPE') return 'EXCLUDED';
+  return 'GENERATE';
 }
 
 export function AnalysisPanel({
@@ -779,6 +820,7 @@ export function AnalysisPanel({
         evidence_count?: number;
         confidence_label?: string;
         tom_node_refs?: string[];
+        wiki_refs?: string[];
         page_refs?: string[];
         business_pack_refs?: string[];
         trace_refs?: string[];
@@ -819,7 +861,7 @@ export function AnalysisPanel({
         case_strategy?: string;
         source_test_point_refs?: string[];
         precondition_test_point_refs?: string[];
-        case_designs?: { id?: string; title?: string; scenario?: string; design_method?: string }[];
+        case_designs?: { id?: string; title?: string; scenario?: string; scenario_type?: string; design_method?: string; design_methods?: string[]; coverage_requirements?: string[] }[];
       }[];
       test_point_scope_review?: {
         status?: string;
@@ -838,6 +880,7 @@ export function AnalysisPanel({
     const requirementAtoms = result?.requirement_atoms ?? [];
     const requirementScopeReview = result?.requirement_scope_review;
     const scopeReview = result?.test_point_scope_review;
+    const testPointScopeAvailable = !['NEED_SCOPE_CONFIRMATION', 'SCOPE_CONFIRMED'].includes(a.status);
     const canEditRequirementScope = isLatest && a.status === 'NEED_SCOPE_CONFIRMATION'
       && Boolean(onConfirmRequirementScope);
     const canEditScope = isLatest
@@ -955,6 +998,7 @@ export function AnalysisPanel({
             )}
           </div>
         )}
+        <ClarificationQuestions questions={questions} />
         {requirementAtoms.length > 0 && requirementScopeReview && (
           <div className="rounded-lg border border-blue-200 bg-blue-50/70 p-2">
             <div className="flex flex-wrap items-start justify-between gap-2">
@@ -978,7 +1022,7 @@ export function AnalysisPanel({
               {canEditRequirementScope && (
                 <button type="button" onClick={setRecommendedRequirementScope}
                   className="rounded border border-blue-200 bg-white px-1.5 py-0.5 text-blue-700 hover:border-blue-300">
-                  恢复 AI 建议
+                  恢复默认范围
                 </button>
               )}
             </div>
@@ -1095,7 +1139,6 @@ export function AnalysisPanel({
             )}
           </div>
         )}
-        <ClarificationQuestions questions={questions} />
         {evidenceSummary && (
           <div className="rounded-lg border border-sky-100 bg-sky-50/70 p-2">
             <div className="flex flex-wrap items-center justify-between gap-2">
@@ -1113,6 +1156,7 @@ export function AnalysisPanel({
             </div>
             <div className="mt-2 grid grid-cols-1 gap-2">
               <EvidenceChips title="TOM" items={evidenceSummary.tom_node_refs} />
+              <EvidenceChips title="LLM Wiki" items={evidenceSummary.wiki_refs} />
               <EvidenceChips title="页面" items={evidenceSummary.page_refs} />
               <EvidenceChips title="业务包" items={evidenceSummary.business_pack_refs} />
               <EvidenceChips title="轨迹/摘要" items={evidenceSummary.trace_refs} />
@@ -1140,7 +1184,7 @@ export function AnalysisPanel({
             })}
           </div>
         )}
-        {testPoints.length > 0 && (
+        {testPointScopeAvailable && testPoints.length > 0 && (
           <div>
             <div className="mb-2 rounded-lg border border-indigo-100 bg-indigo-50/60 p-2">
               <div className="flex flex-wrap items-center justify-between gap-2">
@@ -1282,6 +1326,7 @@ export function AnalysisPanel({
                     <div className="mt-2 space-y-1">
                       <EvidenceChips title="依据" items={tp.source_basis} />
                       <EvidenceChips title="TOM" items={tp.source_refs?.tom_node_refs} />
+                      <EvidenceChips title="LLM Wiki" items={tp.source_refs?.wiki_refs} />
                       <EvidenceChips title="页面" items={tp.source_refs?.page_refs} />
                       <EvidenceChips title="业务包" items={tp.source_refs?.business_pack_refs} />
                       <EvidenceChips title="待确认" items={tp.unsupported_items} />
@@ -1337,7 +1382,15 @@ export function AnalysisPanel({
                       {plan.case_designs.map((design, designIndex) => (
                         <div key={design.id || designIndex} className="break-words">
                           {displayText(design.id) || `CD${designIndex + 1}`} · {displayText(design.title) || displayText(design.scenario) || '具体用例设计'}
-                          {design.design_method && <span className="ml-1 text-gray-400">[{displayText(design.design_method)}]</span>}
+                          {design.scenario_type && <span className="ml-1 text-sky-600">[{scenarioTypeLabel(design.scenario_type)}]</span>}
+                          {(design.design_methods?.length || design.design_method) && (
+                            <span className="ml-1 text-gray-400">[{(design.design_methods || [design.design_method]).filter(Boolean).map(item => displayText(item)).join(' + ')}]</span>
+                          )}
+                          {design.coverage_requirements && design.coverage_requirements.length > 0 && (
+                            <div className="mt-1 text-[10px] leading-4 text-gray-500">
+                              覆盖义务：{design.coverage_requirements.map(item => testPointLabel(item)).join('、')}
+                            </div>
+                          )}
                         </div>
                       ))}
                     </div>
@@ -1561,6 +1614,10 @@ export default function TestCaseGeneration() {
   useEffect(() => {
     if (!projectId || !activeSession) return;
     let disposed = false;
+    // A send lock belongs to the previous task/session snapshot. The restored task
+    // below becomes the single source of truth while the current session is loaded.
+    setSending(false);
+    setAnalysisLoading(false);
     setActiveAsyncTask(null);
     void refreshSessionData(activeSession.id, { showLoading: true });
     if (!activeSession.executionTaskId) return () => {
@@ -1569,7 +1626,13 @@ export default function TestCaseGeneration() {
     setRestoringAsyncTask(true);
     void getAsyncGenerationTask(Number(projectId), activeSession.executionTaskId)
       .then(task => {
-        if (!disposed) setActiveAsyncTask(task);
+        if (!disposed) {
+          setActiveAsyncTask(task);
+          if (asyncTaskFinished(task)) {
+            setSending(false);
+            setAnalysisLoading(false);
+          }
+        }
       })
       .catch(error => {
         if (!disposed) {
@@ -1587,6 +1650,14 @@ export default function TestCaseGeneration() {
   }, [projectId, activeSession?.id, activeSession?.executionTaskId]);
 
   useEffect(() => {
+    if (!asyncTaskFinished(activeAsyncTask)) return;
+    // A terminal snapshot may arrive through polling, task restoration, or a
+    // session-list refresh. All three paths must release the composer lock.
+    setSending(false);
+    setAnalysisLoading(false);
+  }, [activeAsyncTask?.taskId, activeAsyncTask?.status]);
+
+  useEffect(() => {
     if (!activeSession) return;
     setSessionModelDraft(activeSession.modelConfigId ?? '');
     setSessionPromptDraft(activeSession.promptTemplateId ?? '');
@@ -1595,11 +1666,21 @@ export default function TestCaseGeneration() {
   useEffect(() => {
     if (!projectId || !activeSession || !activeAsyncTask || !asyncTaskRunning(activeAsyncTask)) return;
     let stopped = false;
-    const timer = window.setInterval(async () => {
+    let timer: number | null = null;
+    let queryErrorShown = false;
+    const poll = async () => {
       try {
         const task = await getAsyncGenerationTask(Number(projectId), activeAsyncTask.taskId);
         if (stopped) return;
-        setActiveAsyncTask(task);
+        queryErrorShown = false;
+        setActiveAsyncTask(current => {
+          if (current?.taskId === task.taskId
+              && !asyncTaskRunning(current)
+              && asyncTaskRunning(task)) {
+            return current;
+          }
+          return task;
+        });
         const interimRefresh = isRequirementAnalysisTask(task)
           ? await refreshSessionData(activeSession.id).catch(() => null)
           : null;
@@ -1656,18 +1737,23 @@ export default function TestCaseGeneration() {
           } else {
             showToast(asyncTaskErrorMessage(task), 'error');
           }
+        } else if (!stopped) {
+          timer = window.setTimeout(() => void poll(), 2000);
         }
       } catch (error: any) {
         if (!stopped) {
-          setSending(false);
-          setAnalysisLoading(false);
-          showToast(error.message || '查询生成任务失败', 'error');
+          if (!queryErrorShown) {
+            queryErrorShown = true;
+            showToast(error.message || '查询生成任务失败，正在自动重试', 'error');
+          }
+          timer = window.setTimeout(() => void poll(), 3000);
         }
       }
-    }, 2000);
+    };
+    void poll();
     return () => {
       stopped = true;
-      window.clearInterval(timer);
+      if (timer !== null) window.clearTimeout(timer);
     };
   }, [projectId, activeSession?.id, activeAsyncTask?.taskId, activeAsyncTask?.status]);
 
@@ -1845,7 +1931,7 @@ export default function TestCaseGeneration() {
       return;
     }
 
-    if (isCaseGenerationIntent(content)) {
+    if (isCaseGenerationIntent(content) && !requiresScopeConfirmation(activeSession, analysis)) {
       setSending(true);
       setAnalysisLoading(true);
       setAsyncTaskBusy(true);
@@ -2203,7 +2289,7 @@ export default function TestCaseGeneration() {
           >
             <option value="">全部状态</option>
             {sessionStatusOptions.map(status => (
-              <option key={status} value={status}>{status}</option>
+              <option key={status} value={status}>{uiStatusLabel(status)}</option>
             ))}
           </select>
           <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-gray-400">
@@ -2233,11 +2319,11 @@ export default function TestCaseGeneration() {
                   <div className="text-[11px] text-gray-500 mt-0.5">{new Date(s.createdAt).toLocaleDateString('zh-CN')}</div>
                 </div>
                 <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded flex-shrink-0 ${statusTone(s.status)}`}>
-                  {s.status}
+                  {uiStatusLabel(s.status)}
                 </span>
               </div>
               <div className="text-[11px] text-gray-400 mt-1 truncate">
-                阶段：{s.currentStage || '待分析'}
+                阶段：{messageStageLabel(s.currentStage) || '待分析'}
               </div>
               <div className="mt-2 flex items-center gap-3 opacity-0 group-hover:opacity-100 transition-opacity">
                 <span
@@ -2377,7 +2463,7 @@ export default function TestCaseGeneration() {
                       {asyncTaskTitle(activeAsyncTask)} #{activeAsyncTask.taskId}
                     </div>
                     <div className="mt-1 text-xs text-gray-600">
-                      状态：{activeAsyncTask.status}
+                      状态：{uiStatusLabel(activeAsyncTask.status)}
                       {activeAsyncTask.draftCount > 0 ? ` · 草稿 ${activeAsyncTask.draftCount} 条` : ''}
                     </div>
                     {(activeAsyncTask.status === 'FAILED' || activeAsyncTask.status === 'TIMEOUT') && (
@@ -2639,7 +2725,7 @@ export default function TestCaseGeneration() {
                             d.status === 'DEPRECATED' ? 'bg-gray-100 text-gray-500' :
                             'bg-gray-100 text-gray-600'
                           }`}>
-                            {d.status === 'DRAFT' ? '草稿' : d.status === 'CONFIRMED' ? '已确认' : d.status === 'DEPRECATED' ? '已舍弃' : d.status}
+                            {d.status === 'DEPRECATED' ? '已舍弃' : uiStatusLabel(d.status)}
                           </span>
                           {d.analysisVersion != null && (
                             <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-sky-50 text-sky-700">
@@ -2831,12 +2917,12 @@ export default function TestCaseGeneration() {
                   selectedDraft.status === 'DEPRECATED' ? 'bg-gray-100 text-gray-500' :
                   'bg-gray-100 text-gray-600'
                 }`}>
-                  {selectedDraft.status === 'DRAFT' ? '草稿' : selectedDraft.status === 'CONFIRMED' ? '已确认' : selectedDraft.status === 'DEPRECATED' ? '已舍弃' : selectedDraft.status}
+                  {selectedDraft.status === 'DEPRECATED' ? '已舍弃' : uiStatusLabel(selectedDraft.status)}
                 </span>
               </div>
               <div>
                 <div className="text-[11px] text-gray-500 mb-0.5">类型</div>
-                <div className="text-[10px] text-gray-700">{selectedDraft.caseType || '-'}</div>
+                <div className="text-[10px] text-gray-700">{selectedDraft.caseType ? testPointLabel(selectedDraft.caseType) : '-'}</div>
               </div>
               {selectedDraft.analysisVersion != null && (
                 <div>
@@ -2877,6 +2963,7 @@ export default function TestCaseGeneration() {
                         )}
                       </div>
                       <EvidenceChips title="TOM" items={selectedEvidenceSummary.tom_node_refs} />
+                      <EvidenceChips title="LLM Wiki" items={selectedEvidenceSummary.wiki_refs} />
                       <EvidenceChips title="页面" items={selectedEvidenceSummary.page_refs} />
                       <EvidenceChips title="业务包" items={selectedEvidenceSummary.business_pack_refs} />
                       <EvidenceChips title="轨迹/摘要" items={selectedEvidenceSummary.trace_refs} />

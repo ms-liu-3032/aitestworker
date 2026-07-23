@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import RichList from '../../components/RichList';
 import { useApp } from '../../context/AppContext';
 import { createUser, listUsers, type UserRecord } from '../../services/api';
+import { statusLabel } from '../../utils/displayLabels';
 
 type RoleFilter = '' | 'ADMIN' | 'SUB_ADMIN' | 'MEMBER';
 type StatusFilter = '' | 'ACTIVE';
@@ -227,7 +228,7 @@ export default function UserManagement() {
             </div>
             <div style={{ width: '100px' }}>
               <span className={`text-[11px] font-medium px-2 py-0.5 rounded ${user.status === 'ACTIVE' ? 'bg-green-50 text-green-700' : 'bg-gray-100 text-gray-600'}`}>
-                {user.status === 'ACTIVE' ? '活跃' : user.status}
+                {statusLabel(user.status)}
               </span>
             </div>
             <div className="text-xs text-gray-500 font-mono" style={{ width: '140px' }}>

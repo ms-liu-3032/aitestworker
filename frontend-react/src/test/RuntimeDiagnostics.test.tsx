@@ -125,7 +125,7 @@ describe('RuntimeDiagnostics', () => {
 
     await waitFor(() => expect(mockListLlmInvocationLogs).toHaveBeenCalled())
     expect(screen.getByText('gpt-test')).toBeDefined()
-    expect(screen.getByText('TIMEOUT')).toBeDefined()
+    expect(screen.getByText('调用超时')).toBeDefined()
     expect(screen.getByText('partial output')).toBeDefined()
   })
 
@@ -170,7 +170,7 @@ describe('RuntimeDiagnostics', () => {
 
     await waitFor(() => expect(mockGetLlmInvocationChain).toHaveBeenCalledWith('req-1'))
     expect(screen.getByText('LLM 调用链路')).toBeDefined()
-    expect(screen.getByText('ATTEMPT_RETRY')).toBeDefined()
+    expect(screen.getByText('等待重试')).toBeDefined()
     expect(screen.getByText('temporary failure')).toBeDefined()
   })
 

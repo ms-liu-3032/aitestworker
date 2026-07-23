@@ -6,6 +6,7 @@ import java.sql.SQLException;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 import com.company.aitest.common.BusinessException;
 import com.company.aitest.common.CurrentUser;
@@ -13,6 +14,7 @@ import com.company.aitest.common.TimeProvider;
 import com.company.aitest.knowledge.KnowledgeChunk;
 import com.company.aitest.knowledge.KnowledgeChunker;
 import com.company.aitest.knowledge.KnowledgeTextCleaner;
+import com.company.aitest.knowledge.KnowledgeDepositionService;
 import com.company.aitest.preset.DomainPresetService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -39,6 +41,7 @@ public class ManualImportService {
     private final MiniTomCrossValidationService crossValidationService;
     private final TimeProvider timeProvider;
     private final DomainPresetService domainPresetService;
+    private KnowledgeDepositionService knowledgeDepositionService;
 
     public ManualImportService(JdbcClient jdbc, JdbcTemplate jdbcTemplate,
                                TomLlmExtractor extractor,
@@ -53,6 +56,11 @@ public class ManualImportService {
         this.crossValidationService = crossValidationService;
         this.timeProvider = timeProvider;
         this.domainPresetService = domainPresetService;
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setKnowledgeDepositionService(KnowledgeDepositionService knowledgeDepositionService) {
+        this.knowledgeDepositionService = knowledgeDepositionService;
     }
 
     /**
@@ -98,6 +106,9 @@ public class ManualImportService {
 
         // 5. 完成
         updateTaskProgress(taskId, "COMPLETED", chunks.size(), chunks.size(), extracted);
+        if (knowledgeDepositionService != null) {
+            depositKnowledgeCandidate(taskId, cmd.projectId(), docId, cmd.docTitle(), cleaned, user.id());
+        }
         return getProgress(taskId);
     }
 
@@ -236,6 +247,76 @@ public class ManualImportService {
                 WHERE id = ?
                 """, status, totalChunks, processedChunks, extractedCandidates,
                 timeProvider.now(), taskId);
+    }
+
+    private void depositKnowledgeCandidate(Long taskId, Long projectId, Long docId,
+                                           String title, String content, Long userId) {
+        int claimed = jdbcTemplate.update("""
+                UPDATE manual_import_task
+                SET knowledge_deposition_status = 'RUNNING',
+                    knowledge_deposition_attempts = knowledge_deposition_attempts + 1,
+                    knowledge_deposition_started_at = ?,
+                    knowledge_deposition_error = NULL, updated_at = ?
+                WHERE id = ? AND (knowledge_deposition_status IN ('PENDING', 'FAILED')
+                    OR (knowledge_deposition_status = 'RUNNING'
+                        AND knowledge_deposition_started_at < DATE_SUB(NOW(), INTERVAL 10 MINUTE)))
+                """, timeProvider.now(), timeProvider.now(), taskId);
+        if (claimed == 0) return;
+        try {
+            knowledgeDepositionService.depositUploadedDocument(projectId, "KNOWLEDGE_DOCUMENT", docId,
+                    title, content, userId);
+            jdbcTemplate.update("""
+                    UPDATE manual_import_task
+                    SET knowledge_deposition_status = 'SUCCEEDED', knowledge_deposition_error = NULL,
+                        knowledge_deposited_at = ?, updated_at = ?
+                    WHERE id = ?
+                    """, timeProvider.now(), timeProvider.now(), taskId);
+        } catch (Exception e) {
+            String message = e.getMessage() == null ? "未知错误" : e.getMessage();
+            if (message.length() > 1000) message = message.substring(0, 1000);
+            log.warn("手册已导入，但 Wiki 候选沉淀失败 taskId={}: {}", taskId, message);
+            jdbcTemplate.update("""
+                    UPDATE manual_import_task
+                    SET knowledge_deposition_status = 'FAILED', knowledge_deposition_error = ?, updated_at = ?
+                    WHERE id = ?
+                    """, message, timeProvider.now(), taskId);
+        }
+    }
+
+    @org.springframework.scheduling.annotation.Scheduled(fixedDelay = 30000)
+    public void retryFailedKnowledgeDeposition() {
+        if (knowledgeDepositionService == null) return;
+        List<Map<String, Object>> tasks = jdbc.sql("""
+                        SELECT mit.id, mit.project_id, mit.document_id, mit.doc_title, mit.created_by,
+                               COALESCE(NULLIF(kd.plain_text, ''), kd.markdown_content) AS deposit_content
+                        FROM manual_import_task mit
+                        JOIN knowledge_document kd ON kd.id = mit.document_id
+                        WHERE mit.status = 'COMPLETED'
+                          AND (mit.knowledge_deposition_status IN ('PENDING', 'FAILED')
+                               OR (mit.knowledge_deposition_status = 'RUNNING'
+                                   AND mit.knowledge_deposition_started_at < DATE_SUB(NOW(), INTERVAL 10 MINUTE)))
+                          AND mit.knowledge_deposition_attempts < 3
+                        ORDER BY mit.id
+                        LIMIT 3
+                        """).query((rs, rowNum) -> {
+                    Map<String, Object> row = new java.util.LinkedHashMap<>();
+                    row.put("id", rs.getLong("id"));
+                    row.put("project_id", rs.getLong("project_id"));
+                    row.put("document_id", rs.getLong("document_id"));
+                    row.put("doc_title", rs.getString("doc_title"));
+                    row.put("created_by", rs.getLong("created_by"));
+                    row.put("deposit_content", rs.getString("deposit_content"));
+                    return row;
+                }).list();
+        for (Map<String, Object> task : tasks) {
+            depositKnowledgeCandidate(
+                    ((Number) task.get("id")).longValue(),
+                    ((Number) task.get("project_id")).longValue(),
+                    ((Number) task.get("document_id")).longValue(),
+                    String.valueOf(task.get("doc_title")),
+                    String.valueOf(task.get("deposit_content")),
+                    ((Number) task.get("created_by")).longValue());
+        }
     }
 
     private String extractTitle(String headingPath) {

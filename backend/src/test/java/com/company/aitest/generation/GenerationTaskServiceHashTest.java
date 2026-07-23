@@ -7,6 +7,18 @@ import static org.junit.jupiter.api.Assertions.*;
 class GenerationTaskServiceHashTest {
 
     @Test
+    void normalizesCurrentAndLegacyTomModesBeforePersistence() {
+        assertEquals("PROJECT_AND_SYSTEM_TOM",
+                GenerationTaskService.normalizeGenerationMode("PROJECT_AND_SYSTEM_TOM", true));
+        assertEquals("PROJECT_TOM",
+                GenerationTaskService.normalizeGenerationMode("project_tom", false));
+        assertEquals("PROJECT_AND_SYSTEM_TOM",
+                GenerationTaskService.normalizeGenerationMode("MINI_TOM", true));
+        assertEquals("DIRECT",
+                GenerationTaskService.normalizeGenerationMode(null, false));
+    }
+
+    @Test
     void requestHashIsStableForSameInputAndChangesForModelOrUser() {
         GenerationTaskService service = new GenerationTaskService(null, null, null, null);
 

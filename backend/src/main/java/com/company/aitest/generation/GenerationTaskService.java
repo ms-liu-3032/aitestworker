@@ -13,6 +13,7 @@ import java.util.Optional;
 import com.company.aitest.common.BusinessException;
 import com.company.aitest.common.CurrentUser;
 import com.company.aitest.common.TimeProvider;
+import com.company.aitest.common.TomUsageMode;
 import com.company.aitest.workflow.GenerationStateMachine;
 import com.company.aitest.workflow.TaskStatus;
 import com.company.aitest.workflow.WorkflowEvent;
@@ -39,7 +40,7 @@ public class GenerationTaskService {
     @Transactional
     public GenerationTaskRecord create(Long projectId, CreateTaskCommand command, CurrentUser user) {
         LocalDateTime now = timeProvider.now();
-        String mode = command.generationMode() != null ? command.generationMode() : "DIRECT";
+        String mode = normalizeGenerationMode(command.generationMode(), command.useMiniTom());
         boolean useTom = Boolean.TRUE.equals(command.useMiniTom());
         jdbcTemplate.update("""
                 insert into generation_task(project_id, task_name, requirement_text, current_stage, status,
@@ -90,7 +91,7 @@ public class GenerationTaskService {
     public GenerationTaskRecord createAsync(Long projectId, CreateTaskCommand command, String taskType,
                                             String requestHash, CurrentUser user) {
         LocalDateTime now = timeProvider.now();
-        String mode = command.generationMode() != null ? command.generationMode() : "DIRECT";
+        String mode = normalizeGenerationMode(command.generationMode(), command.useMiniTom());
         boolean useTom = Boolean.TRUE.equals(command.useMiniTom());
         jdbcTemplate.update("""
                 insert into generation_task(project_id, task_name, requirement_text, current_stage, status,
@@ -122,6 +123,21 @@ public class GenerationTaskService {
                     finished_at = ?, updated_at = ?
                 where id = ? and run_status = 'RUNNING'
                 """, now, now, taskId);
+    }
+
+    /**
+     * Repairs the narrow commit window where session output was persisted but the process stopped
+     * before the task row reached SUCCEEDED. This must only be called after independently verifying
+     * that the linked business output is complete.
+     */
+    public boolean markSucceededIfOutputCommitted(Long taskId) {
+        LocalDateTime now = timeProvider.now();
+        return jdbcTemplate.update("""
+                update generation_task
+                set run_status = 'SUCCEEDED', error_code = null, error_message = null,
+                    finished_at = coalesce(finished_at, ?), updated_at = ?
+                where id = ? and run_status in ('PENDING', 'RUNNING')
+                """, now, now, taskId) > 0;
     }
 
     public void markFailed(Long taskId, String runStatus, String errorCode, String errorMessage) {
@@ -315,6 +331,10 @@ public class GenerationTaskService {
     public record CreateTaskCommand(String taskName, String requirementText, Long modelConfigId,
                                     Long promptTemplateId, Integer promptVersion, String promptSnapshot,
                                     String generationMode, Boolean useMiniTom) {
+    }
+
+    static String normalizeGenerationMode(String generationMode, Boolean useMiniTom) {
+        return TomUsageMode.resolve(generationMode, Boolean.TRUE.equals(useMiniTom)).name();
     }
 
     private static Integer getNullableInt(ResultSet rs, String col) throws SQLException {

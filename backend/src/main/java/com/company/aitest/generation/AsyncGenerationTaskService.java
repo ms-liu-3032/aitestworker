@@ -407,7 +407,23 @@ public class AsyncGenerationTaskService {
 
     public TaskView get(Long projectId, Long taskId) {
         GenerationTaskRecord task = taskService.get(projectId, taskId);
-        return view(task, taskService.draftCount(projectId, taskId));
+        int draftCount = taskService.draftCount(projectId, taskId);
+        if (TEST_CASE_GENERATION.equals(normalizeTaskType(task.taskType()))
+                && java.util.Set.of("PENDING", "RUNNING").contains(normalizedStatus(task.runStatus()))
+                && draftCount > 0
+                && sessionService.findByExecutionTaskId(taskId)
+                    .map(GenerationSessionRecord::status)
+                    .map(this::normalizedStatus)
+                    .filter("COMPLETED"::equals)
+                    .isPresent()
+                && taskService.markSucceededIfOutputCommitted(taskId)) {
+            task = taskService.get(projectId, taskId);
+        }
+        return view(task, draftCount);
+    }
+
+    private String normalizedStatus(String status) {
+        return status == null ? "" : status.trim().toUpperCase();
     }
 
     public TaskView retry(Long projectId, Long taskId, CurrentUser user) {

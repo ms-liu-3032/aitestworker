@@ -12,13 +12,16 @@ import {
   restoreAdminAsset,
   type Project,
 } from '../../services/api';
+import WikiAssetManager from './WikiAssetManager';
+import { statusLabel } from '../../utils/displayLabels';
 
-type TabKey = 'cases' | 'points' | 'knowledge' | 'summaries' | 'skills' | 'tools';
+type TabKey = 'cases' | 'points' | 'knowledge' | 'wiki' | 'summaries' | 'skills' | 'tools';
 
 const tabs: { key: TabKey; label: string; apiType: string }[] = [
   { key: 'cases', label: '正式用例', apiType: 'formal-cases' },
   { key: 'points', label: '测试点', apiType: 'test-points' },
   { key: 'knowledge', label: '知识片段', apiType: 'knowledge' },
+  { key: 'wiki', label: 'Wiki', apiType: 'wiki' },
   { key: 'summaries', label: '轨迹摘要', apiType: 'summaries' },
   { key: 'skills', label: 'Skill', apiType: 'skills' },
   { key: 'tools', label: 'Tool', apiType: 'tools' },
@@ -97,6 +100,11 @@ export default function AssetLibrary() {
   }, []);
 
   const loadData = async () => {
+    if (tab === 'wiki') {
+      setData([]);
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     try {
       const loader = {
@@ -106,6 +114,7 @@ export default function AssetLibrary() {
         summaries: listAdminSummaries,
         skills: listAdminSkills,
         tools: listAdminTools,
+        wiki: listAdminKnowledge,
       }[tab];
 
       const result = await loader({
@@ -219,6 +228,8 @@ export default function AssetLibrary() {
         ))}
       </div>
 
+      {tab === 'wiki' ? <WikiAssetManager /> : <>
+
       <div className="bg-white rounded-xl border border-gray-200 p-4 mb-4">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
           <div>
@@ -291,7 +302,7 @@ export default function AssetLibrary() {
                 <span className={`w-fit shrink-0 text-[11px] font-medium px-2 py-0.5 rounded ${
                   deprecated ? 'bg-red-50 text-red-700' : 'bg-gray-100 text-gray-600'
                 }`}>
-                  {status}
+                  {statusLabel(status)}
                 </span>
                 <span className="shrink-0 text-xs font-mono text-gray-400">
                   {formatDate(item.updatedAt || item.createdAt)}
@@ -312,6 +323,7 @@ export default function AssetLibrary() {
           })}
         </div>
       )}
+      </>}
     </div>
   );
 }

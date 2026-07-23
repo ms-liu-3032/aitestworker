@@ -9,6 +9,7 @@ import java.util.Set;
 import com.company.aitest.common.BusinessException;
 import com.company.aitest.common.CurrentUser;
 import com.company.aitest.common.TimeProvider;
+import com.company.aitest.knowledge.KnowledgeDepositionService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -24,11 +25,17 @@ public class LoopService {
     private final JdbcClient jdbc;
     private final JdbcTemplate jdbcTemplate;
     private final TimeProvider timeProvider;
+    private KnowledgeDepositionService knowledgeDepositionService;
 
     public LoopService(JdbcClient jdbc, JdbcTemplate jdbcTemplate, TimeProvider timeProvider) {
         this.jdbc = jdbc;
         this.jdbcTemplate = jdbcTemplate;
         this.timeProvider = timeProvider;
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setKnowledgeDepositionService(KnowledgeDepositionService knowledgeDepositionService) {
+        this.knowledgeDepositionService = knowledgeDepositionService;
     }
 
     // ---- Feature Toggle ----
@@ -223,6 +230,16 @@ public class LoopService {
 
     private int generateWikiCandidates(Long projectId, LoopClusterRecord cluster,
                                         List<LoopEventRecord> events, LocalDateTime now, String sourceRefs) {
+        if (knowledgeDepositionService != null) {
+            int count = 0;
+            for (var evt : events) {
+                if (evt.normalizedIssue() == null || evt.normalizedIssue().isBlank()) continue;
+                count += knowledgeDepositionService.depositLoopWikiCandidate(
+                        projectId, cluster.id(), evt.id(), evt.eventType(), evt.sourceStage(),
+                        cluster.theme() + " — 回灌建议", buildEntryContent(evt), evt.createdBy()).wikiCandidates();
+            }
+            return count;
+        }
         String packName = "Loop:" + (cluster.theme() == null ? "未分类" : cluster.theme());
         jdbcTemplate.update("""
                 INSERT INTO wiki_pack(project_id, scope, name, status, review_status, description, created_at, updated_at)
@@ -247,7 +264,7 @@ public class LoopService {
             jdbcTemplate.update("""
                     INSERT INTO wiki_entry(pack_id, entry_type, title, content, source_refs_json,
                         review_status, confidence, effective_status, created_by, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, 'PENDING', 0.7, 'ACTIVE', ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, 'PENDING', 0.7, 'INACTIVE', ?, ?, ?)
                     """, packId, entryType, cluster.theme() + " — 回灌建议",
                     buildEntryContent(evt), sourceRefs, evt.createdBy(), now, now);
             count++;

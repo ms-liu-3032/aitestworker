@@ -84,11 +84,11 @@ public class MiniTomService {
     }
 
     // =====================================================================
-    // 门禁检查
+    // 生效条件检查
     // =====================================================================
 
     /**
-     * 门禁：只有 CONFIRMED 的 trace_summary 才允许进入 Mini-TOM 抽取。
+     * 只有 CONFIRMED 的 trace_summary 才允许进入 Mini-TOM 抽取。
      *
      * @throws BusinessException 如果 summary 不存在或非 CONFIRMED
      */
@@ -109,7 +109,7 @@ public class MiniTomService {
      */
     @Transactional
     public List<TestObjectModelRecord> extractFromTraceSummary(Long summaryId, CurrentUser user) {
-        // 门禁检查
+        // 生效条件检查
         assertConfirmedForMiniTom(summaryId);
 
         TraceSummaryRecord summary = traceSummaryService.getSummary(summaryId, user);
@@ -820,8 +820,22 @@ public class MiniTomService {
                 return getById(origId);
             }
         }
+        deprecateSupersededCandidateVersions(id, now);
         refreshSemanticSnapshotQuietly(record.projectId());
         return getById(id);
+    }
+
+    private void deprecateSupersededCandidateVersions(Long confirmedId, LocalDateTime now) {
+        jdbcTemplate.update("""
+                UPDATE test_object_model previous
+                JOIN test_object_model current
+                  ON current.id = ?
+                 AND current.project_id = previous.project_id
+                 AND current.candidate_key IS NOT NULL
+                 AND current.candidate_key = previous.candidate_key
+                SET previous.status = 'DEPRECATED', previous.updated_at = ?, previous.version = previous.version + 1
+                WHERE previous.id <> current.id AND previous.status = 'ACTIVE'
+                """, confirmedId, now);
     }
 
     /**

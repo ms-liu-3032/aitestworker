@@ -44,6 +44,24 @@ class WikiServiceTest {
     }
 
     @Test
+    void listPacksForAdmin_appliesScopeAndReviewFiltersWithBoundParameters() {
+        var jdbc = mock(JdbcClient.class);
+        var tmpl = mock(JdbcTemplate.class);
+        var svc = new WikiService(jdbc, tmpl, timeProvider);
+        when(tmpl.query(anyString(), any(RowMapper.class), any(Object[].class))).thenReturn(List.of());
+
+        svc.listPacksForAdmin(10L, "REUSABLE", "ACTIVE", "APPROVED");
+
+        verify(tmpl).query(argThat((String sql) -> sql.contains("project_id = ?")
+                        && sql.contains("scope = ?")
+                        && sql.contains("status = ?")
+                        && sql.contains("review_status = ?")
+                        && sql.contains("updated_at DESC")),
+                any(RowMapper.class),
+                eq(10L), eq("REUSABLE"), eq("ACTIVE"), eq("APPROVED"));
+    }
+
+    @Test
     void createPack_insertsAndReturns() {
         var jdbc = mock(JdbcClient.class);
         var tmpl = mock(JdbcTemplate.class);
@@ -110,13 +128,40 @@ class WikiServiceTest {
         when(mapped.list()).thenReturn(List.of(
                 new WikiEntryRecord(1L, 1L, "RULE", "Rule1", "content", null, null, "APPROVED", null, "ACTIVE", 1L, LocalDateTime.now(), LocalDateTime.now())
         ));
-        when(tmpl.update(anyString(), any(), any(), any())).thenReturn(1);
+        when(tmpl.update(anyString(), any(Object[].class))).thenReturn(1);
 
         var user = new CurrentUser(1L, "admin", null);
         var result = svc.reviewEntry(1L, "APPROVED", user);
 
-        verify(tmpl).update(contains("review_status"), eq("APPROVED"), any(), eq(1L));
+        verify(tmpl, atLeastOnce()).update(contains("effective_status"), any(Object[].class));
+        verify(tmpl).update(contains("previous.id <> current.id"), any(Object[].class));
         assertEquals("APPROVED", result.reviewStatus());
+    }
+
+    @Test
+    void rejectPack_deactivatesAllEntries() {
+        var jdbc = mock(JdbcClient.class);
+        var tmpl = mock(JdbcTemplate.class);
+        var svc = spy(new WikiService(jdbc, tmpl, timeProvider));
+        doReturn(pack(1L, 10L, "PROJECT", "TestPack")).when(svc).getPack(1L);
+        when(tmpl.update(anyString(), any(Object[].class))).thenReturn(1);
+
+        svc.reviewPack(1L, "REJECTED", new CurrentUser(2L, "reviewer", null));
+
+        verify(tmpl).update(contains("UPDATE wiki_entry SET effective_status = 'INACTIVE'"), any(Object[].class));
+    }
+
+    @Test
+    void activatePack_requiresApprovedPack() {
+        var jdbc = mock(JdbcClient.class);
+        var tmpl = mock(JdbcTemplate.class);
+        var svc = spy(new WikiService(jdbc, tmpl, timeProvider));
+        doReturn(pack(1L, 10L, "PROJECT", "TestPack")).when(svc).getPack(1L);
+
+        var error = assertThrows(com.company.aitest.common.BusinessException.class,
+                () -> svc.updatePackStatus(1L, "ACTIVE", new CurrentUser(1L, "admin", null)));
+        assertTrue(error.getMessage().contains("审核通过"));
+        verify(tmpl, never()).update(contains("UPDATE wiki_pack SET status"), any(Object[].class));
     }
 
     @Test

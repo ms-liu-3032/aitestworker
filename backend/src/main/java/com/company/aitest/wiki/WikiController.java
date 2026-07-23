@@ -35,6 +35,18 @@ public class WikiController {
         return ApiResponse.ok(wikiService.listPacks(projectId));
     }
 
+    @GetMapping("/admin/packs")
+    public ApiResponse<List<WikiPackRecord>> listPacksForAdmin(
+            @RequestParam(required = false) Long projectId,
+            @RequestParam(required = false) String scope,
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) String reviewStatus,
+            Authentication auth) {
+        CurrentUser user = (CurrentUser) auth.getPrincipal();
+        projectAccessService.ensurePlatformAdmin(user);
+        return ApiResponse.ok(wikiService.listPacksForAdmin(projectId, scope, status, reviewStatus));
+    }
+
     @GetMapping("/packs/{packId}")
     public ApiResponse<WikiPackRecord> getPack(@PathVariable Long packId, Authentication auth) {
         CurrentUser user = (CurrentUser) auth.getPrincipal();
@@ -75,6 +87,21 @@ public class WikiController {
         WikiPackRecord updated = wikiService.updatePackStatus(packId, status, user);
         operationLogService.recordQuietly(user.id(), "WIKI_UPDATE_PACK_STATUS", "WIKI_PACK", packId,
                 "{\"status\":\"" + safe(status) + "\"}");
+        return ApiResponse.ok(updated);
+    }
+
+    @PatchMapping("/packs/{packId}/review")
+    public ApiResponse<WikiPackRecord> reviewPack(@PathVariable Long packId,
+                                                   @RequestBody Map<String, String> body,
+                                                   Authentication auth) {
+        CurrentUser user = (CurrentUser) auth.getPrincipal();
+        String reviewStatus = body.get("reviewStatus");
+        if (reviewStatus == null) throw new BusinessException("reviewStatus 不能为空");
+        WikiPackRecord pack = wikiService.getPack(packId);
+        ensureCanManagePack(pack, user);
+        WikiPackRecord updated = wikiService.reviewPack(packId, reviewStatus, user);
+        operationLogService.recordQuietly(user.id(), "WIKI_REVIEW_PACK", "WIKI_PACK", packId,
+                "{\"reviewStatus\":\"" + safe(reviewStatus) + "\"}");
         return ApiResponse.ok(updated);
     }
 

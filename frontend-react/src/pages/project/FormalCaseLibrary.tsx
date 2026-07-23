@@ -3,6 +3,7 @@ import { useParams } from 'react-router-dom';
 import { useApp } from '../../context/AppContext';
 import RichList from '../../components/RichList';
 import MultiSelectFilter from '../../components/MultiSelectFilter';
+import { displayLabel } from '../../utils/displayLabels';
 import { deleteFormalCase, deleteFormalCases, getFormalCase, listFormalCasesPage, type FormalCase } from '../../services/api';
 
 const priorityConfig: Record<string, { bg: string; text: string }> = {
@@ -47,6 +48,7 @@ export default function FormalCaseLibrary() {
   const [priorityFilter, setPriorityFilter] = useState<string[]>([]);
   const [statusFilter, setStatusFilter] = useState<string[]>([]);
   const [sourceFilter, setSourceFilter] = useState<string[]>([]);
+  const [scenarioFilter, setScenarioFilter] = useState<string[]>([]);
   const [moduleOptions, setModuleOptions] = useState<string[]>([]);
   const loadRequestId = useRef(0);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
@@ -66,6 +68,7 @@ export default function FormalCaseLibrary() {
         priorities: priorityFilter,
         statuses: statusFilter,
         sources: sourceFilter,
+        scenarioTypes: scenarioFilter,
       });
       if (requestId !== loadRequestId.current) return;
       setCases(data.items);
@@ -87,7 +90,7 @@ export default function FormalCaseLibrary() {
     const timer = window.setTimeout(() => void loadCases(0), keyword.trim() ? 250 : 0);
     return () => window.clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId, keyword, moduleFilter, priorityFilter, statusFilter, sourceFilter]);
+  }, [projectId, keyword, moduleFilter, priorityFilter, statusFilter, sourceFilter, scenarioFilter]);
 
   const openDetail = async (testCase: FormalCase) => {
     if (!projectId) return;
@@ -260,7 +263,7 @@ export default function FormalCaseLibrary() {
       </div>
 
       <div className="bg-white rounded-xl border border-gray-200 p-4 mb-4">
-        <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-3 xl:grid-cols-6">
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-1">关键词</label>
             <input
@@ -275,6 +278,7 @@ export default function FormalCaseLibrary() {
           <MultiSelectFilter label="优先级" options={['P0', 'P1', 'P2', 'P3']} value={priorityFilter} onChange={setPriorityFilter} />
           <MultiSelectFilter label="状态" options={['ACTIVE', 'DEPRECATED']} value={statusFilter} onChange={setStatusFilter} />
           <MultiSelectFilter label="来源" options={['GENERATION', 'TRACE', 'MANUAL']} value={sourceFilter} onChange={setSourceFilter} />
+          <MultiSelectFilter label="场景" options={['POSITIVE', 'NEGATIVE', 'BOUNDARY', 'COMBINATION', 'STATE', 'RECOVERY']} value={scenarioFilter} onChange={setScenarioFilter} />
         </div>
       </div>
 
@@ -323,7 +327,7 @@ export default function FormalCaseLibrary() {
                   {formalCaseSourceLabel(sourceType)}
                 </span>
                 <span className="truncate">
-                  {testCase.moduleName || '未分模块'} · {testCase.caseScope || testCase.caseType || '未分类'}
+                  {testCase.moduleName || '未分模块'} · {displayLabel(testCase.scenarioType, '未分类场景')}
                 </span>
               </div>
             </div>
@@ -397,6 +401,14 @@ export default function FormalCaseLibrary() {
                 <div>
                   <label className="text-xs text-gray-500">来源</label>
                   <p className="text-sm">{formalCaseSourceLabel(getFormalCaseSourceType(detailCase))}</p>
+                </div>
+                <div>
+                  <label className="text-xs text-gray-500">场景类型</label>
+                  <p className="text-sm">{displayLabel(detailCase.scenarioType, '未分类场景')}</p>
+                </div>
+                <div>
+                  <label className="text-xs text-gray-500">设计方法</label>
+                  <p className="text-sm">{detailCase.designMethod || '-'}</p>
                 </div>
               </div>
               {detailCase.precondition && (

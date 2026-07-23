@@ -60,6 +60,7 @@ import {
 } from '../../services/traceApi';
 import { api as baseApi, listLocalCasesPage, type LocalCaseDraft } from '../../services/api';
 import { type ModelConfigOption } from '../../services/generationApi';
+import { statusLabel as uiStatusLabel } from '../../utils/displayLabels';
 import SegmentedControl from '../SegmentedControl';
 import StatusBadge from '../StatusBadge';
 import Drawer from '../Drawer';
@@ -1249,7 +1250,7 @@ export default function TracePanel({ projectId }: { projectId: number }) {
             <div className="space-y-2 text-sm">
               <div className="flex justify-between">
                 <span className="text-gray-500">采集器状态</span>
-                <StatusBadge status={workerHealth?.status === 'UP' ? 'online' : 'offline'} label={workerHealth ? (workerHealth.status === 'UP' ? '在线' : workerHealth.status) : '未检查'} />
+                <StatusBadge status={workerHealth?.status === 'UP' ? 'online' : 'offline'} label={workerHealth ? uiStatusLabel(workerHealth.status) : '未检查'} />
               </div>
               <div className="flex justify-between">
                 <span className="text-gray-500">浏览器状态</span>
@@ -1454,7 +1455,7 @@ export default function TracePanel({ projectId }: { projectId: number }) {
                         group.status === 'STOPPED' ? 'bg-gray-100 text-gray-600' :
                         'bg-yellow-50 text-yellow-600'
                       }`}>
-                        {group.status === 'RECORDING' ? '采集中' : group.status === 'STOPPED' ? '已停止' : group.status}
+                        {uiStatusLabel(group.status)}
                       </span>
                       <button
                         onClick={(e) => { e.stopPropagation(); setPendingDeleteGroup(group); }}
@@ -1584,7 +1585,7 @@ export default function TracePanel({ projectId }: { projectId: number }) {
                                           summary.status === 'REJECTED' ? 'bg-red-50 text-red-600' :
                                           'bg-yellow-50 text-yellow-600'
                                         }`}>
-                                          {summary.status}
+                                          {uiStatusLabel(summary.status)}
                                         </span>
                                         <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-600">{summary.validityLabel}</span>
                                         <span className="text-[10px] text-gray-400">{summary.summaryScope}</span>
@@ -1963,7 +1964,7 @@ export default function TracePanel({ projectId }: { projectId: number }) {
                                           summary.status === 'CONFIRMED' ? 'bg-green-50 text-green-600' :
                                           summary.status === 'REJECTED' ? 'bg-red-50 text-red-600' :
                                           'bg-yellow-50 text-yellow-600'
-                                        }`}>{summary.status}</span>
+                                        }`}>{uiStatusLabel(summary.status)}</span>
                                         <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-600">{summary.validityLabel}</span>
                                       </div>
                                       {summary.overview && (

@@ -3,12 +3,15 @@ package com.company.aitest.export;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
 import com.company.aitest.common.CurrentUser;
+import com.company.aitest.common.BusinessException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -32,28 +35,78 @@ public class CaseExportService {
      * 导出正式用例为 xmind 格式。
      */
     public byte[] exportFormalCasesToXmind(Long projectId, List<Long> caseIds) {
+        List<Long> ids = normalizedIds(caseIds);
         String sql = "SELECT * FROM test_case_asset WHERE project_id = ?";
-        if (caseIds != null && !caseIds.isEmpty()) {
-            sql += " AND id IN (" + caseIds.stream().map(String::valueOf).reduce((a, b) -> a + "," + b).orElse("0") + ")";
+        List<Object> params = new ArrayList<>();
+        params.add(projectId);
+        if (!ids.isEmpty()) {
+            sql += " AND id IN (" + placeholders(ids.size()) + ")";
+            params.addAll(ids);
         }
         sql += " ORDER BY module_name, case_no";
 
-        List<Map<String, Object>> cases = jdbcTemplate.queryForList(sql, projectId);
+        List<Map<String, Object>> cases = jdbcTemplate.queryForList(sql, params.toArray());
         return buildXmind(cases, "正式用例库");
     }
 
     /**
      * 导出本地用例为 xmind 格式。
      */
-    public byte[] exportLocalCasesToXmind(Long projectId, List<Long> caseIds) {
-        String sql = "SELECT * FROM test_case_draft WHERE project_id = ?";
-        if (caseIds != null && !caseIds.isEmpty()) {
-            sql += " AND id IN (" + caseIds.stream().map(String::valueOf).reduce((a, b) -> a + "," + b).orElse("0") + ")";
-        }
-        sql += " ORDER BY module_name, id";
+    public byte[] exportLocalCasesToXmind(Long projectId, List<Long> caseIds, CurrentUser user) {
+        List<Long> requestedIds = normalizedIds(caseIds);
+        boolean selectedExport = caseIds != null && !caseIds.isEmpty();
+        List<Long> generatedIds = requestedIds.stream().filter(id -> id > 0).toList();
+        List<Long> traceIds = requestedIds.stream().filter(id -> id < 0).map(Math::abs).toList();
+        List<Map<String, Object>> cases = new ArrayList<>();
 
-        List<Map<String, Object>> cases = jdbcTemplate.queryForList(sql, projectId);
+        if (!selectedExport || !generatedIds.isEmpty()) {
+            List<Object> params = new ArrayList<>(List.of(projectId, user.id()));
+            String sql = """
+                    SELECT case_no, case_title, module_name, precondition, steps, expected_result, priority,
+                           case_type, scenario_type, design_method
+                    FROM test_case_draft
+                    WHERE project_id = ? AND created_by = ?
+                      AND case_status IN ('CONFIRMED', 'SUBMITTED')
+                    """;
+            if (selectedExport) {
+                sql += " AND id IN (" + placeholders(generatedIds.size()) + ")";
+                params.addAll(generatedIds);
+            }
+            cases.addAll(jdbcTemplate.queryForList(sql, params.toArray()));
+        }
+        if (!selectedExport || !traceIds.isEmpty()) {
+            List<Object> params = new ArrayList<>(List.of(projectId, user.id()));
+            String sql = """
+                    SELECT CONCAT('TRACE-', id) AS case_no, case_title, module_name,
+                           precondition, steps, expected_result, priority,
+                           case_type, 'POSITIVE' AS scenario_type, '轨迹回放法' AS design_method
+                    FROM trace_generated_case
+                    WHERE project_id = ? AND user_id = ?
+                      AND case_status IN ('CONFIRMED', 'SUBMITTED')
+                    """;
+            if (selectedExport) {
+                sql += " AND id IN (" + placeholders(traceIds.size()) + ")";
+                params.addAll(traceIds);
+            }
+            cases.addAll(jdbcTemplate.queryForList(sql, params.toArray()));
+        }
+        if (cases.isEmpty()) {
+            throw new BusinessException("没有可导出的已确认或已提交用例");
+        }
+        cases.sort(Comparator
+                .comparing((Map<String, Object> item) -> String.valueOf(item.getOrDefault("module_name", "")))
+                .thenComparing(item -> String.valueOf(item.getOrDefault("case_no", ""))));
         return buildXmind(cases, "本地用例库");
+    }
+
+    private List<Long> normalizedIds(List<Long> caseIds) {
+        if (caseIds == null) return List.of();
+        return caseIds.stream().filter(java.util.Objects::nonNull).filter(id -> id != 0).distinct().toList();
+    }
+
+    private String placeholders(int count) {
+        if (count <= 0) throw new BusinessException("导出用例编号不能为空");
+        return String.join(",", java.util.Collections.nCopies(count, "?"));
     }
 
     /**
@@ -144,6 +197,8 @@ public class CaseExportService {
                     String steps = c.get("steps") != null ? String.valueOf(c.get("steps")) : "";
                     String expectedResult = c.get("expected_result") != null ? String.valueOf(c.get("expected_result")) : "";
                     String precondition = c.get("precondition") != null ? String.valueOf(c.get("precondition")) : "";
+                    String scenarioType = c.get("scenario_type") != null ? String.valueOf(c.get("scenario_type")) : "POSITIVE";
+                    String designMethod = c.get("design_method") != null ? String.valueOf(c.get("design_method")) : "";
 
                     String topicTitle = (priority.isEmpty() ? "" : "tc-" + priority.toLowerCase() + "：") + caseTitle;
 
@@ -152,6 +207,10 @@ public class CaseExportService {
                     // 前置条件
                     if (!precondition.isBlank()) {
                         children.add(Map.of("id", "pc-" + caseNo, "title", "pc：" + precondition));
+                    }
+                    children.add(Map.of("id", "scenario-" + caseNo, "title", "场景类型：" + scenarioType));
+                    if (!designMethod.isBlank()) {
+                        children.add(Map.of("id", "method-" + caseNo, "title", "设计方法：" + designMethod));
                     }
 
                     // 步骤和预期结果

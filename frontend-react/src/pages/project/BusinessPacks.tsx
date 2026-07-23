@@ -28,6 +28,7 @@ import {
   type ConsumptionLog,
   type BusinessPackRefreshDiagnostic
 } from '../../services/api'
+import { displayLabel, statusLabel as uiStatusLabel } from '../../utils/displayLabels'
 
 const STATUS_COLORS: Record<string, string> = {
   DRAFT: 'bg-yellow-100 text-yellow-800',
@@ -422,7 +423,7 @@ export default function BusinessPacks() {
                       <div className="mb-1 flex items-start justify-between gap-3">
                         <span className="min-w-0 truncate text-sm font-medium text-gray-900">{pack.packName}</span>
                         <span className={`shrink-0 text-xs px-2 py-0.5 rounded-full ${STATUS_COLORS[pack.status] || 'bg-gray-100'}`}>
-                          {STATUS_LABELS[pack.status] || pack.status}
+                          {STATUS_LABELS[pack.status] || uiStatusLabel(pack.status)}
                         </span>
                       </div>
                       <div className="flex flex-wrap items-center gap-3 text-xs text-gray-500">
@@ -448,7 +449,7 @@ export default function BusinessPacks() {
                       <h2 className="break-words text-lg font-semibold text-gray-900">{selectedPack.packName}</h2>
                       <div className="mt-1 flex flex-wrap items-center gap-3 text-sm text-gray-500">
                         <span className={`px-2 py-0.5 rounded-full text-xs ${STATUS_COLORS[selectedPack.status] || 'bg-gray-100'}`}>
-                          {STATUS_LABELS[selectedPack.status] || selectedPack.status}
+                          {STATUS_LABELS[selectedPack.status] || uiStatusLabel(selectedPack.status)}
                         </span>
                         <span>v{selectedPack.version}</span>
                         {selectedPack.businessDomain && <span>业务域：{selectedPack.businessDomain}</span>}
@@ -691,7 +692,7 @@ export default function BusinessPacks() {
                             <span className="text-xs text-gray-400">{new Date(snap.createdAt).toLocaleString()}</span>
                           </div>
                           <p className="text-xs text-gray-500">{snap.changeSummary}</p>
-                          <p className="text-xs text-gray-400 mt-1">{snap.itemCount} 条目 · {snap.status}</p>
+                          <p className="text-xs text-gray-400 mt-1">{snap.itemCount} 条目 · {uiStatusLabel(snap.status)}</p>
                         </div>
                       ))}
                     </div>
@@ -714,7 +715,7 @@ export default function BusinessPacks() {
                               <span className="text-xs text-gray-400">{(rel.confidence * 100).toFixed(0)}%</span>
                             </div>
                             {rel.description && <p className="text-xs text-gray-500">{rel.description}</p>}
-                            <p className="text-xs text-gray-400 mt-1">来源：{rel.sourceType}</p>
+                            <p className="text-xs text-gray-400 mt-1">来源：{displayLabel(rel.sourceType, '未知来源')}</p>
                           </div>
                         ))}
                       </div>}

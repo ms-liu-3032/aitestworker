@@ -20,6 +20,7 @@ need_cmd() {
 
 echo "==> 检查打包依赖"
 need_cmd java
+need_cmd jar
 need_cmd mvn
 need_cmd node
 need_cmd npm
@@ -36,12 +37,33 @@ echo "==> 构建前端静态资源"
 echo "==> 构建后端 Jar"
 (
   cd "$ROOT_DIR/backend"
-  mvn -DskipTests package
+  mvn -DskipTests clean package
 )
 
 JAR_PATH="$(find "$BACKEND_TARGET" -maxdepth 1 -type f -name '*.jar' ! -name '*original*' | head -n 1)"
 if [[ -z "$JAR_PATH" ]]; then
   echo "未找到后端 Jar 产物。"
+  exit 1
+fi
+
+DUPLICATE_MIGRATION_VERSIONS="$(
+  jar tf "$JAR_PATH" \
+    | awk -F/ '/db\/migration\/V[0-9]+__.*\.sql$/ {
+        name=$NF;
+        sub(/^V/, "", name);
+        sub(/__.*/, "", name);
+        count[name]++
+      }
+      END {
+        for (version in count) {
+          if (count[version] > 1) print version
+        }
+      }' \
+    | sort -V
+)"
+if [[ -n "$DUPLICATE_MIGRATION_VERSIONS" ]]; then
+  echo "后端 Jar 包含重复的 Flyway migration 版本："
+  echo "$DUPLICATE_MIGRATION_VERSIONS"
   exit 1
 fi
 

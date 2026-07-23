@@ -463,6 +463,8 @@ export interface FormalCase {
   expectedResult: string
   priority: string
   caseType: string
+  scenarioType: string
+  designMethod: string | null
   caseScope: string | null
   caseStatus: string
   submittedBy: number | null
@@ -489,6 +491,7 @@ export type CaseLibraryFilters = {
   priorities?: string[]
   statuses?: string[]
   sources?: string[]
+  scenarioTypes?: string[]
 }
 
 function buildCaseLibraryQuery(page: number, size: number, filters: CaseLibraryFilters = {}) {
@@ -498,6 +501,7 @@ function buildCaseLibraryQuery(page: number, size: number, filters: CaseLibraryF
   filters.priorities?.forEach(value => query.append('priorities', value))
   filters.statuses?.forEach(value => query.append('statuses', value))
   filters.sources?.forEach(value => query.append('sources', value))
+  filters.scenarioTypes?.forEach(value => query.append('scenarioTypes', value))
   return query.toString()
 }
 
@@ -550,8 +554,11 @@ export function exportLocalCasesToXmind(projectId: number, caseIds?: number[]) {
       'Authorization': `Bearer ${getToken()}`,
     },
     body: JSON.stringify(caseIds || []),
-  }).then(res => {
-    if (!res.ok) throw new Error('导出失败');
+  }).then(async res => {
+    if (!res.ok) {
+      const body = await res.json().catch(() => null)
+      throw new Error(body?.message || '导出失败')
+    }
     return res.blob();
   })
 }
@@ -987,6 +994,7 @@ export interface LocalCaseDraft {
   expectedResult: string
   priority: string
   caseType: string | null
+  scenarioType: string | null
   designMethod: string | null
   sourceRefsJson: string | null
   caseScope: string | null
@@ -1482,8 +1490,35 @@ export function listWikiPacks(projectId: number) {
   return api<WikiPack[]>(`/api/wiki/packs?projectId=${projectId}`)
 }
 
+export function listAdminWikiPacks(filters: {
+  projectId?: number
+  scope?: string
+  status?: string
+  reviewStatus?: string
+} = {}) {
+  const params = new URLSearchParams()
+  if (filters.projectId) params.set('projectId', String(filters.projectId))
+  if (filters.scope) params.set('scope', filters.scope)
+  if (filters.status) params.set('status', filters.status)
+  if (filters.reviewStatus) params.set('reviewStatus', filters.reviewStatus)
+  const query = params.toString()
+  return api<WikiPack[]>(`/api/wiki/admin/packs${query ? `?${query}` : ''}`)
+}
+
 export function createWikiPack(projectId: number, scope: string, name: string, description: string) {
   return api<WikiPack>('/api/wiki/packs', { method: 'POST', body: JSON.stringify({ projectId, scope, name, description }) })
+}
+
+export function reviewWikiPack(packId: number, reviewStatus: string) {
+  return api<WikiPack>(`/api/wiki/packs/${packId}/review`, {
+    method: 'PATCH', body: JSON.stringify({ reviewStatus }),
+  })
+}
+
+export function updateWikiPackStatus(packId: number, status: string) {
+  return api<WikiPack>(`/api/wiki/packs/${packId}/status`, {
+    method: 'PATCH', body: JSON.stringify({ status }),
+  })
 }
 
 export function deleteWikiPack(packId: number) {

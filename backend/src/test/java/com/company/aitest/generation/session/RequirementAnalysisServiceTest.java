@@ -124,23 +124,23 @@ class RequirementAnalysisServiceTest {
         String llmOutput = """
                 {
                   "analysis": {
-                    "requirement_understanding": "通过招投标系统反写业务系统，自动创建采购申请。",
-                    "business_domain": "流程审批+招投标",
+                    "requirement_understanding": "通过招投标系统反写申请人系统，自动创建申请人预约。",
+                    "business_domain": "智能申请人+招投标",
                     "requirement_type": "MIXED",
                     "input_sources": ["PRD_TEXT", "TOM"],
-                    "affected_modules": ["采购申请", "会议室联动"],
+                    "affected_modules": ["申请人预约", "会议室联动"],
                     "review_risk_questions": [
                 """;
 
         String extracted = RequirementAnalysisService.extractAnalysisJson(llmOutput);
         assertNotNull(extracted);
         var root = objectMapper.readTree(extracted);
-        assertEquals("通过招投标系统反写业务系统，自动创建采购申请。",
+        assertEquals("通过招投标系统反写申请人系统，自动创建申请人预约。",
                 root.path("requirement_understanding").asText());
-        assertEquals("流程审批+招投标", root.path("business_domain").asText());
+        assertEquals("智能申请人+招投标", root.path("business_domain").asText());
         assertEquals("MIXED", root.path("requirement_type").asText());
         assertEquals("PRD_TEXT", root.path("input_sources").get(0).asText());
-        assertEquals("采购申请", root.path("affected_modules").get(0).asText());
+        assertEquals("申请人预约", root.path("affected_modules").get(0).asText());
         assertTrue(root.path("uncertain_items").get(0).asText().contains("可能被截断"));
     }
 
@@ -149,8 +149,8 @@ class RequirementAnalysisServiceTest {
         String truncated = """
                 {
                   "analysis": {
-                    "requirement_understanding": "通过招投标系统反写业务系统，自动创建采购申请。",
-                    "affected_modules": ["采购申请"]
+                    "requirement_understanding": "通过招投标系统反写申请人系统，自动创建申请人预约。",
+                    "affected_modules": ["申请人预约"]
                 """;
         String complete = """
                 {
@@ -293,7 +293,7 @@ class RequirementAnalysisServiceTest {
         String source = """
                 [{
                   "module":"审批",
-                  "main_flow":{"count":1,"items":["处理申请"]},
+                  "mainFlow":["处理申请"],
                   "exception":{"count":1,"items":["处理冲突"]},
                   "idempotency":{"count":2,"items":["重复请求","网络重试"]}
                 }]
@@ -306,6 +306,50 @@ class RequirementAnalysisServiceTest {
         assertEquals(4, ((Number) row.get("total")).intValue());
         assertEquals(2, ((Number) ((Map<?, ?>) row.get("idempotent")).get("count")).intValue());
         assertTrue((Boolean) usable.invoke(service, normalized));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void coverageStageRetriesMalformedUnitWithDiagnosticsAndBindsUnambiguousSourceRefs() throws Exception {
+        LlmGateway gateway = mock(LlmGateway.class);
+        when(gateway.invoke(any())).thenReturn(
+                llmJson("matrix-empty", "{\"coverage_matrix\":[]}"),
+                llmJson("repair-empty", "{\"coverage_matrix\":[]}"),
+                llmJson("repair-count-only", "{\"coverage_matrix\":[{\"main_flow\":{\"count\":1,\"items\":[]}}]}"),
+                llmJson("repair-valid", "{\"coverage_matrix\":[{\"module\":\"审批\",\"main_flow\":{\"count\":1,\"items\":[\"审批通过并更新状态\"]}}]}")
+        );
+        var service = new RequirementAnalysisService(
+                null, null, null, gateway, null, null, null, null, null, null, null, null
+        );
+        String coreJson = objectMapper.writeValueAsString(Map.of(
+                "requirement_understanding", "审批状态更新",
+                "requirement_atoms", List.of(Map.of("id", "R1", "title", "审批通过", "requirement", "通过后更新状态")),
+                "test_units", List.of(Map.of("id", "U1", "name", "审批", "requirement_refs", List.of("R1"),
+                        "depends_on_unit_refs", List.of()))));
+        Method stage = RequirementAnalysisService.class.getDeclaredMethod(
+                "runCoverageMatrixStages", CurrentUser.class, Long.class, Long.class, Long.class, Long.class,
+                String.class, String.class, ProjectSemanticContextService.BuildResult.class);
+        stage.setAccessible(true);
+
+        Object result = stage.invoke(service, new CurrentUser(1L, "tester", "USER"),
+                1L, null, 1L, null, "REQUIREMENT_SCOPE_CONTINUATION", coreJson, null);
+        Method matrixAccessor = result.getClass().getDeclaredMethod("coverageMatrix");
+        matrixAccessor.setAccessible(true);
+        List<Map<String, Object>> rows = objectMapper.readValue((String) matrixAccessor.invoke(result), List.class);
+
+        assertEquals(1, rows.size());
+        assertEquals("U1", rows.get(0).get("test_unit_ref"));
+        assertEquals(List.of("R1"), rows.get(0).get("requirement_refs"));
+        assertEquals(1, ((Number) ((Map<?, ?>) rows.get(0).get("main_flow")).get("count")).intValue());
+        verify(gateway, times(4)).invoke(any());
+    }
+
+    @Test
+    void scopeContinuationTasksAreEligibleForNodeCheckpoints() {
+        assertTrue(RequirementAnalysisService.isCheckpointTaskType("REQUIREMENT_ANALYSIS"));
+        assertTrue(RequirementAnalysisService.isCheckpointTaskType("REQUIREMENT_SCOPE_CONTINUATION"));
+        assertTrue(RequirementAnalysisService.isCheckpointTaskType("TEST_POINT_SCOPE_CONTINUATION"));
+        assertFalse(RequirementAnalysisService.isCheckpointTaskType("TEST_CASE_GENERATION"));
     }
 
     @Test
@@ -464,6 +508,11 @@ class RequirementAnalysisServiceTest {
                 null, null, null, LlmInvocationStatus.OK, null, null);
     }
 
+    private LlmInvocationResponse llmJson(String requestId, String content) {
+        return new LlmInvocationResponse(requestId, content, 100, 50, 1L,
+                null, null, null, LlmInvocationStatus.OK, null, null);
+    }
+
     @Test
     @SuppressWarnings("unchecked")
     void structuralCaseCompositionUsesUpstreamPointsAsPreconditionsWithoutTreatingEveryDependencyAsAFlow() throws Exception {
@@ -521,24 +570,30 @@ class RequirementAnalysisServiceTest {
         assertEquals(1, plans.size());
         assertEquals(List.of("TP1", "TP2", "TP3"), plans.get(0).get("source_test_point_refs"));
         Map<String, Object> design = (Map<String, Object>) ((List<?>) plans.get(0).get("case_designs")).get(0);
+        assertEquals(1, ((List<?>) plans.get(0).get("case_designs")).size());
         assertEquals(List.of("TP1", "TP2", "TP3"), design.get("source_test_point_refs"));
+        assertTrue(String.valueOf(design.get("scenario")).contains("姓名为空时阻止提交"));
+        assertTrue(String.valueOf(design.get("scenario")).contains("手机号格式校验"));
+        assertEquals(List.of("等价类划分法", "边界值分析法"), design.get("design_methods"));
+        assertTrue(((List<?>) design.get("coverage_requirements")).contains("INVALID_EQUIVALENCE_CLASS"));
+        assertEquals("BOUNDARY", design.get("scenario_type"));
         assertEquals("HIGH", plans.get(0).get("priority_hint"));
     }
 
     @Test
     void mergeContinuationRemovesSimpleOverlap() {
-        String original = "{\"analysis\":{\"requirement_understanding\":\"abc\",\"affected_modules\":[\"采购申请\",\"会议室联动流程";
+        String original = "{\"analysis\":{\"requirement_understanding\":\"abc\",\"affected_modules\":[\"申请人预约\",\"会议室联动流程";
         String continuation = "\"会议室联动流程\"]},\"test_points\":[]}";
 
         String merged = RequirementAnalysisService.mergeContinuation(original, continuation);
-        assertTrue(merged.contains("\"affected_modules\":[\"采购申请\",\"会议室联动流程\"]"));
+        assertTrue(merged.contains("\"affected_modules\":[\"申请人预约\",\"会议室联动流程\"]"));
     }
 
     @Test
     void truncatedAnalysisKeepsRequestingAndMergingChunksUntilJsonCloses() throws Exception {
         LlmGateway gateway = mock(LlmGateway.class);
         when(gateway.invoke(any())).thenReturn(
-                new LlmInvocationResponse("c1", "\"affected_modules\":[\"采购申请\"],", 0, 2048,
+                new LlmInvocationResponse("c1", "\"affected_modules\":[\"申请人预约\"],", 0, 2048,
                         1, null, null, null, LlmInvocationStatus.OK, null, null),
                 new LlmInvocationResponse("c2", "\"risk_scenarios\":[]}}", 0, 100,
                         1, null, null, null, LlmInvocationStatus.OK, null, null)
@@ -549,14 +604,14 @@ class RequirementAnalysisServiceTest {
         Method method = RequirementAnalysisService.class.getDeclaredMethod(
                 "continueAnalysisOutputIfNeeded", String.class, int.class, LlmInvocationRequest.class, String.class, int.class);
         method.setAccessible(true);
-        String truncated = "{\"analysis\":{\"requirement_understanding\":\"采购申请\",";
+        String truncated = "{\"analysis\":{\"requirement_understanding\":\"申请人预约\",";
         var request = new LlmInvocationRequest("root", 1L, 1L, 1L, "REQUIREMENT_ANALYSIS_CORE",
                 LlmStage.REQ_CLARIFY, 1L, null, null, Map.of(), "system", "user", null, 4096);
 
         String merged = (String) method.invoke(service, truncated, 4096, request, "需求理解", 4096);
 
         assertNotNull(objectMapper.readTree(merged));
-        assertEquals("采购申请", objectMapper.readTree(merged).path("analysis").path("affected_modules").get(0).asText());
+        assertEquals("申请人预约", objectMapper.readTree(merged).path("analysis").path("affected_modules").get(0).asText());
         verify(gateway, times(2)).invoke(any());
     }
 
@@ -1356,7 +1411,7 @@ class RequirementAnalysisServiceTest {
         String prompt = service.buildAnalysisSystemPrompt();
         // 验证输入源识别相关规则
         assertTrue(prompt.contains("项目证据上下文"));
-        assertTrue(prompt.contains("TOM、页面画像、业务包、轨迹摘要"));
+        assertTrue(prompt.contains("TOM、LLM Wiki、页面画像、业务包、轨迹摘要"));
         assertTrue(prompt.contains("LOW_EVIDENCE"));
         assertTrue(prompt.contains("needs_confirmation"));
     }
@@ -1570,7 +1625,7 @@ class RequirementAnalysisServiceTest {
         merge.setAccessible(true);
 
         String initial = """
-                {"requirement_understanding":"采购申请后需要审批","business_domain":"申请人",
+                {"requirement_understanding":"申请人预约后需要审批","business_domain":"申请人",
                  "requirement_atoms":[{"id":"R1","title":"提交预约"}],"test_units":[]}
                 """;
         @SuppressWarnings("unchecked")
@@ -1583,7 +1638,7 @@ class RequirementAnalysisServiceTest {
                 }]}
                 """, fields);
         var root = objectMapper.readTree(patched);
-        assertEquals("采购申请后需要审批", root.path("requirement_understanding").asText());
+        assertEquals("申请人预约后需要审批", root.path("requirement_understanding").asText());
         assertEquals(1, root.path("requirement_atoms").size());
         assertEquals("U1", root.path("test_units").get(0).path("id").asText());
     }
@@ -1713,5 +1768,74 @@ class RequirementAnalysisServiceTest {
         assertEquals(2, root.path("requirement_atoms").size());
         assertEquals("GENERATE", root.path("requirement_atoms").get(0).path("generation_scope").asText());
         assertEquals("EXCLUDED", root.path("requirement_atoms").get(1).path("generation_scope").asText());
+    }
+
+    @Test
+    void uncertainAndReferenceRequirementSuggestionsDefaultToCurrentGeneration() throws Exception {
+        var service = new RequirementAnalysisService(
+                null, null, null, null, null, null, null, null, null, null, null, null
+        );
+        Method initialize = RequirementAnalysisService.class.getDeclaredMethod(
+                "initializeRequirementAtomScopes", String.class);
+        initialize.setAccessible(true);
+        String result = (String) initialize.invoke(service, """
+                {"requirement_atoms":[
+                  {"id":"R1","title":"待澄清入口","scope_recommendation":"NEEDS_CONFIRMATION"},
+                  {"id":"R2","title":"背景规则","scope_recommendation":"REFERENCE_ONLY"}
+                ],"test_units":[]}
+                """);
+        var root = objectMapper.readTree(result);
+
+        assertEquals("GENERATE", root.path("requirement_atoms").get(0).path("generation_scope").asText());
+        assertEquals("GENERATE", root.path("requirement_atoms").get(1).path("generation_scope").asText());
+        assertEquals("AI_RECOMMENDATION", root.path("requirement_atoms").get(0).path("scope_decision_source").asText());
+    }
+
+    @Test
+    void testPointsDefaultToGenerationUnlessRequirementsAreOutOfScope() throws Exception {
+        var service = new RequirementAnalysisService(
+                null, null, null, null, null, null, null, null, null, null, null, null
+        );
+        Method initialize = RequirementAnalysisService.class.getDeclaredMethod(
+                "initializeTestPointScopes", String.class, String.class);
+        initialize.setAccessible(true);
+        String result = (String) initialize.invoke(service,
+                """
+                [{"id":"TP1","requirement_refs":["R1"]},{"id":"TP2","requirement_refs":["R2"]}]
+                """,
+                """
+                {"requirement_atoms":[
+                  {"id":"R1","scope_recommendation":"REFERENCE_ONLY"},
+                  {"id":"R2","scope_recommendation":"OUT_OF_SCOPE"}
+                ]}
+                """);
+        var points = objectMapper.readTree(result);
+
+        assertEquals("GENERATE", points.get(0).path("generation_scope").asText());
+        assertEquals("EXCLUDED", points.get(1).path("generation_scope").asText());
+    }
+
+    @Test
+    void scopeAnalysisStripsAnyPrematureMatrixTestPointsAndCasePlan() throws Exception {
+        var service = new RequirementAnalysisService(
+                null, null, null, null, null, null, null, null, null, null, null, null
+        );
+        Method strip = RequirementAnalysisService.class.getDeclaredMethod(
+                "stripDownstreamAnalysisAssets", String.class);
+        strip.setAccessible(true);
+        String result = (String) strip.invoke(service, """
+                {"requirement_understanding":"审批需求","requirement_atoms":[{"id":"R1"}],
+                 "coverage_matrix":[{"module":"审批"}],"test_points":[{"id":"TP1"}],
+                 "test_point_scope_review":{"status":"PENDING"},"skill_self_check":{},
+                 "case_plan":[{"id":"CP1"}]}
+                """);
+        var root = objectMapper.readTree(result);
+
+        assertTrue(root.has("requirement_atoms"));
+        assertFalse(root.has("coverage_matrix"));
+        assertFalse(root.has("test_points"));
+        assertFalse(root.has("test_point_scope_review"));
+        assertFalse(root.has("skill_self_check"));
+        assertFalse(root.has("case_plan"));
     }
 }

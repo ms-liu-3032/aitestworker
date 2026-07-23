@@ -55,6 +55,7 @@ public class GenerationCaseLibraryService {
                        tgc.expected_result,
                        tgc.priority,
                        tgc.case_type,
+                       'POSITIVE' AS scenario_type,
                        '轨迹回放法' AS design_method,
                        tgc.source_refs_json,
                        tgc.case_scope,
@@ -85,7 +86,7 @@ public class GenerationCaseLibraryService {
      */
     public LocalCaseDraftPage listPage(Long projectId, int page, int size, String keyword,
                                        List<String> modules, List<String> priorities, List<String> statuses,
-                                       List<String> sources, CurrentUser user) {
+                                       List<String> sources, List<String> scenarioTypes, CurrentUser user) {
         int safePage = Math.max(0, page);
         int safeSize = Math.max(10, Math.min(size, 100));
         int offset = safePage * safeSize;
@@ -93,7 +94,7 @@ public class GenerationCaseLibraryService {
                 (
                     SELECT id, task_id, project_id, case_no, case_title, project_name, module_name,
                            NULL AS precondition, NULL AS steps, NULL AS expected_result,
-                           priority, case_type, design_method, NULL AS source_refs_json,
+                           priority, case_type, scenario_type, design_method, NULL AS source_refs_json,
                            case_scope, case_status, created_by, created_at, updated_at, session_id,
                            'GENERATION' AS source_type
                     FROM test_case_draft
@@ -103,7 +104,8 @@ public class GenerationCaseLibraryService {
                            COALESCE(tgc.case_title, CONCAT('轨迹草稿 #', tgc.id)) AS case_title,
                            COALESCE(p.project_name, '') AS project_name, tgc.module_name,
                            NULL AS precondition, NULL AS steps, NULL AS expected_result,
-                           tgc.priority, tgc.case_type, '轨迹回放法' AS design_method, NULL AS source_refs_json,
+                           tgc.priority, tgc.case_type, 'POSITIVE' AS scenario_type,
+                           '轨迹回放法' AS design_method, NULL AS source_refs_json,
                            tgc.case_scope, tgc.case_status, tgc.user_id AS created_by,
                            tgc.created_at, tgc.updated_at, tgc.trace_session_id AS session_id,
                            'TRACE' AS source_type
@@ -116,7 +118,7 @@ public class GenerationCaseLibraryService {
         params.put("projectId", projectId);
         params.put("createdBy", user.id());
         String filterSql = appendLocalCaseFilters(new StringBuilder(" WHERE 1=1"), params,
-                keyword, modules, priorities, statuses, sources).toString();
+                keyword, modules, priorities, statuses, sources, scenarioTypes).toString();
         Integer total = jdbc.sql("SELECT COUNT(*) FROM " + unionSql + " local_case" + filterSql)
                 .params(params).query(Integer.class).single();
         params.put("limit", safeSize);
@@ -142,7 +144,7 @@ public class GenerationCaseLibraryService {
 
     StringBuilder appendLocalCaseFilters(StringBuilder sql, Map<String, Object> params,
                                          String keyword, List<String> modules, List<String> priorities,
-                                         List<String> statuses, List<String> sources) {
+                                         List<String> statuses, List<String> sources, List<String> scenarioTypes) {
         if (keyword != null && !keyword.isBlank()) {
             sql.append(" AND (case_title LIKE :keyword OR case_no LIKE :keyword OR module_name LIKE :keyword")
                     .append(" OR case_type LIKE :keyword OR case_scope LIKE :keyword OR source_type LIKE :keyword)");
@@ -152,6 +154,7 @@ public class GenerationCaseLibraryService {
         appendInFilter(sql, params, "priority", "priorities", priorities);
         appendInFilter(sql, params, "case_status", "statuses", statuses);
         appendInFilter(sql, params, "source_type", "sources", sources);
+        appendInFilter(sql, params, "scenario_type", "scenarioTypes", scenarioTypes);
         return sql;
     }
 
@@ -193,12 +196,12 @@ public class GenerationCaseLibraryService {
         }
         jdbcTemplate.update("""
                 INSERT INTO test_case_draft(task_id, project_id, test_point_id, case_no, case_title, project_name,
-                  module_name, precondition, steps, expected_result, priority, case_type, design_method,
+                  module_name, precondition, steps, expected_result, priority, case_type, scenario_type, design_method,
                   source_refs_json, is_assumption, assumption_note, compliance_mark, user_feedback, quality_status,
                   version_no, asset_status, case_scope, case_status, created_by, created_at, updated_at, session_id,
                   analysis_id, analysis_version, analysis_sub_version)
                 SELECT task_id, project_id, test_point_id, CONCAT(case_no, '-COPY-', id), CONCAT('副本 - ', case_title), project_name,
-                  module_name, precondition, steps, expected_result, priority, case_type, design_method,
+                  module_name, precondition, steps, expected_result, priority, case_type, scenario_type, design_method,
                   source_refs_json, is_assumption, assumption_note, compliance_mark, user_feedback, quality_status,
                   1, 'DRAFT', 'PERSONAL', 'DRAFT', created_by, ?, ?, session_id,
                   analysis_id, analysis_version, analysis_sub_version
@@ -243,6 +246,7 @@ public class GenerationCaseLibraryService {
                        tgc.expected_result,
                        tgc.priority,
                        tgc.case_type,
+                       'POSITIVE' AS scenario_type,
                        '轨迹回放法' AS design_method,
                        tgc.source_refs_json,
                        tgc.case_scope,
@@ -417,10 +421,10 @@ public class GenerationCaseLibraryService {
         LocalDateTime now = timeProvider.now();
         jdbcTemplate.update("""
                 INSERT INTO test_case_asset(project_id, source_task_id, source_draft_id, case_no, case_title, project_name,
-                  module_name, precondition, steps, expected_result, priority, case_type, design_method, source_refs_json,
+                  module_name, precondition, steps, expected_result, priority, case_type, scenario_type, design_method, source_refs_json,
                   created_at, updated_at, case_scope, case_status, submitted_by, submitted_at,
                   source_trace_group_id, source_trace_session_id, source_issue_clip_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PROJECT', 'SUBMITTED', ?, ?, NULL, NULL, NULL)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PROJECT', 'SUBMITTED', ?, ?, NULL, NULL, NULL)
                 """,
                 draft.projectId(),
                 draft.taskId(),
@@ -434,6 +438,7 @@ public class GenerationCaseLibraryService {
                 draft.expectedResult(),
                 normalizePriority(draft.priority()),
                 firstNonBlank(draft.caseType(), "FUNCTIONAL"),
+                firstNonBlank(draft.scenarioType(), "POSITIVE"),
                 firstNonBlank(draft.designMethod(), "LLM生成"),
                 draft.sourceRefsJson(),
                 now,
@@ -450,10 +455,10 @@ public class GenerationCaseLibraryService {
         Long issueClipId = extractTraceRef(draft.sourceRefsJson(), "issueClipId");
         jdbcTemplate.update("""
                 INSERT INTO test_case_asset(project_id, source_task_id, source_draft_id, case_no, case_title, project_name,
-                  module_name, precondition, steps, expected_result, priority, case_type, design_method, source_refs_json,
+                  module_name, precondition, steps, expected_result, priority, case_type, scenario_type, design_method, source_refs_json,
                   created_at, updated_at, case_scope, case_status, submitted_by, submitted_at,
                   source_trace_group_id, source_trace_session_id, source_issue_clip_id)
-                VALUES (?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PROJECT', 'SUBMITTED', ?, ?, ?, ?, ?)
+                VALUES (?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PROJECT', 'SUBMITTED', ?, ?, ?, ?, ?)
                 """,
                 draft.projectId(),
                 firstNonBlank(draft.caseNo(), "TRACE-" + Math.abs(draftId)),
@@ -465,6 +470,7 @@ public class GenerationCaseLibraryService {
                 draft.expectedResult(),
                 normalizePriority(draft.priority()),
                 firstNonBlank(draft.caseType(), "FUNCTIONAL"),
+                firstNonBlank(draft.scenarioType(), "POSITIVE"),
                 firstNonBlank(draft.designMethod(), "轨迹回放法"),
                 draft.sourceRefsJson(),
                 now,
@@ -580,6 +586,7 @@ public class GenerationCaseLibraryService {
                 rs.getString("expected_result"),
                 rs.getString("priority"),
                 rs.getString("case_type"),
+                rs.getString("scenario_type"),
                 rs.getString("design_method"),
                 rs.getString("source_refs_json"),
                 rs.getString("case_scope"),
@@ -605,6 +612,7 @@ public class GenerationCaseLibraryService {
                 rs.getString("expected_result"),
                 rs.getString("priority"),
                 rs.getString("case_type"),
+                rs.getString("scenario_type"),
                 rs.getString("design_method"),
                 rs.getString("source_refs_json"),
                 rs.getString("case_scope"),
@@ -639,6 +647,7 @@ public class GenerationCaseLibraryService {
             String expectedResult,
             String priority,
             String caseType,
+            String scenarioType,
             String designMethod,
             String sourceRefsJson,
             String caseScope,

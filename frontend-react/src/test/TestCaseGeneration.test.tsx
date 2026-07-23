@@ -199,12 +199,13 @@ async function waitForSessionLoaded() {
 }
 
 function mockImmediatePolling() {
-  vi.spyOn(window, 'setInterval').mockImplementation((handler: TimerHandler) => {
+  const nativeSetTimeout = window.setTimeout.bind(window)
+  vi.spyOn(window, 'setTimeout').mockImplementation((handler: TimerHandler, timeout?: number, ...args: any[]) => {
+    if (timeout !== 2000 && timeout !== 3000) return nativeSetTimeout(handler, timeout, ...args)
     const callback = typeof handler === 'function' ? handler : () => {}
     void Promise.resolve().then(() => callback())
     return 1 as any
   })
-  vi.spyOn(window, 'clearInterval').mockImplementation(() => {})
 }
 
 // ── 1. 顺序断言 (AnalysisMessageContent) ──────────────
@@ -384,7 +385,7 @@ describe('AnalysisPanel - 测试点标签', () => {
     const analysis = makeAnalysis({
       analysisResult: JSON.stringify({
         requirement_understanding: '测试',
-        evidence_summary: { tom_node_refs: ['采购申请流程'] },
+        evidence_summary: { tom_node_refs: ['请假审批流程'] },
         test_points: [{
           title: '验证预约主流程',
           point_type: 'MAIN_FLOW',
@@ -468,6 +469,52 @@ describe('AnalysisPanel - 测试点标签', () => {
       expect.objectContaining({ requirementAtomId: 'R1', disposition: 'GENERATE' }),
       expect.objectContaining({ requirementAtomId: 'R2', disposition: 'EXCLUDED' }),
     ]))
+  })
+
+  it('AI 建议仅参考或待确认的需求默认仍选本期生成', async () => {
+    const onConfirm = vi.fn().mockResolvedValue(undefined)
+    const analysis = makeAnalysis({
+      status: 'NEED_SCOPE_CONFIRMATION',
+      testPoints: [],
+      analysisResult: JSON.stringify({
+        requirement_understanding: '需求包含背景说明和待澄清入口',
+        requirement_atoms: [
+          { id: 'R1', title: '背景规则', scope_recommendation: 'REFERENCE_ONLY', generation_scope: 'REFERENCE_ONLY', scope_decision_source: 'AI_RECOMMENDATION' },
+          { id: 'R2', title: '待澄清入口', scope_recommendation: 'NEEDS_CONFIRMATION', generation_scope: 'REFERENCE_ONLY', scope_decision_source: 'AI_RECOMMENDATION' },
+        ],
+        requirement_scope_review: { status: 'PENDING' },
+      }),
+    })
+
+    render(<AnalysisPanel analyses={[analysis]} latestAnalysis={analysis} onConfirmRequirementScope={onConfirm} />)
+
+    expect((screen.getByLabelText('需求范围-R1') as HTMLSelectElement).value).toBe('GENERATE')
+    expect((screen.getByLabelText('需求范围-R2') as HTMLSelectElement).value).toBe('GENERATE')
+    const button = screen.getByRole('button', { name: '确认范围并生成测试点' })
+    expect(button).not.toBeDisabled()
+    fireEvent.click(button)
+    await waitFor(() => expect(onConfirm).toHaveBeenCalledWith(1, [
+      expect.objectContaining({ requirementAtomId: 'R1', disposition: 'GENERATE' }),
+      expect.objectContaining({ requirementAtomId: 'R2', disposition: 'GENERATE' }),
+    ]))
+  })
+
+  it('需求范围未确认时不提前展示模型残留的测试点审核区', () => {
+    const analysis = makeAnalysis({
+      status: 'NEED_SCOPE_CONFIRMATION',
+      testPoints: [{ id: 'TP1', title: '不应提前出现的测试点', generation_scope: 'GENERATE' }],
+      analysisResult: JSON.stringify({
+        requirement_understanding: '先审核需求范围',
+        requirement_atoms: [{ id: 'R1', title: '新增审批', scope_recommendation: 'IN_SCOPE', generation_scope: 'GENERATE' }],
+        requirement_scope_review: { status: 'PENDING' },
+        test_points: [{ id: 'TP1', title: '不应提前出现的测试点', generation_scope: 'GENERATE' }],
+      }),
+    })
+
+    render(<AnalysisPanel analyses={[analysis]} latestAnalysis={analysis} onConfirmRequirementScope={vi.fn()} />)
+
+    expect(screen.queryByText('测试点生成范围')).toBeNull()
+    expect(screen.queryByText('不应提前出现的测试点')).toBeNull()
   })
 
   it('明确不在本期的需求默认进入排除且可填写人工调整原因', () => {
@@ -560,6 +607,52 @@ describe('TestCaseGeneration', () => {
     expect(screen.getByRole('button', { name: '分析中...' })).toBeDisabled()
   })
 
+  it('会话刷新恢复到已完成分析任务时释放思考状态并允许继续澄清', async () => {
+    const session = makeSession({ currentStage: 'WAITING_REQUIREMENT_SCOPE', latestAnalysisVersion: 1 })
+    const completedSession = makeSession({
+      executionTaskId: 54,
+      currentStage: 'WAITING_REQUIREMENT_SCOPE',
+      latestAnalysisVersion: 1,
+    })
+    mockPage(session)
+    const pendingAnalysis = makeAnalysis({ status: 'NEED_SCOPE_CONFIRMATION' })
+    apiMocks.getLatestGenerationAnalysis.mockResolvedValue(pendingAnalysis)
+    apiMocks.listGenerationAnalyses.mockResolvedValue([pendingAnalysis])
+    apiMocks.startSessionRequirementAnalysisTask.mockResolvedValue(makeTask({
+      taskId: 54,
+      taskType: 'REQUIREMENT_ANALYSIS',
+      status: 'PENDING',
+    }))
+    apiMocks.getAsyncGenerationTask
+      .mockImplementationOnce(() => new Promise(() => {}))
+      .mockResolvedValueOnce(makeTask({
+        taskId: 54,
+        taskType: 'REQUIREMENT_ANALYSIS',
+        status: 'SUCCEEDED',
+      }))
+
+    render(<TestCaseGeneration />)
+    await waitForSessionLoaded()
+
+    const composer = screen.getByPlaceholderText(/输入需求描述/)
+    fireEvent.change(composer, { target: { value: '补充澄清内容' } })
+    fireEvent.click(screen.getByRole('button', { name: '发送' }))
+    await waitFor(() => expect(apiMocks.getAsyncGenerationTask).toHaveBeenCalledTimes(1))
+    expect(screen.getByRole('button', { name: '分析中...' })).toBeDisabled()
+
+    apiMocks.listGenerationSessions.mockResolvedValue({
+      items: [completedSession], total: 1, page: 1, pageSize: 20,
+    })
+    fireEvent.click(screen.getByRole('button', { name: '刷新' }))
+
+    await waitFor(() => expect(apiMocks.getAsyncGenerationTask).toHaveBeenCalledTimes(2))
+    await screen.findByText(/状态：已成功/)
+    expect(composer).not.toBeDisabled()
+    fireEvent.change(composer, { target: { value: '继续补充另一条澄清' } })
+    expect(screen.getByRole('button', { name: '发送' })).not.toBeDisabled()
+    expect(screen.queryByText('正在思考')).not.toBeInTheDocument()
+  })
+
   it('renders without crashing', () => {
     const { container } = render(<TestCaseGeneration />)
     expect(container).toBeTruthy()
@@ -583,6 +676,42 @@ describe('TestCaseGeneration', () => {
     expect(screen.getByRole('button', { name: '分析中...' })).toBeDisabled()
   })
 
+  it('等待需求范围确认阶段输入澄清内容会重新分析', async () => {
+    mockPage(makeSession({ currentStage: 'WAITING_REQUIREMENT_SCOPE', latestAnalysisVersion: 1 }))
+    const pendingAnalysis = makeAnalysis({ status: 'NEED_SCOPE_CONFIRMATION' })
+    apiMocks.getLatestGenerationAnalysis.mockResolvedValue(pendingAnalysis)
+    apiMocks.listGenerationAnalyses.mockResolvedValue([pendingAnalysis])
+    apiMocks.startSessionRequirementAnalysisTask.mockResolvedValue(makeTask({ taskType: 'REQUIREMENT_ANALYSIS', status: 'PENDING' }))
+
+    render(<TestCaseGeneration />)
+    await waitForSessionLoaded()
+
+    fireEvent.change(screen.getByPlaceholderText(/输入需求描述/), { target: { value: '规则入口在用户管理页面' } })
+    fireEvent.click(screen.getByRole('button', { name: '发送' }))
+
+    await waitFor(() => {
+      expect(apiMocks.startSessionRequirementAnalysisTask).toHaveBeenCalledWith(1, 10, '规则入口在用户管理页面')
+    })
+    expect(apiMocks.sendGenerationMessage).not.toHaveBeenCalled()
+  })
+
+  it('范围未确认时输入生成用例先返回审核提示，不创建生成任务', async () => {
+    mockPage(makeSession({ currentStage: 'WAITING_REQUIREMENT_SCOPE', latestAnalysisVersion: 1 }))
+    const pendingAnalysis = makeAnalysis({ status: 'NEED_SCOPE_CONFIRMATION' })
+    apiMocks.getLatestGenerationAnalysis.mockResolvedValue(pendingAnalysis)
+    apiMocks.listGenerationAnalyses.mockResolvedValue([pendingAnalysis])
+    apiMocks.sendGenerationMessage.mockResolvedValue({ newMessages: [], analysis: pendingAnalysis })
+
+    render(<TestCaseGeneration />)
+    await waitForSessionLoaded()
+
+    fireEvent.change(screen.getByPlaceholderText(/输入需求描述/), { target: { value: '生成用例' } })
+    fireEvent.click(screen.getByRole('button', { name: '发送' }))
+
+    await waitFor(() => expect(apiMocks.sendGenerationMessage).toHaveBeenCalledWith(1, 10, '生成用例'))
+    expect(apiMocks.startSessionCaseGenerationTask).not.toHaveBeenCalled()
+  })
+
   it('等待确认阶段确认命令仍走同步消息，不启动异步分析', async () => {
     mockPage(makeSession({ currentStage: 'WAITING_USER_CONFIRMATION', latestAnalysisVersion: 1 }))
     apiMocks.sendGenerationMessage.mockResolvedValue({ newMessages: [], analysis: makeAnalysis({ status: 'CONFIRMED' }) })
@@ -604,6 +733,7 @@ describe('TestCaseGeneration', () => {
     apiMocks.getLatestGenerationAnalysis.mockResolvedValue(null)
     apiMocks.listGenerationAnalyses.mockResolvedValue([])
     apiMocks.startSessionRequirementAnalysisTask.mockResolvedValue(makeTask({ taskType: 'REQUIREMENT_ANALYSIS', status: 'PENDING' }))
+    apiMocks.getAsyncGenerationTask.mockResolvedValue(makeTask({ taskType: 'REQUIREMENT_ANALYSIS', status: 'RUNNING' }))
 
     render(<TestCaseGeneration />)
     await waitForSessionLoaded()
@@ -623,8 +753,8 @@ describe('TestCaseGeneration', () => {
 
   it('已有分析但阶段残留 ASK_TOM_MODE 时生成命令不重复启动需求分析', async () => {
     mockPage(makeSession({ currentStage: 'ASK_TOM_MODE', latestAnalysisVersion: 1 }))
-    apiMocks.getLatestGenerationAnalysis.mockResolvedValue(makeAnalysis({ version: 1 }))
-    apiMocks.listGenerationAnalyses.mockResolvedValue([makeAnalysis({ version: 1 })])
+    apiMocks.getLatestGenerationAnalysis.mockResolvedValue(makeAnalysis({ version: 1, status: 'CONFIRMED' }))
+    apiMocks.listGenerationAnalyses.mockResolvedValue([makeAnalysis({ version: 1, status: 'CONFIRMED' })])
     apiMocks.startSessionCaseGenerationTask.mockResolvedValue(makeTask({ status: 'PENDING' }))
 
     render(<TestCaseGeneration />)
@@ -657,6 +787,7 @@ describe('TestCaseGeneration', () => {
 
   it('输入生成用例时启动会话异步任务，不调用旧同步消息接口', async () => {
     apiMocks.startSessionCaseGenerationTask.mockResolvedValue(makeTask({ status: 'PENDING' }))
+    apiMocks.getAsyncGenerationTask.mockResolvedValue(makeTask({ status: 'RUNNING' }))
 
     render(<TestCaseGeneration />)
 
@@ -760,6 +891,42 @@ describe('TestCaseGeneration', () => {
     await screen.findByText('审批通过生成草稿')
     expect(apiMocks.getAsyncGenerationTask).toHaveBeenCalledWith(1, 501)
     expect(appMocks.showToast).toHaveBeenCalledWith('用例生成完成')
+  })
+
+  it('恢复到遗留 PENDING 任务后立即串行查询并更新完成状态', async () => {
+    mockImmediatePolling()
+    mockPage(makeSession({ executionTaskId: 501, status: 'COMPLETED', currentStage: 'CASE_READY' }))
+    apiMocks.getAsyncGenerationTask
+      .mockResolvedValueOnce(makeTask({ status: 'PENDING', draftCount: 18 }))
+      .mockResolvedValueOnce(makeTask({ status: 'SUCCEEDED', draftCount: 18 }))
+    apiMocks.listGenerationDrafts.mockResolvedValue(Array.from({ length: 18 }, (_, index) => makeDraft({ id: 9100 + index })))
+
+    render(<TestCaseGeneration />)
+
+    await waitForSessionLoaded()
+    await screen.findByText('用例生成完成')
+    expect(screen.getByText(/状态：已成功/)).toBeInTheDocument()
+    expect(screen.queryByText('生成任务正在后台执行，完成后会自动刷新右侧草稿箱。')).not.toBeInTheDocument()
+    expect(apiMocks.getAsyncGenerationTask).toHaveBeenCalledTimes(2)
+  })
+
+  it('任务查询短暂失败后自动重试并恢复为完成状态', async () => {
+    mockImmediatePolling()
+    apiMocks.startSessionCaseGenerationTask.mockResolvedValue(makeTask({ status: 'PENDING' }))
+    apiMocks.getAsyncGenerationTask
+      .mockRejectedValueOnce(new Error('任务状态查询暂时不可用'))
+      .mockResolvedValueOnce(makeTask({ status: 'SUCCEEDED', draftCount: 1 }))
+    apiMocks.listGenerationDrafts.mockResolvedValue([makeDraft()])
+
+    render(<TestCaseGeneration />)
+    await waitForSessionLoaded()
+    fireEvent.change(screen.getByPlaceholderText(/输入需求描述/), { target: { value: '生成用例' } })
+    fireEvent.click(screen.getByRole('button', { name: '发送' }))
+
+    await screen.findByText('用例生成完成')
+    expect(apiMocks.getAsyncGenerationTask).toHaveBeenCalledTimes(2)
+    expect(appMocks.showToast).toHaveBeenCalledWith('任务状态查询暂时不可用', 'error')
+    expect(screen.queryByText('生成任务正在后台执行，完成后会自动刷新右侧草稿箱。')).not.toBeInTheDocument()
   })
 
   it('轮询到任务失败后展示错误并允许重试', async () => {

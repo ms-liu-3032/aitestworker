@@ -21,7 +21,7 @@ class DirectCaseGenerationServiceTest {
         strip.setAccessible(true);
         String requirement = """
                 ## 原始需求
-                采购申请需要审批。
+                申请人预约需要审批。
 
                 ## 测试点
                 [{"title":"预约提交","requirement_refs":["R1"]},{"title":"审批处理","requirement_refs":["R2"]}]
@@ -116,12 +116,15 @@ class DirectCaseGenerationServiceTest {
         sourceRefs.setAccessible(true);
         var input = new DirectCaseGenerationService.CaseDraftInput(
                 "完整流程", "模块", "前置", "1. 操作", "1. 成功", "P1",
+                "POSITIVE", List.of("场景法"), List.of("VALID_FLOW"),
                 "CP2", "CD3", "提交", List.of("TP1", "TP2"), List.of("需求"), List.of(), 0.9);
 
         String json = (String) sourceRefs.invoke(service, 7L, input);
 
         assertTrue(json.contains("\"sourceCasePlan\":\"CP2\""));
         assertTrue(json.contains("\"sourceCaseDesign\":\"CD3\""));
+        assertTrue(json.contains("\"scenarioType\":\"POSITIVE\""));
+        assertTrue(json.contains("\"designMethods\":[\"场景法\"]"));
         assertTrue(json.contains("\"TP1\""));
         assertTrue(json.contains("\"TP2\""));
     }
@@ -156,7 +159,7 @@ class DirectCaseGenerationServiceTest {
         Method parse = DirectCaseGenerationService.class.getDeclaredMethod("parseOutput", String.class, Long.class);
         parse.setAccessible(true);
         String output = """
-                {"cases":[{"caseTitle":"提交到通知完整流程","moduleName":"流程","precondition":"已登录","steps":"1. 提交\\n2. 审批\\n3. 通知","expectedResult":"1. 已提交\\n2. 已审批\\n3. 已通知","priority":"P1","sourceCasePlan":"CP2","sourceCaseDesign":"CD2","sourceTestPoint":"提交","sourceTestPointRefs":["TP1","TP2","TP3"],"sourceBasis":["需求"],"unsupportedItems":[],"confidence":0.9}]}
+                {"cases":[{"caseTitle":"提交到通知完整流程","moduleName":"流程","precondition":"已登录","steps":"1. 提交\\n2. 审批\\n3. 通知","expectedResult":"1. 已提交\\n2. 已审批\\n3. 已通知","priority":"P1","scenarioType":"POSITIVE","designMethods":["场景法"],"designCoverage":["VALID_FLOW"],"sourceCasePlan":"CP2","sourceCaseDesign":"CD2","sourceTestPoint":"提交","sourceTestPointRefs":["TP1","TP2","TP3"],"sourceBasis":["需求"],"unsupportedItems":[],"confidence":0.9}]}
                 """;
 
         @SuppressWarnings("unchecked")
@@ -164,6 +167,7 @@ class DirectCaseGenerationServiceTest {
 
         assertEquals(List.of("TP1", "TP2", "TP3"), cases.get(0).sourceTestPointRefs());
         assertEquals("CD2", cases.get(0).sourceCaseDesign());
+        assertEquals("POSITIVE", cases.get(0).scenarioType());
     }
 
     @Test
@@ -175,5 +179,90 @@ class DirectCaseGenerationServiceTest {
         String normalized = (String) normalize.invoke(service, "1. 填写信息 2. 点击提交；3. 查看结果");
 
         assertEquals("1. 填写信息\n2. 点击提交\n3. 查看结果", normalized);
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void rejectsRepresentativeBoundaryCaseWhenRequiredCoverageIsMissing() throws Exception {
+        var service = new DirectCaseGenerationService(null, null, null, null, null, null, null, null);
+        Method missing = DirectCaseGenerationService.class.getDeclaredMethod(
+                "missingDesignObligations", List.class, List.class);
+        missing.setAccessible(true);
+        Map<String, Object> design = Map.of(
+                "id", "CD1", "scenario_type", "BOUNDARY",
+                "design_methods", List.of("等价类划分法", "边界值分析法"),
+                "coverage_requirements", List.of("VALID_EQUIVALENCE_CLASS", "INVALID_EQUIVALENCE_CLASS", "AT_BOUNDARY"));
+        var oneCase = new DirectCaseGenerationService.CaseDraftInput(
+                "边界内有效值", "表单", "", "1. 输入", "1. 通过", "P1", "BOUNDARY",
+                List.of("边界值分析法"), List.of("AT_BOUNDARY"), "CP1", "CD1", "字段边界",
+                List.of("TP1"), List.of("需求"), List.of(), 0.9);
+
+        List<String> result = (List<String>) missing.invoke(service, List.of(design), List.of(oneCase));
+
+        assertTrue(result.contains("CD1/方法:等价类划分法"));
+        assertTrue(result.contains("CD1/覆盖:INVALID_EQUIVALENCE_CLASS"));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void acceptsMultipleFunctionalCasesThatTogetherCompleteOneDesign() throws Exception {
+        var service = new DirectCaseGenerationService(null, null, null, null, null, null, null, null);
+        Method missing = DirectCaseGenerationService.class.getDeclaredMethod(
+                "missingDesignObligations", List.class, List.class);
+        missing.setAccessible(true);
+        Map<String, Object> design = Map.of(
+                "id", "CD1", "scenario_type", "BOUNDARY",
+                "design_methods", List.of("等价类划分法", "边界值分析法"),
+                "coverage_requirements", List.of("VALID_EQUIVALENCE_CLASS", "INVALID_EQUIVALENCE_CLASS", "AT_BOUNDARY"));
+        var valid = new DirectCaseGenerationService.CaseDraftInput(
+                "有效等价类", "表单", "", "1. 输入", "1. 通过", "P1", "BOUNDARY",
+                List.of("等价类划分法"), List.of("VALID_EQUIVALENCE_CLASS"), "CP1", "CD1", "字段边界",
+                List.of("TP1"), List.of("需求"), List.of(), 0.9);
+        var invalidBoundary = new DirectCaseGenerationService.CaseDraftInput(
+                "无效边界", "表单", "", "1. 输入", "1. 拦截", "P1", "BOUNDARY",
+                List.of("等价类划分法", "边界值分析法"),
+                List.of("INVALID_EQUIVALENCE_CLASS", "AT_BOUNDARY"), "CP1", "CD1", "字段边界",
+                List.of("TP1"), List.of("需求"), List.of(), 0.9);
+
+        List<String> result = (List<String>) missing.invoke(service, List.of(design), List.of(valid, invalidBoundary));
+
+        assertTrue(result.isEmpty());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void rejectsCasesWhoseStepsCannotBeExecutedOrTraced() throws Exception {
+        var service = new DirectCaseGenerationService(null, null, null, null, null, null, null, null);
+        Method quality = DirectCaseGenerationService.class.getDeclaredMethod(
+                "caseExecutionQualityProblems", List.class);
+        quality.setAccessible(true);
+        var invalid = new DirectCaseGenerationService.CaseDraftInput(
+                "提交预约", "预约", "已完成 TP1", "1. 填写\n2. 提交", "1. 提交成功", "P1", "POSITIVE",
+                List.of("场景法"), List.of("VALID_FLOW"), "CP1", "CD1", "预约提交",
+                List.of(), List.of(), List.of(), 0.9);
+
+        List<String> result = (List<String>) quality.invoke(service, List.of(invalid));
+
+        assertTrue(result.stream().anyMatch(item -> item.contains("步骤与预期未一一对应")));
+        assertTrue(result.stream().anyMatch(item -> item.contains("缺少测试点来源")));
+        assertTrue(result.stream().anyMatch(item -> item.contains("缺少需求或资产依据")));
+        assertTrue(result.stream().anyMatch(item -> item.contains("内部编排编号")));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void acceptsTraceableCaseWithOneExpectedResultPerStep() throws Exception {
+        var service = new DirectCaseGenerationService(null, null, null, null, null, null, null, null);
+        Method quality = DirectCaseGenerationService.class.getDeclaredMethod(
+                "caseExecutionQualityProblems", List.class);
+        quality.setAccessible(true);
+        var valid = new DirectCaseGenerationService.CaseDraftInput(
+                "提交预约", "预约", "用户已登录", "1. 填写预约信息\n2. 点击提交", "1. 表单保持已填写内容\n2. 生成待审批预约", "P1", "POSITIVE",
+                List.of("场景法"), List.of("VALID_FLOW", "EXPECTED_BUSINESS_RESULT"), "CP1", "CD1", "预约提交",
+                List.of("TP1"), List.of("用户需求"), List.of(), 0.9);
+
+        List<String> result = (List<String>) quality.invoke(service, List.of(valid));
+
+        assertTrue(result.isEmpty());
     }
 }

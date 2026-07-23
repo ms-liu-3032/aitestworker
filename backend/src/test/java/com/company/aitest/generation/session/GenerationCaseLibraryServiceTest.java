@@ -73,6 +73,7 @@ class GenerationCaseLibraryServiceTest {
                        tgc.expected_result,
                        tgc.priority,
                        tgc.case_type,
+                       'POSITIVE' AS scenario_type,
                        '轨迹回放法' AS design_method,
                        tgc.source_refs_json,
                        tgc.case_scope,
@@ -118,6 +119,7 @@ class GenerationCaseLibraryServiceTest {
                        tgc.expected_result,
                        tgc.priority,
                        tgc.case_type,
+                       'POSITIVE' AS scenario_type,
                        '轨迹回放法' AS design_method,
                        tgc.source_refs_json,
                        tgc.case_scope,
@@ -138,7 +140,7 @@ class GenerationCaseLibraryServiceTest {
     void submitRejectsAlreadySubmittedDraft() {
         GenerationCaseLibraryService.LocalCaseDraftView draft = new GenerationCaseLibraryService.LocalCaseDraftView(
                 3L, 11L, 2L, "TC-1", "title", "project", "module", "pre", "steps", "expected",
-                "P1", "FUNCTIONAL", "LLM生成", "{}", "PERSONAL", "SUBMITTED", 9L,
+                "P1", "FUNCTIONAL", "POSITIVE", "LLM生成", "{}", "PERSONAL", "SUBMITTED", 9L,
                 LocalDateTime.now(), LocalDateTime.now(), 7L, "GENERATION"
         );
         when(jdbcClient.sql(eq("""

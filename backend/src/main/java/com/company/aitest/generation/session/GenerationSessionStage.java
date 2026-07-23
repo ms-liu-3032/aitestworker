@@ -1,0 +1,13 @@
+package com.company.aitest.generation.session;
+
+enum GenerationSessionStage {
+    REQUIREMENT_INPUT,
+    ASK_TOM_MODE,
+    REQUIREMENT_ANALYZING,
+    REANALYZING,
+    WAITING_REQUIREMENT_SCOPE,
+    WAITING_USER_CONFIRMATION,
+    ANALYSIS_READY,
+    CASE_GENERATING,
+    CASE_READY
+}

@@ -1280,7 +1280,7 @@ export default function SystemConfig() {
                             pack.status === 'ARCHIVED' ? 'bg-red-50 text-red-700' :
                             'bg-gray-100 text-gray-500'
                           }`}>
-                            {ruleStatusLabels[pack.status] || pack.status}
+                            {ruleStatusLabels[pack.status] || '未配置中文状态'}
                           </span>
                         </div>
                         <div className="mt-1 break-all text-xs text-gray-500">

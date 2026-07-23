@@ -9,6 +9,7 @@ import {
   reviewPromptTemplate,
   type PromptTemplateRecord,
 } from '../../services/api';
+import { statusLabel as uiStatusLabel } from '../../utils/displayLabels';
 
 type FilterScope = '' | 'PUBLIC' | 'SYSTEM' | 'PERSONAL';
 type FilterStatus = '' | 'ACTIVE' | 'DEPRECATED' | 'REVIEWING';
@@ -285,7 +286,7 @@ export default function PromptLibrary() {
                 prompt.scope === 'SYSTEM' ? 'bg-purple-50 text-purple-700' :
                 'bg-gray-100 text-gray-600'
               }`}>
-                {scopeLabels[prompt.scope] || prompt.scope}
+                {scopeLabels[prompt.scope] || '未配置中文范围'}
               </span>
             </div>
             <div className="font-mono text-sm text-gray-600" style={{ width: '80px' }}>v{prompt.version}</div>
@@ -295,7 +296,7 @@ export default function PromptLibrary() {
                 prompt.status === 'REVIEWING' ? 'bg-yellow-50 text-yellow-700' :
                 'bg-gray-100 text-gray-600'
               }`}>
-                {prompt.status === 'ACTIVE' ? '活跃' : prompt.status === 'DEPRECATED' ? '已弃用' : prompt.status}
+                {uiStatusLabel(prompt.status)}
               </span>
             </div>
             <div style={{ width: '100px' }}>
@@ -304,7 +305,7 @@ export default function PromptLibrary() {
                 prompt.reviewStatus === 'PENDING' ? 'bg-yellow-50 text-yellow-700' :
                 'bg-gray-100 text-gray-600'
               }`}>
-                {reviewLabels[prompt.reviewStatus] || prompt.reviewStatus}
+                {reviewLabels[prompt.reviewStatus] || '未配置中文审核状态'}
               </span>
             </div>
             <div className="text-xs text-gray-500 font-mono" style={{ width: '120px' }}>
@@ -368,15 +369,15 @@ export default function PromptLibrary() {
               </div>
               <div>
                 <div className="text-xs font-medium text-gray-500 mb-1">范围</div>
-                <div className="text-gray-900">{scopeLabels[selectedPrompt.scope] || selectedPrompt.scope}</div>
+                <div className="text-gray-900">{scopeLabels[selectedPrompt.scope] || '未配置中文范围'}</div>
               </div>
               <div>
                 <div className="text-xs font-medium text-gray-500 mb-1">状态</div>
-                <div className="text-gray-900">{selectedPrompt.status}</div>
+                <div className="text-gray-900">{uiStatusLabel(selectedPrompt.status)}</div>
               </div>
               <div>
                 <div className="text-xs font-medium text-gray-500 mb-1">审核态</div>
-                <div className="text-gray-900">{reviewLabels[selectedPrompt.reviewStatus] || selectedPrompt.reviewStatus}</div>
+                <div className="text-gray-900">{reviewLabels[selectedPrompt.reviewStatus] || '未配置中文审核状态'}</div>
               </div>
             </div>
 

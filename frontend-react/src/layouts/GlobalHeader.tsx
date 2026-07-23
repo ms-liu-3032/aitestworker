@@ -5,6 +5,7 @@ import { useAuth } from '../context/AuthContext';
 import CommandPalette from '../components/CommandPalette';
 import type { CommandItem, AppContext } from '../types';
 import { listProjects, listWorkerDevices, type Project, type WorkerDevice } from '../services/api';
+import { displayLabel } from '../utils/displayLabels';
 
 export default function GlobalHeader() {
   const navigate = useNavigate();
@@ -210,7 +211,7 @@ export default function GlobalHeader() {
               <div className="fixed right-0 top-14 w-48 bg-white rounded-b-xl shadow-lg border border-gray-200 py-1 z-[60]">
                 <div className="px-3 py-2 border-b border-gray-100">
                   <div className="truncate text-sm font-medium text-gray-900">{user?.displayName || user?.username}</div>
-                  <div className="truncate text-xs text-gray-500">{user?.roleCode}</div>
+                  <div className="truncate text-xs text-gray-500">{displayLabel(user?.roleCode, '普通用户')}</div>
                 </div>
                 <button
                   onClick={() => { navigate('/settings'); setUserMenuOpen(false); }}

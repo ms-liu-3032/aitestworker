@@ -11,6 +11,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.core.simple.JdbcClient;
+import com.company.aitest.knowledge.KnowledgeDepositionService;
 
 class LoopServiceGenerateCandidatesTest {
 
@@ -75,6 +76,25 @@ class LoopServiceGenerateCandidatesTest {
         svc.generateCandidates(10L);
 
         assertTrue(ctx.hasSql("source_refs_json"), "wiki_entry INSERT should contain source_refs_json column");
+    }
+
+    @Test
+    void generateCandidates_wikiType_usesUnifiedDepositionServiceWhenAvailable() {
+        var ctx = new TestContext();
+        ctx.mockCycle("WIKI", "GENERATION_QUALITY");
+        var deposition = mock(KnowledgeDepositionService.class);
+        when(deposition.depositLoopWikiCandidate(anyLong(), anyLong(), anyLong(), anyString(),
+                anyString(), anyString(), anyString(), anyLong()))
+                .thenReturn(new KnowledgeDepositionService.DepositionResult(1, 0, 0));
+        var svc = new LoopService(ctx.jdbc, ctx.tmpl, ctx.tp);
+        svc.setKnowledgeDepositionService(deposition);
+
+        assertEquals(1, svc.generateCandidates(10L));
+
+        verify(deposition).depositLoopWikiCandidate(eq(10L), eq(1L), eq(1L),
+                eq("GENERATION_QUALITY"), eq("ANALYSIS"), contains("回灌建议"),
+                contains("normalized issue 1"), eq(1L));
+        assertFalse(ctx.hasSql("INSERT INTO wiki_entry"));
     }
 
     @Test

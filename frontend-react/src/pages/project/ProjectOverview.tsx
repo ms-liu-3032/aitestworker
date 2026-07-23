@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { listFormalCases, listLocalCases, listTraceGroups, type FormalCase, type LocalCaseDraft, type TraceGroup } from '../../services/api';
+import { statusLabel } from '../../utils/displayLabels';
 
 const priorityConfig: Record<string, { bg: string; text: string }> = {
   P0: { bg: 'bg-red-50', text: 'text-red-600' },
@@ -196,7 +197,7 @@ export default function ProjectOverview() {
                     'bg-blue-50 text-blue-700'
                   }`}>
                     <span className={`w-1.5 h-1.5 rounded-full ${group.status === 'RUNNING' ? 'bg-green-500' : 'bg-gray-400'}`} />
-                    {group.status === 'RUNNING' ? '采集中' : group.status === 'STOPPED' ? '已停止' : group.status}
+                    {group.status === 'RUNNING' ? '采集中' : statusLabel(group.status)}
                   </span>
                   <span className="shrink-0 text-xs font-mono text-gray-400">{formatDate(group.createdAt)}</span>
                 </div>

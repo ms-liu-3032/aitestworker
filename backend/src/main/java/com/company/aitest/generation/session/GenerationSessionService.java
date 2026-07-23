@@ -3,6 +3,7 @@ package com.company.aitest.generation.session;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.LocalDateTime;
+import java.util.Locale;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -115,13 +116,31 @@ public class GenerationSessionService {
     }
 
     public void updateStatus(Long sessionId, String status) {
+        String normalizedStatus = requireSessionStatus(status);
         LocalDateTime now = timeProvider.now();
-        jdbcTemplate.update("UPDATE generation_session SET status = ?, updated_at = ? WHERE id = ?", status, now, sessionId);
+        jdbcTemplate.update("UPDATE generation_session SET status = ?, updated_at = ? WHERE id = ?", normalizedStatus, now, sessionId);
     }
 
     public void updateStage(Long sessionId, String stage) {
+        String normalizedStage = requireSessionStage(stage);
         LocalDateTime now = timeProvider.now();
-        jdbcTemplate.update("UPDATE generation_session SET current_stage = ?, updated_at = ? WHERE id = ?", stage, now, sessionId);
+        jdbcTemplate.update("UPDATE generation_session SET current_stage = ?, updated_at = ? WHERE id = ?", normalizedStage, now, sessionId);
+    }
+
+    static String requireSessionStatus(String status) {
+        try {
+            return GenerationSessionStatus.valueOf(status == null ? "" : status.trim().toUpperCase(Locale.ROOT)).name();
+        } catch (IllegalArgumentException ex) {
+            throw new BusinessException("不支持的会话状态: " + status);
+        }
+    }
+
+    static String requireSessionStage(String stage) {
+        try {
+            return GenerationSessionStage.valueOf(stage == null ? "" : stage.trim().toUpperCase(Locale.ROOT)).name();
+        } catch (IllegalArgumentException ex) {
+            throw new BusinessException("不支持的会话阶段: " + stage);
+        }
     }
 
     public void updateLatestAnalysisVersion(Long sessionId, int version) {

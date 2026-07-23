@@ -329,14 +329,14 @@ public class TraceAssetService {
     /** Library rows omit long case bodies; fetch a single record only when the detail drawer opens. */
     public FormalCasePage listFormalCasePage(Long projectId, int page, int size, String keyword,
                                              List<String> modules, List<String> priorities, List<String> statuses,
-                                             List<String> sources, CurrentUser user) {
+                                             List<String> sources, List<String> scenarioTypes, CurrentUser user) {
         int safePage = Math.max(0, page);
         int safeSize = Math.max(10, Math.min(size, 100));
         int offset = safePage * safeSize;
         Map<String, Object> params = new HashMap<>();
         params.put("projectId", projectId);
         StringBuilder where = new StringBuilder(" WHERE project_id = :projectId");
-        appendFormalCaseFilters(where, params, keyword, modules, priorities, statuses, sources);
+        appendFormalCaseFilters(where, params, keyword, modules, priorities, statuses, sources, scenarioTypes);
         Integer total = jdbc.sql("SELECT COUNT(*) FROM test_case_asset" + where)
                 .params(params).query(Integer.class).single();
         params.put("limit", safeSize);
@@ -356,7 +356,8 @@ public class TraceAssetService {
         String projection = """
                 SELECT id, project_id, case_no, case_title, module_name,
                        NULL AS precondition, NULL AS steps, NULL AS expected_result,
-                       priority, case_type, case_scope, case_status, submitted_by, submitted_at, exported_at,
+                       priority, case_type, scenario_type, design_method, case_scope, case_status,
+                       submitted_by, submitted_at, exported_at,
                        source_trace_group_id, source_trace_session_id, source_issue_clip_id, created_at, updated_at
                 FROM test_case_asset
                 """;
@@ -369,7 +370,7 @@ public class TraceAssetService {
 
     void appendFormalCaseFilters(StringBuilder sql, Map<String, Object> params,
                                  String keyword, List<String> modules, List<String> priorities,
-                                 List<String> statuses, List<String> sources) {
+                                 List<String> statuses, List<String> sources, List<String> scenarioTypes) {
         if (keyword != null && !keyword.isBlank()) {
             sql.append(" AND (case_title LIKE :keyword OR case_no LIKE :keyword OR module_name LIKE :keyword")
                     .append(" OR case_type LIKE :keyword OR case_scope LIKE :keyword)");
@@ -377,6 +378,7 @@ public class TraceAssetService {
         }
         appendCaseAssetInFilter(sql, params, "module_name", "modules", modules);
         appendCaseAssetInFilter(sql, params, "priority", "priorities", priorities);
+        appendCaseAssetInFilter(sql, params, "scenario_type", "scenarioTypes", scenarioTypes);
         List<String> normalizedStatuses = statuses == null ? new ArrayList<>() : new ArrayList<>(statuses);
         normalizedStatuses.removeIf(value -> value == null || value.isBlank());
         if (normalizedStatuses.remove("ACTIVE")) {
@@ -450,10 +452,10 @@ public class TraceAssetService {
         LocalDateTime now = timeProvider.now();
         jdbcTemplate.update("""
                 insert into test_case_asset(project_id, source_task_id, source_draft_id, case_no, case_title, project_name,
-                  module_name, precondition, steps, expected_result, priority, case_type, design_method, source_refs_json,
+                  module_name, precondition, steps, expected_result, priority, case_type, scenario_type, design_method, source_refs_json,
                   created_at, updated_at, case_scope, case_status, submitted_by, submitted_at, source_trace_group_id,
                   source_trace_session_id, source_issue_clip_id)
-                values (?, null, null, ?, ?, null, ?, ?, ?, ?, ?, ?, '轨迹回放法', ?, ?, ?, 'PROJECT', 'SUBMITTED',
+                values (?, null, null, ?, ?, null, ?, ?, ?, ?, ?, ?, 'POSITIVE', '轨迹回放法', ?, ?, ?, 'PROJECT', 'SUBMITTED',
                   ?, ?, ?, ?, ?)
                 """, draft.projectId(), "TRACE-" + draft.id(), draft.caseTitle(), draft.moduleName(), draft.precondition(),
                 draft.steps(), draft.expectedResult(), draft.priority(), draft.caseType(), draft.sourceRefsJson(),
@@ -1027,6 +1029,8 @@ public class TraceAssetService {
                 rs.getString("expected_result"),
                 rs.getString("priority"),
                 rs.getString("case_type"),
+                rs.getString("scenario_type"),
+                rs.getString("design_method"),
                 rs.getString("case_scope"),
                 rs.getString("case_status"),
                 getLongNullable(rs, "submitted_by"),
@@ -1119,7 +1123,8 @@ public class TraceAssetService {
 
     public record TestCaseAssetView(Long id, Long projectId, String caseNo, String caseTitle, String moduleName,
                                     String precondition, String steps, String expectedResult, String priority,
-                                    String caseType, String caseScope, String caseStatus, Long submittedBy,
+                                    String caseType, String scenarioType, String designMethod,
+                                    String caseScope, String caseStatus, Long submittedBy,
                                     LocalDateTime submittedAt, LocalDateTime exportedAt, Long sourceTraceGroupId,
                                     Long sourceTraceSessionId, Long sourceIssueClipId, LocalDateTime createdAt,
                                     LocalDateTime updatedAt) {

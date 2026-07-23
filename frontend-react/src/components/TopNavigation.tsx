@@ -5,6 +5,7 @@ import { useAuth } from '../context/AuthContext';
 import CommandPalette from './CommandPalette';
 import type { CommandItem } from '../types';
 import { listProjects, listWorkerDevices, type Project, type WorkerDevice } from '../services/api';
+import { displayLabel } from '../utils/displayLabels';
 
 function CollectorPill() {
   const navigate = useNavigate();
@@ -183,7 +184,7 @@ export default function TopNavigation() {
               <div className="absolute right-0 top-full mt-2 w-48 bg-white rounded-xl shadow-lg border border-gray-200 py-1 z-50">
                 <div className="px-3 py-2 border-b border-gray-100">
                   <div className="truncate text-sm font-medium text-gray-900">{user?.displayName || user?.username}</div>
-                  <div className="truncate text-xs text-gray-500">{user?.roleCode}</div>
+                  <div className="truncate text-xs text-gray-500">{displayLabel(user?.roleCode, '普通用户')}</div>
                 </div>
                 <button
                   onClick={() => { navigate('/settings'); setUserMenuOpen(false); }}
