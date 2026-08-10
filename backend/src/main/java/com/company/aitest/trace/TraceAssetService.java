@@ -45,15 +45,16 @@ public class TraceAssetService {
             你是资深测试工程师。请严格基于真实操作轨迹生成测试用例草稿。
             要求：
             1. 只能使用已发生的操作和已观察到的结果，不扩展未发生的业务分支。
-            2. 返回 JSON 数组，不要输出 markdown，不要输出额外解释。
-            3. 每个对象字段固定为：
+            2. 当前输入代表一段完整操作轨迹。无论轨迹中包含多少次输入、点击、跳转或角色切换，都只能生成 1 条完整的操作路径用例；禁止按单个步骤、字段或按钮拆成多条用例。
+            3. 将所有清洗后的真实业务步骤按发生顺序完整写入同一条用例的 steps 字段。不得省略中间步骤，也不要将步骤改写为多条独立用例。
+            4. 返回一个 JSON 对象，不要返回数组、不要输出 markdown、不要输出额外解释。字段固定为：
                caseTitle, moduleName, precondition, steps, expectedResult, priority
-            4. priority 只允许 P0/P1/P2/P3/P4。
-            5. 多角色流程步骤中，请在步骤前加【角色名】。
-            6. 输出的是标准功能测试用例，不是 UI 自动化脚本。
-            7. 禁止出现 locator、xpath、selector、click()、fill()、press()、page.、Playwright、Selenium、Cypress。
-            8. steps 必须写成业务动作，例如“打开页面”“输入字段”“点击提交”“跳转到结果页”。
-            9. expectedResult 必须写成页面结果或业务结果，不要写代码断言。
+            5. priority 只允许 P0/P1/P2/P3/P4。
+            6. 多角色流程步骤中，请在步骤前加【角色名】。
+            7. 输出的是标准功能测试用例，不是 UI 自动化脚本。
+            8. 禁止出现 locator、xpath、selector、click()、fill()、press()、page.、Playwright、Selenium、Cypress。
+            9. steps 必须写成业务动作，例如“打开页面”“输入字段”“点击提交”“跳转到结果页”。
+            10. expectedResult 必须写成页面结果或业务结果，不要写代码断言。
             """;
 
     private static final String SKILL_SYSTEM_PROMPT = """
@@ -184,25 +185,21 @@ public class TraceAssetService {
                 detail.group().projectId(), detail.group().id(),
                 LlmStage.TRACE_CASE_GEN, "TRACE_CASE",
                 CASE_SYSTEM_PROMPT, userPrompt, user);
-        List<CaseDraftInput> fallbackCases = buildFallbackCases(command.caseType(), detail, slice, confirmed);
-        List<CaseDraftInput> cases = parseCaseOutput(output, groupId, fallbackCases);
+        CaseDraftInput fallbackCase = buildFallbackCase(command.caseType(), detail, slice, confirmed);
+        CaseDraftInput item = parseCaseOutput(output, groupId, fallbackCase);
         LocalDateTime now = timeProvider.now();
-        List<TraceGeneratedCaseRecord> result = new ArrayList<>();
-        for (CaseDraftInput item : cases) {
-            jdbcTemplate.update("""
-                    insert into trace_generated_case(project_id, user_id, trace_group_id, trace_session_id, issue_clip_id,
-                      case_type, case_title, module_name, precondition, steps, expected_result, priority,
-                      case_scope, case_status, source_refs_json, model_config_id, prompt_snapshot, created_at, updated_at)
-                    values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PERSONAL', 'DRAFT', ?, ?, ?, ?, ?)
-                    """, detail.group().projectId(), user.id(), detail.group().id(), command.traceSessionId(),
-                    command.issueClipId(), command.caseType(), item.caseTitle(), item.moduleName(), item.precondition(),
-                    item.steps(), item.expectedResult(), normalizePriority(item.priority()),
-                    buildTraceSourceRefsJson(detail.group().id(), command.traceSessionId(), command.issueClipId()),
-                    command.modelConfigId(), buildPromptSnapshot(CASE_SYSTEM_PROMPT, userPrompt), now, now);
-            Long id = jdbc.sql("select last_insert_id()").query(Long.class).single();
-            result.add(getTraceGeneratedCase(id));
-        }
-        return result;
+        jdbcTemplate.update("""
+                insert into trace_generated_case(project_id, user_id, trace_group_id, trace_session_id, issue_clip_id,
+                  case_type, case_title, module_name, precondition, steps, expected_result, priority,
+                  case_scope, case_status, source_refs_json, model_config_id, prompt_snapshot, created_at, updated_at)
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PERSONAL', 'DRAFT', ?, ?, ?, ?, ?)
+                """, detail.group().projectId(), user.id(), detail.group().id(), command.traceSessionId(),
+                command.issueClipId(), command.caseType(), item.caseTitle(), item.moduleName(), item.precondition(),
+                item.steps(), item.expectedResult(), normalizePriority(item.priority()),
+                buildTraceSourceRefsJson(detail.group().id(), command.traceSessionId(), command.issueClipId()),
+                command.modelConfigId(), buildPromptSnapshot(CASE_SYSTEM_PROMPT, userPrompt), now, now);
+        Long id = jdbc.sql("select last_insert_id()").query(Long.class).single();
+        return List.of(getTraceGeneratedCase(id));
     }
 
     public List<TraceGeneratedCaseRecord> listGeneratedCases(Long projectId, CurrentUser user) {
@@ -278,6 +275,33 @@ public class TraceAssetService {
                 .query(this::mapSkillTemplate).list();
     }
 
+    /** Project asset inventory must not depend on admin-only asset APIs. */
+    public List<TestSkillTemplateRecord> listProjectSkillTemplates(Long projectId, CurrentUser user) {
+        return jdbc.sql("""
+                select * from test_skill_template
+                where project_id = :projectId
+                order by updated_at desc, id desc
+                """).param("projectId", projectId).query(this::mapSkillTemplate).list();
+    }
+
+    @Transactional
+    public TestSkillTemplateRecord updateProjectSkillTemplate(Long projectId, Long skillId,
+                                                               String name, String scene, String flowSteps,
+                                                               CurrentUser user) {
+        if (name == null || name.isBlank() || flowSteps == null || flowSteps.isBlank()) {
+            throw new BusinessException("Skill 名称和操作步骤不能为空");
+        }
+        int updated = jdbcTemplate.update("""
+                update test_skill_template
+                set skill_name = ?, applicable_scene = ?, flow_steps = ?, status = 'DRAFT',
+                    review_status = 'PENDING', updated_at = ?
+                where id = ? and project_id = ?
+                """, name.trim(), scene == null ? "" : scene.trim(), flowSteps.trim(),
+                timeProvider.now(), skillId, projectId);
+        if (updated == 0) throw new BusinessException("Skill 模板不存在或不属于当前项目");
+        return getSkillTemplate(skillId);
+    }
+
     @Transactional
     public List<TestToolTemplateRecord> generateToolTemplates(Long groupId, GenerateAssetCommand command, CurrentUser user) {
         TraceDataService.TraceGroupDetail detail = traceDataService.detail(groupId, user);
@@ -316,6 +340,31 @@ public class TraceAssetService {
                 order by id desc
                 """).param("projectId", group.projectId()).param("groupId", groupId)
                 .query(this::mapToolTemplate).list();
+    }
+
+    public List<TestToolTemplateRecord> listProjectToolTemplates(Long projectId, CurrentUser user) {
+        return jdbc.sql("""
+                select * from test_tool_template
+                where project_id = :projectId
+                order by updated_at desc, id desc
+                """).param("projectId", projectId).query(this::mapToolTemplate).list();
+    }
+
+    @Transactional
+    public TestToolTemplateRecord updateProjectToolTemplate(Long projectId, Long toolId,
+                                                             String name, String operationSteps,
+                                                             CurrentUser user) {
+        if (name == null || name.isBlank() || operationSteps == null || operationSteps.isBlank()) {
+            throw new BusinessException("Tool 名称和操作步骤不能为空");
+        }
+        int updated = jdbcTemplate.update("""
+                update test_tool_template
+                set tool_name = ?, operation_steps = ?, status = 'DRAFT', review_status = 'PENDING',
+                    updated_at = ?
+                where id = ? and project_id = ?
+                """, name.trim(), operationSteps.trim(), timeProvider.now(), toolId, projectId);
+        if (updated == 0) throw new BusinessException("Tool 模板不存在或不属于当前项目");
+        return getToolTemplate(toolId);
     }
 
     public List<TestCaseAssetView> listFormalCases(Long projectId, CurrentUser user) {
@@ -738,11 +787,11 @@ public class TraceAssetService {
         return result;
     }
 
-    private List<CaseDraftInput> parseCaseOutput(String rawOutput, Long groupId, List<CaseDraftInput> fallbackCases) {
+    CaseDraftInput parseCaseOutput(String rawOutput, Long groupId, CaseDraftInput fallbackCase) {
         String jsonText = extractJson(rawOutput);
         try {
-            List<Map<String, Object>> rows = objectMapper.readValue(jsonText, new TypeReference<>() {
-            });
+            Object decoded = objectMapper.readValue(jsonText, Object.class);
+            List<Map<String, Object>> rows = decodeCaseRows(decoded);
             List<CaseDraftInput> result = new ArrayList<>();
             for (Map<String, Object> row : rows) {
                 result.add(new CaseDraftInput(
@@ -755,32 +804,59 @@ public class TraceAssetService {
                 ));
             }
             result = result.stream().map(this::sanitizeCaseDraft).toList();
-            if (result.isEmpty() || result.stream().allMatch(this::containsAutomationVocabulary)) {
+            CaseDraftInput modelCase = result.stream()
+                    .filter(item -> !containsAutomationVocabulary(item))
+                    .findFirst()
+                    .orElse(null);
+            if (modelCase == null) {
                 throw new BusinessException("模型未返回可用轨迹用例");
             }
-            return result;
+            // The cleaned trace timeline is the contract for this asset: never let a model response
+            // silently drop steps or turn one recorded path into several independent cases.
+            return new CaseDraftInput(
+                    str(modelCase.caseTitle(), fallbackCase.caseTitle()),
+                    str(modelCase.moduleName(), fallbackCase.moduleName()),
+                    str(modelCase.precondition(), fallbackCase.precondition()),
+                    fallbackCase.steps(),
+                    str(modelCase.expectedResult(), fallbackCase.expectedResult()),
+                    normalizePriority(modelCase.priority())
+            );
         } catch (JsonProcessingException | BusinessException ex) {
-            return fallbackCases;
+            return fallbackCase;
         }
     }
 
-    private List<CaseDraftInput> buildFallbackCases(String caseType,
-                                                    TraceDataService.TraceGroupDetail detail,
-                                                    TraceSlice slice,
-                                                    List<TraceCorrectionCandidateRecord> confirmedCorrections) {
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> decodeCaseRows(Object decoded) {
+        if (decoded instanceof Map<?, ?> map) {
+            return List.of((Map<String, Object>) map);
+        }
+        if (decoded instanceof List<?> list) {
+            return list.stream()
+                    .filter(Map.class::isInstance)
+                    .map(item -> (Map<String, Object>) item)
+                    .toList();
+        }
+        return List.of();
+    }
+
+    private CaseDraftInput buildFallbackCase(String caseType,
+                                             TraceDataService.TraceGroupDetail detail,
+                                             TraceSlice slice,
+                                             List<TraceCorrectionCandidateRecord> confirmedCorrections) {
         List<TraceStepNormalizer.CleanTraceStep> steps = buildCleanSteps(detail.group().projectId(), slice.events(), slice.networks());
         steps = correctionService.applyLearnedPatternsToCleanSteps(detail.group().projectId(), steps, slice.events());
         steps = correctionService.applyConfirmedToCleanSteps(steps, confirmedCorrections);
         steps = correctionService.applyStepCorrectionsToCleanSteps(steps, confirmedCorrections);
         if (steps.isEmpty()) {
-            return List.of(new CaseDraftInput(
+            return new CaseDraftInput(
                     "轨迹操作待补充",
                     detail.group().groupName(),
                     "已打开对应业务页面",
                     "1. 请重新执行一次关键操作轨迹并采集。\n2. 采集完成后重新生成测试用例草稿。",
                     "能够采集到完整的功能操作轨迹，并生成标准功能测试用例。",
                     "P2"
-            ));
+            );
         }
         String stepText = steps.stream()
                 .map(step -> "%d. 【%s】%s".formatted(step.stepNo(), step.actor(), step.description()))
@@ -789,14 +865,14 @@ public class TraceAssetService {
         String expected = observations.isEmpty()
                 ? "页面按轨迹继续流转，相关操作结果与实际采集结果保持一致。"
                 : "页面按轨迹继续流转；同时关注以下异常或接口观察：\n- " + String.join("\n- ", observations);
-        return List.of(new CaseDraftInput(
+        return new CaseDraftInput(
                 (caseType == null || caseType.isBlank() ? "操作路径用例" : caseType) + "-" + detail.group().groupName(),
                 detail.group().groupName(),
                 "已进入轨迹涉及的起始页面，并准备好对应身份空间。",
                 stepText,
                 expected,
                 "P2"
-        ));
+        );
     }
 
     private CaseDraftInput sanitizeCaseDraft(CaseDraftInput input) {
@@ -1111,8 +1187,8 @@ public class TraceAssetService {
                               List<BrowserTraceNetworkRecord> networks) {
     }
 
-    private record CaseDraftInput(String caseTitle, String moduleName, String precondition, String steps,
-                                  String expectedResult, String priority) {
+    record CaseDraftInput(String caseTitle, String moduleName, String precondition, String steps,
+                          String expectedResult, String priority) {
     }
 
     private record SkillDraftInput(String skillName, String applicableScene, String flowSteps) {

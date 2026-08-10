@@ -73,6 +73,26 @@ public class WikiService {
         return results.get(0);
     }
 
+    /**
+     * Editing is deliberately a governed operation: the changed pack must be reviewed again
+     * before it can participate in semantic retrieval.
+     */
+    @Transactional
+    public WikiPackRecord updatePackMetadata(Long packId, String name, String description, CurrentUser user) {
+        WikiPackRecord pack = getPack(packId);
+        if (name == null || name.isBlank()) {
+            throw new BusinessException("知识包名称不能为空");
+        }
+        LocalDateTime now = timeProvider.now();
+        jdbcTemplate.update("""
+                UPDATE wiki_pack
+                SET name = ?, description = ?, review_status = 'PENDING', status = 'DRAFT',
+                    reviewed_by = NULL, reviewed_at = NULL, updated_at = ?
+                WHERE id = ?
+                """, name.trim(), description == null ? "" : description.trim(), now, packId);
+        return getPack(packId);
+    }
+
     public Long projectIdForPack(Long packId) {
         return getPack(packId).projectId();
     }
@@ -164,6 +184,27 @@ public class WikiService {
                 .query(this::mapEntry).list();
         if (results.isEmpty()) throw new BusinessException("Wiki 条目不存在");
         return results.get(0);
+    }
+
+    /**
+     * A content change invalidates the previous human review. Source references stay immutable
+     * so the reviewer can still trace the candidate back to its origin.
+     */
+    @Transactional
+    public WikiEntryRecord updateEntry(Long entryId, String entryType, String title, String content, CurrentUser user) {
+        if (entryType == null || entryType.isBlank() || title == null || title.isBlank() || content == null || content.isBlank()) {
+            throw new BusinessException("条目类型、标题和内容不能为空");
+        }
+        LocalDateTime now = timeProvider.now();
+        int updated = jdbcTemplate.update("""
+                UPDATE wiki_entry
+                SET entry_type = ?, title = ?, content = ?, review_status = 'PENDING',
+                    effective_status = 'INACTIVE', approved_by = NULL, approved_at = NULL,
+                    rejected_by = NULL, rejected_at = NULL, rejected_reason = NULL, updated_at = ?
+                WHERE id = ?
+                """, entryType.trim(), title.trim(), content.trim(), now, entryId);
+        if (updated == 0) throw new BusinessException("Wiki 条目不存在");
+        return getEntry(entryId);
     }
 
     @Transactional

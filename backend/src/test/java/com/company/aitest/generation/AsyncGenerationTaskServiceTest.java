@@ -1,6 +1,8 @@
 package com.company.aitest.generation;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
@@ -107,6 +109,20 @@ class AsyncGenerationTaskServiceTest {
         verify(sessionService).updateStatus(20L, "GENERATING");
         verify(sessionService).updateExecutionTaskId(20L, 300L);
         verify(taskService, never()).createAsync(any(), any(), any(), any(), any());
+        verify(caseGenerationService, never()).generateFromTask(any(), any(), any());
+    }
+
+    @Test
+    void startSessionCaseGenerationPropagatesAnalysisGateAndDoesNotCreateTask() {
+        when(requirementAnalysisService.buildSessionGenerationPlan(20L, user))
+                .thenThrow(new com.company.aitest.common.BusinessException("当前分析还未完成确认"));
+
+        assertThrows(com.company.aitest.common.BusinessException.class,
+                () -> service.startSessionCaseGeneration(10L, 20L, user));
+
+        verify(taskService, never()).buildRequestHash(any(), any(), any(), any(), any(), any(), any(), any(), any());
+        verify(taskService, never()).createAsync(any(), any(), any(), any(), any());
+        verify(sessionService, never()).updateStatus(eq(20L), eq("GENERATING"));
         verify(caseGenerationService, never()).generateFromTask(any(), any(), any());
     }
 
@@ -318,6 +334,8 @@ class AsyncGenerationTaskServiceTest {
                 requirementView.stages().stream().map(AsyncGenerationTaskService.TaskStageView::code).toList());
         assertEquals(List.of("CASE_COMPOSITION"),
                 testPointView.stages().stream().map(AsyncGenerationTaskService.TaskStageView::code).toList());
+        assertEquals("编排节点用例与完整流程", testPointView.stages().get(0).label());
+        assertNotEquals("生成测试用例", testPointView.stages().get(0).label());
     }
 
     @Test

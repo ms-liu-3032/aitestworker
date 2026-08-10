@@ -7,13 +7,13 @@
 
 ## 目录说明
 
-- `build-server-package.sh`
+- [build-server-package.sh](/Users/lms/aitesthub/packaging/build-server-package.sh)
   - 生成服务端安装包
   - 包含后端 Jar、前端静态资源、Docker Compose、MySQL/Redis/Weaviate/Neo4j/MinIO 依赖编排
-- `build-client-package.sh`
+- [build-client-package.sh](/Users/lms/aitesthub/packaging/build-client-package.sh)
   - 生成 macOS 客户端安装包
   - 包含 local-browser-worker、运行时 Node、命令封装、可选 Playwright Chromium 缓存
-- `build-client-package-windows.sh`
+- [build-client-package-windows.sh](/Users/lms/aitesthub/packaging/build-client-package-windows.sh)
   - 生成 Windows 客户端安装包
   - 包含 local-browser-worker、Windows Node Runtime、命令封装
 
@@ -21,28 +21,30 @@
 
 默认输出到：
 
-仓库根目录下的 `release/`。
+```text
+/Users/lms/aitesthub/release
+```
 
 ## 打包顺序
 
 ### 服务端
 
 ```bash
-cd /path/to/aitestworker
+cd /Users/lms/aitesthub
 ./packaging/build-server-package.sh
 ```
 
 ### 客户端
 
 ```bash
-cd /path/to/aitestworker
+cd /Users/lms/aitesthub
 ./packaging/build-client-package.sh
 ```
 
 ### 客户端（Windows）
 
 ```bash
-cd /path/to/aitestworker
+cd /Users/lms/aitesthub
 ./packaging/build-client-package-windows.sh
 ```
 

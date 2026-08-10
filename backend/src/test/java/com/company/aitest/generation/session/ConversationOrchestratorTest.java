@@ -72,6 +72,98 @@ class ConversationOrchestratorTest {
         verify(analysisService, never()).doGenerate(any(), any());
     }
 
+    @Test
+    void generateCommandCannotBypassClarificationQuestions() throws Exception {
+        var sessionService = mock(GenerationSessionService.class);
+        var messageService = mock(GenerationMessageService.class);
+        var analysisService = mock(RequirementAnalysisService.class);
+        var orchestrator = new ConversationOrchestrator(null, sessionService, messageService, analysisService, null, null);
+        var now = LocalDateTime.of(2026, 7, 29, 10, 0);
+        var session = new GenerationSessionRecord(10L, 20L, "需求", "ACTIVE", "WAITING_USER_CONFIRMATION",
+                1L, 2L, "", true, "PROJECT_AND_SYSTEM_TOM", 1, null, 7L, now, now);
+        var analysis = new RequirementAnalysisRecord(1L, 10L, 1, 0, "需求", """
+                {"clarification_questions":[{"question":"入口在哪里？","reason":"影响步骤","impact":"影响覆盖"}]}
+                """, null,
+                """
+                [{"question":"入口在哪里？","reason":"影响步骤","impact":"影响覆盖"}]
+                """, null, "[]", "[]", null, null, null, "NEED_CONFIRMATION", now, now);
+        var user = new CurrentUser(7L, "tester", "USER");
+        when(analysisService.getLatestAnalysis(10L)).thenReturn(analysis);
+        when(messageService.appendAssistantMessage(any(), any(), nullable(String.class), any(), any(Integer.class)))
+                .thenReturn(new GenerationMessageRecord(1L, 10L, "ASSISTANT", "提示", null, 1,
+                        "CLARIFICATION_QUESTION", now));
+
+        Method method = ConversationOrchestrator.class.getDeclaredMethod(
+                "handleSkipAndGenerate", GenerationSessionRecord.class, CurrentUser.class);
+        method.setAccessible(true);
+        method.invoke(orchestrator, session, user);
+
+        verify(messageService).appendAssistantMessage(eq(10L), contains("需要澄清"),
+                eq(null), eq("CLARIFICATION_QUESTION"), eq(1));
+        verify(sessionService, never()).updateStage(eq(10L), eq("ASK_CASE_GENERATION_DEPTH"));
+        verify(analysisService, never()).skipAnalysis(any(), any(Integer.class));
+        verify(analysisService, never()).doGenerate(any(), any());
+    }
+
+    @Test
+    void executeCaseGenerationCannotAutoSkipUnconfirmedAnalysis() throws Exception {
+        var sessionService = mock(GenerationSessionService.class);
+        var messageService = mock(GenerationMessageService.class);
+        var analysisService = mock(RequirementAnalysisService.class);
+        var orchestrator = new ConversationOrchestrator(null, sessionService, messageService, analysisService, null, null);
+        var now = LocalDateTime.of(2026, 7, 29, 10, 0);
+        var session = new GenerationSessionRecord(10L, 20L, "需求", "ACTIVE", "ANALYSIS_READY",
+                1L, 2L, "", true, "PROJECT_AND_SYSTEM_TOM", 1, null, 7L, now, now);
+        var analysis = analysis("NEED_CONFIRMATION", now);
+        var user = new CurrentUser(7L, "tester", "USER");
+        when(analysisService.getLatestAnalysis(10L)).thenReturn(analysis);
+        when(messageService.appendAssistantMessage(any(), any(), nullable(String.class), any(), any(Integer.class)))
+                .thenReturn(new GenerationMessageRecord(1L, 10L, "ASSISTANT", "提示", null, 1,
+                        "OPERATION_HINT", now));
+
+        Method method = ConversationOrchestrator.class.getDeclaredMethod(
+                "executeCaseGeneration", GenerationSessionRecord.class, CurrentUser.class);
+        method.setAccessible(true);
+        method.invoke(orchestrator, session, user);
+
+        verify(messageService).appendAssistantMessage(eq(10L), contains("还未完成确认"),
+                eq(null), eq("OPERATION_HINT"), eq(1));
+        verify(analysisService, never()).skipAnalysis(any(), any(Integer.class));
+        verify(analysisService, never()).doGenerate(any(), any());
+        verify(sessionService, never()).updateStage(eq(10L), eq("CASE_GENERATING"));
+    }
+
+    @Test
+    void supplementRequirementDoesNotAutoGenerateCasesAfterAnalysis() throws Exception {
+        var sessionService = mock(GenerationSessionService.class);
+        var messageService = mock(GenerationMessageService.class);
+        var analysisService = mock(RequirementAnalysisService.class);
+        var orchestrator = new ConversationOrchestrator(null, sessionService, messageService, analysisService, null, null);
+        var now = LocalDateTime.of(2026, 7, 29, 10, 0);
+        var session = new GenerationSessionRecord(10L, 20L, "需求", "ACTIVE", "WAITING_USER_CONFIRMATION",
+                1L, 2L, "", true, "PROJECT_AND_SYSTEM_TOM", 1, null, 7L, now, now);
+        var latest = analysis("CONFIRMED", now);
+        var nextAnalysis = new RequirementAnalysisRecord(2L, 10L, 2, 1, "补充需求",
+                "{\"requirement_understanding\":\"补充后理解\"}", null, "[]", null, "[]",
+                "[]", null, null, "[{\"title\":\"新增用例\"}]", "CONFIRMED", now, now);
+        var user = new CurrentUser(7L, "tester", "USER");
+        when(analysisService.getLatestAnalysis(10L)).thenReturn(latest);
+        when(analysisService.canIncrementalAnalyze(10L)).thenReturn(true);
+        when(analysisService.incrementalAnalyze(10L, "补充规则", user)).thenReturn(nextAnalysis);
+        when(messageService.appendAssistantMessage(any(), any(), nullable(String.class), any(), any(Integer.class)))
+                .thenReturn(new GenerationMessageRecord(1L, 10L, "ASSISTANT", "提示", null, 1,
+                        "OPERATION_HINT", now));
+
+        Method method = ConversationOrchestrator.class.getDeclaredMethod(
+                "handleSupplementRequirement", GenerationSessionRecord.class, String.class, CurrentUser.class, boolean.class);
+        method.setAccessible(true);
+        method.invoke(orchestrator, session, "补充规则", user, false);
+
+        verify(analysisService).incrementalAnalyze(10L, "补充规则", user);
+        verify(analysisService, never()).autoGenerateNewCases(any(), any(), any());
+        verify(analysisService, never()).doGenerate(any(), any());
+    }
+
     private static RequirementAnalysisRecord analysis(String status, LocalDateTime now) {
         return new RequirementAnalysisRecord(1L, 10L, 1, 0, "需求", "{}", null,
                 "[]", null, "[]", "[]", null, null, null, status, now, now);

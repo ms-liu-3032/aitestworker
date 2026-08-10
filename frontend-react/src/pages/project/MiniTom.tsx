@@ -5,7 +5,8 @@ import RichList from '../../components/RichList';
 import Drawer from '../../components/Drawer';
 import {
   listTomCandidates, listActiveTomModels, confirmTomCandidate, rejectTomCandidate,
-  upgradeTomCandidate, importManual, buildTestScope, type TestObjectModel
+  upgradeTomCandidate, importManual, buildTestScope, listEnabledModelConfigs,
+  type TestObjectModel, type ModelConfigRecord
 } from '../../services/api';
 import { statusLabel as uiStatusLabel } from '../../utils/displayLabels';
 
@@ -14,6 +15,8 @@ export default function MiniTom() {
   const { showToast } = useApp();
   const [candidates, setCandidates] = useState<TestObjectModel[]>([]);
   const [activeModels, setActiveModels] = useState<TestObjectModel[]>([]);
+  const [models, setModels] = useState<ModelConfigRecord[]>([]);
+  const [selectedModel, setSelectedModel] = useState<number | undefined>(undefined);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<'candidates' | 'active'>('candidates');
   const [importDrawerOpen, setImportDrawerOpen] = useState(false);
@@ -35,9 +38,12 @@ export default function MiniTom() {
     Promise.all([
       listTomCandidates(pid).catch(() => []),
       listActiveTomModels(pid).catch(() => []),
-    ]).then(([c, a]) => {
+      listEnabledModelConfigs().catch(() => []),
+    ]).then(([c, a, m]) => {
       setCandidates(c);
       setActiveModels(a);
+      setModels(m);
+      setSelectedModel(prev => prev ?? m[0]?.id);
       const already = new Set<number>();
       a.forEach(t => { if (t.upgradedAt) already.add(t.id); });
       setUpgradedIds(already);
@@ -100,6 +106,10 @@ export default function MiniTom() {
 
   const handleImport = async () => {
     if (!projectId || !importForm.docTitle || !importForm.markdownContent) return;
+    if (!selectedModel) {
+      showToast('请选择 LLM 模型', 'error');
+      return;
+    }
     setImporting(true);
     try {
       await importManual({
@@ -107,13 +117,14 @@ export default function MiniTom() {
         docTitle: importForm.docTitle,
         businessDomain: importForm.businessDomain,
         markdownContent: importForm.markdownContent,
+        modelConfigId: selectedModel,
       });
       showToast('导入任务已启动');
       setImportDrawerOpen(false);
       setImportForm({ docTitle: '', businessDomain: '', markdownContent: '' });
       listTomCandidates(Number(projectId)).then(setCandidates).catch(() => {});
-    } catch {
-      showToast('导入失败', 'error');
+    } catch (e: any) {
+      showToast(e?.message || '导入失败', 'error');
     } finally {
       setImporting(false);
     }
@@ -121,15 +132,20 @@ export default function MiniTom() {
 
   const handleBuildScope = async () => {
     if (!projectId || !scopeForm.requirementText) return;
+    if (!selectedModel) {
+      showToast('请选择 LLM 模型', 'error');
+      return;
+    }
     setBuilding(true);
     try {
       const result = await buildTestScope({
         projectId: Number(projectId),
         requirementText: scopeForm.requirementText,
+        modelConfigId: selectedModel,
       });
       setScopeResult(result);
-    } catch {
-      showToast('构建失败', 'error');
+    } catch (e: any) {
+      showToast(e?.message || '构建失败', 'error');
     } finally {
       setBuilding(false);
     }
@@ -317,7 +333,7 @@ export default function MiniTom() {
         footer={
           <>
             <button onClick={() => setImportDrawerOpen(false)} className="px-4 py-2 text-sm text-gray-500 hover:text-gray-700">取消</button>
-            <button onClick={handleImport} disabled={importing || !importForm.docTitle || !importForm.markdownContent} className="px-4 py-2 bg-slate-900 text-white text-sm font-semibold rounded-lg hover:bg-slate-800 disabled:opacity-50">
+            <button onClick={handleImport} disabled={importing || !selectedModel || !importForm.docTitle || !importForm.markdownContent} className="px-4 py-2 bg-slate-900 text-white text-sm font-semibold rounded-lg hover:bg-slate-800 disabled:opacity-50">
               {importing ? '导入中...' : '开始导入'}
             </button>
           </>
@@ -325,16 +341,31 @@ export default function MiniTom() {
       >
         <div className="space-y-4">
           <div>
-            <label className="block text-xs font-medium text-gray-500 mb-1">文档标题</label>
-            <input type="text" value={importForm.docTitle} onChange={e => setImportForm({ ...importForm, docTitle: e.target.value })} className="w-full h-9 px-3 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:border-gray-400 outline-none" />
+            <label htmlFor="manual-import-model" className="block text-xs font-medium text-gray-500 mb-1">LLM 模型</label>
+            <select
+              id="manual-import-model"
+              value={selectedModel || ''}
+              onChange={e => setSelectedModel(Number(e.target.value) || undefined)}
+              className="w-full h-9 px-3 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:border-gray-400 outline-none"
+            >
+              {models.length === 0 && <option value="">暂无可用模型</option>}
+              {models.map(m => (
+                <option key={m.id} value={m.id}>{m.configName}（{m.modelName}）</option>
+              ))}
+            </select>
+            <p className="mt-1 text-xs text-gray-400">用于从手册中提取页面、字段、流程和断言候选。</p>
           </div>
           <div>
-            <label className="block text-xs font-medium text-gray-500 mb-1">业务领域</label>
-            <input type="text" value={importForm.businessDomain} onChange={e => setImportForm({ ...importForm, businessDomain: e.target.value })} placeholder="如：审批流、CRM、设备巡检" className="w-full h-9 px-3 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:border-gray-400 outline-none" />
+            <label htmlFor="manual-import-title" className="block text-xs font-medium text-gray-500 mb-1">文档标题</label>
+            <input id="manual-import-title" type="text" value={importForm.docTitle} onChange={e => setImportForm({ ...importForm, docTitle: e.target.value })} className="w-full h-9 px-3 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:border-gray-400 outline-none" />
           </div>
           <div>
-            <label className="block text-xs font-medium text-gray-500 mb-1">Markdown 内容</label>
-            <textarea value={importForm.markdownContent} onChange={e => setImportForm({ ...importForm, markdownContent: e.target.value })} rows={10} className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm font-mono focus:border-gray-400 outline-none resize-none" placeholder="粘贴 Markdown 格式的使用手册内容..." />
+            <label htmlFor="manual-import-domain" className="block text-xs font-medium text-gray-500 mb-1">业务领域</label>
+            <input id="manual-import-domain" type="text" value={importForm.businessDomain} onChange={e => setImportForm({ ...importForm, businessDomain: e.target.value })} placeholder="如：审批流、CRM、设备巡检" className="w-full h-9 px-3 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:border-gray-400 outline-none" />
+          </div>
+          <div>
+            <label htmlFor="manual-import-content" className="block text-xs font-medium text-gray-500 mb-1">Markdown 内容</label>
+            <textarea id="manual-import-content" value={importForm.markdownContent} onChange={e => setImportForm({ ...importForm, markdownContent: e.target.value })} rows={10} className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm font-mono focus:border-gray-400 outline-none resize-none" placeholder="粘贴 Markdown 格式的使用手册内容..." />
           </div>
         </div>
       </Drawer>
@@ -347,10 +378,25 @@ export default function MiniTom() {
       >
         <div className="space-y-4">
           <div>
-            <label className="block text-xs font-medium text-gray-500 mb-1">需求描述</label>
-            <textarea value={scopeForm.requirementText} onChange={e => setScopeForm({ requirementText: e.target.value })} rows={4} className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:border-gray-400 outline-none resize-none" placeholder="输入需求描述..." />
+            <label htmlFor="scope-build-model" className="block text-xs font-medium text-gray-500 mb-1">LLM 模型</label>
+            <select
+              id="scope-build-model"
+              value={selectedModel || ''}
+              onChange={e => setSelectedModel(Number(e.target.value) || undefined)}
+              className="w-full h-9 px-3 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:border-gray-400 outline-none"
+            >
+              {models.length === 0 && <option value="">暂无可用模型</option>}
+              {models.map(m => (
+                <option key={m.id} value={m.id}>{m.configName}（{m.modelName}）</option>
+              ))}
+            </select>
+            <p className="mt-1 text-xs text-gray-400">用于结合当前项目 TOM 构建受影响模块、页面和建议断言。</p>
           </div>
-          <button onClick={handleBuildScope} disabled={building || !scopeForm.requirementText} className="w-full bg-slate-900 text-white px-4 py-2.5 rounded-lg text-sm font-semibold hover:bg-slate-800 disabled:opacity-50">
+          <div>
+            <label htmlFor="scope-build-requirement" className="block text-xs font-medium text-gray-500 mb-1">需求描述</label>
+            <textarea id="scope-build-requirement" value={scopeForm.requirementText} onChange={e => setScopeForm({ requirementText: e.target.value })} rows={4} className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:border-gray-400 outline-none resize-none" placeholder="输入需求描述..." />
+          </div>
+          <button onClick={handleBuildScope} disabled={building || !selectedModel || !scopeForm.requirementText} className="w-full bg-slate-900 text-white px-4 py-2.5 rounded-lg text-sm font-semibold hover:bg-slate-800 disabled:opacity-50">
             {building ? '构建中...' : '构建测试范围'}
           </button>
 

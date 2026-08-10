@@ -125,7 +125,8 @@ public class AsyncGenerationTaskService {
                 command.promptVersion(),
                 promptSnapshotFor(taskType, command),
                 command.generationMode(),
-                command.useMiniTom());
+                command.useMiniTom(),
+                command.generationDepth());
         CreateOrReuseResult result = findOrCreate(projectId, taskType, requestHash, createCommand, user);
         if (!result.created()) {
             return view(result.task(), taskService.draftCount(projectId, result.task().id()));
@@ -151,6 +152,7 @@ public class AsyncGenerationTaskService {
                 plan.promptSnapshot(),
                 plan.tomMode(),
                 plan.useMiniTom(),
+                plan.generationDepth(),
                 plan.analysisVersion(),
                 null,
                 null,
@@ -175,8 +177,11 @@ public class AsyncGenerationTaskService {
                 command.promptVersion(),
                 command.promptSnapshot(),
                 command.generationMode(),
-                command.useMiniTom());
+                command.useMiniTom(),
+                command.generationDepth());
         CreateOrReuseResult result = findOrCreate(projectId, taskType, requestHash, createCommand, user);
+        // The task snapshots the choice above. Reset the session so every later run asks again.
+        sessionService.resetGenerationDepthToDefault(projectId, sessionId, user);
         if (!result.created()) {
             sessionService.updateStatus(sessionId, "GENERATING");
             sessionService.updateExecutionTaskId(sessionId, result.task().id());
@@ -198,6 +203,7 @@ public class AsyncGenerationTaskService {
         if (!isAsyncAnalysisStage(stage)) {
             throw new BusinessException("当前会话不支持启动异步需求分析");
         }
+        String generationDepth = session.generationDepth();
         String taskType = REQUIREMENT_ANALYSIS;
         String promptSnapshot = session.promptSnapshot();
         CreateAsyncTaskCommand command = new CreateAsyncTaskCommand(
@@ -209,6 +215,7 @@ public class AsyncGenerationTaskService {
                 promptSnapshot,
                 session.tomMode(),
                 session.useMiniTom(),
+                generationDepth,
                 session.latestAnalysisVersion(),
                 null,
                 null,
@@ -233,7 +240,8 @@ public class AsyncGenerationTaskService {
                 command.promptVersion(),
                 command.promptSnapshot(),
                 command.generationMode(),
-                command.useMiniTom());
+                command.useMiniTom(),
+                command.generationDepth());
         CreateOrReuseResult result = findOrCreate(projectId, taskType, requestHash, createCommand, user);
         sessionService.updateStatus(sessionId, "ANALYZING");
         sessionService.updateExecutionTaskId(sessionId, result.task().id());
@@ -259,7 +267,7 @@ public class AsyncGenerationTaskService {
             CreateAsyncTaskCommand command = new CreateAsyncTaskCommand(
                     taskType, "按已确认范围生成测试点", "继续分析范围版本 " + analysisVersion,
                     session.modelConfigId(), session.promptTemplateId(), payload, session.tomMode(),
-                    session.useMiniTom(), analysisVersion, null, null, null, null, sessionId, null);
+                    session.useMiniTom(), session.generationDepth(), analysisVersion, null, null, null, null, sessionId, null);
             String requestMaterial = requestMaterial(projectId, taskType, command, user)
                     + "|analysis=" + contentHash(analysis.analysisResult());
             String requestHash = taskService.buildRequestHash(projectId, taskType, requestMaterial,
@@ -267,7 +275,8 @@ public class AsyncGenerationTaskService {
                     promptTemplateFingerprint(session.promptTemplateId()), modelFingerprint(session.modelConfigId()), user.id());
             GenerationTaskService.CreateTaskCommand createCommand = new GenerationTaskService.CreateTaskCommand(
                     command.taskName(), command.requirementText(), command.modelConfigId(), command.promptTemplateId(),
-                    command.promptVersion(), payload, command.generationMode(), command.useMiniTom());
+                    command.promptVersion(), payload, command.generationMode(), command.useMiniTom(),
+                    command.generationDepth());
             CreateOrReuseResult result = findOrCreate(projectId, taskType, requestHash, createCommand, user);
             sessionService.updateStatus(sessionId, "ANALYZING");
             sessionService.updateStage(sessionId, "REQUIREMENT_ANALYZING");
@@ -293,7 +302,7 @@ public class AsyncGenerationTaskService {
             CreateAsyncTaskCommand command = new CreateAsyncTaskCommand(
                     taskType, "按已确认测试点生成编排", "继续测试点范围版本 " + analysisVersion,
                     session.modelConfigId(), session.promptTemplateId(), payload, session.tomMode(),
-                    session.useMiniTom(), analysisVersion, null, null, null, null, sessionId, null);
+                    session.useMiniTom(), session.generationDepth(), analysisVersion, null, null, null, null, sessionId, null);
             String requestMaterial = requestMaterial(projectId, taskType, command, user)
                     + "|testPoints=" + contentHash(analysis.testPoints());
             String requestHash = taskService.buildRequestHash(projectId, taskType, requestMaterial,
@@ -301,7 +310,8 @@ public class AsyncGenerationTaskService {
                     promptTemplateFingerprint(session.promptTemplateId()), modelFingerprint(session.modelConfigId()), user.id());
             GenerationTaskService.CreateTaskCommand createCommand = new GenerationTaskService.CreateTaskCommand(
                     command.taskName(), command.requirementText(), command.modelConfigId(), command.promptTemplateId(),
-                    command.promptVersion(), payload, command.generationMode(), command.useMiniTom());
+                    command.promptVersion(), payload, command.generationMode(), command.useMiniTom(),
+                    command.generationDepth());
             CreateOrReuseResult result = findOrCreate(projectId, taskType, requestHash, createCommand, user);
             sessionService.updateStatus(sessionId, "ANALYZING");
             sessionService.updateStage(sessionId, "REQUIREMENT_ANALYZING");
@@ -350,6 +360,7 @@ public class AsyncGenerationTaskService {
                 payload,
                 session.tomMode(),
                 session.useMiniTom(),
+                session.generationDepth(),
                 latest.version(),
                 null,
                 null,
@@ -374,7 +385,8 @@ public class AsyncGenerationTaskService {
                 command.promptVersion(),
                 command.promptSnapshot(),
                 command.generationMode(),
-                command.useMiniTom());
+                command.useMiniTom(),
+                command.generationDepth());
         CreateOrReuseResult result = findOrCreate(projectId, taskType, requestHash, createCommand, user);
         sessionService.updateStatus(sessionId, "GENERATING");
         sessionService.updateExecutionTaskId(sessionId, result.task().id());
@@ -597,7 +609,7 @@ public class AsyncGenerationTaskService {
     private String normalizeTaskType(String taskType) {
         String value = taskType == null ? "" : taskType.trim().toUpperCase();
         return switch (value) {
-            case TEST_CASE_GENERATION, "GENERATION", "TEST_CASE_GEN" -> TEST_CASE_GENERATION;
+            case TEST_CASE_GENERATION, "TEST_CASE_GEN" -> TEST_CASE_GENERATION;
             case TEST_POINT_GENERATION, "TEST_POINT_GEN" -> TEST_POINT_GENERATION;
             case TRACE_SUMMARY -> TRACE_SUMMARY;
             case REQUIREMENT_ANALYSIS, "ANALYSIS", "REQUIREMENT_ANALYSIS_ASYNC" -> REQUIREMENT_ANALYSIS;
@@ -620,6 +632,7 @@ public class AsyncGenerationTaskService {
             material.put("modelConfigId", command.modelConfigId());
             material.put("tomMode", empty(command.generationMode()));
             material.put("useMiniTom", Boolean.TRUE.equals(command.useMiniTom()));
+            material.put("generationDepth", GenerationDepth.resolve(command.generationDepth()).name());
             material.put("traceGroupId", command.traceGroupId());
             material.put("traceSessionId", command.traceSessionId());
             material.put("issueClipId", command.issueClipId());
@@ -1022,6 +1035,7 @@ public class AsyncGenerationTaskService {
             String promptSnapshot,
             String generationMode,
             Boolean useMiniTom,
+            String generationDepth,
             Integer promptVersion,
             Long traceGroupId,
             Long traceSessionId,

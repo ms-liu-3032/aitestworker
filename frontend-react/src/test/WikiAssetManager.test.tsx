@@ -4,7 +4,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 const apiMocks = vi.hoisted(() => ({
   listAdminWikiPacks: vi.fn(), listProjects: vi.fn(), listWikiEntries: vi.fn(),
   createWikiPack: vi.fn(), createWikiEntry: vi.fn(), reviewWikiEntry: vi.fn(),
-  reviewWikiPack: vi.fn(), updateWikiPackStatus: vi.fn(),
+  reviewWikiPack: vi.fn(), updateWikiPackStatus: vi.fn(), updateWikiPack: vi.fn(), updateWikiEntry: vi.fn(),
 }));
 const appMocks = vi.hoisted(() => ({ showToast: vi.fn() }));
 
@@ -43,5 +43,18 @@ describe('WikiAssetManager', () => {
     render(<WikiAssetManager />);
     fireEvent.change(await screen.findByDisplayValue('全部 Wiki 层级'), { target: { value: 'REUSABLE' } });
     await waitFor(() => expect(apiMocks.listAdminWikiPacks).toHaveBeenLastCalledWith(expect.objectContaining({ scope: 'REUSABLE' })));
+  });
+
+  it('lets administrators inspect and edit an entry before re-review', async () => {
+    apiMocks.updateWikiEntry.mockResolvedValue({ id: 21, packId: 11, entryType: 'RULE', title: '修订后的幂等规则', content: '重复提交不得产生重复数据', reviewStatus: 'PENDING', effectiveStatus: 'INACTIVE' });
+    render(<WikiAssetManager />);
+    fireEvent.click(await screen.findByText('全局质量规则'));
+    fireEvent.click(await screen.findByText('查看详情'));
+    expect((await screen.findAllByText('重复提交不得产生重复数据')).length).toBeGreaterThan(1);
+    fireEvent.click(screen.getAllByText('编辑')[0]);
+    fireEvent.change(screen.getByDisplayValue('幂等规则'), { target: { value: '修订后的幂等规则' } });
+    fireEvent.click(screen.getByText('保存并重新审核'));
+    await waitFor(() => expect(apiMocks.updateWikiEntry).toHaveBeenCalledWith(21, 'RULE', '修订后的幂等规则', '重复提交不得产生重复数据'));
+    expect(appMocks.showToast).toHaveBeenCalledWith('知识条目已保存，已回到待审核状态');
   });
 });

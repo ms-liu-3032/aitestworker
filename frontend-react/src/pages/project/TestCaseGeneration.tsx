@@ -350,7 +350,16 @@ function isConfirmIntent(content: string) {
   return ['确认', '确认分析', '确认无误', '没问题', '没有问题', 'ok', 'okay', '好的', '可以', '对', '行', '嗯'].includes(normalized);
 }
 
+function resolveGenerationDepthChoice(content: string): 'BASIC' | 'STANDARD' | 'DEEP' | null {
+  const normalized = normalizedCommand(content).toLowerCase();
+  if (['1', 'basic', '基础', '基础覆盖'].includes(normalized)) return 'BASIC';
+  if (['2', 'standard', '标准', '标准覆盖'].includes(normalized)) return 'STANDARD';
+  if (['3', 'deep', '深度', '深度覆盖'].includes(normalized)) return 'DEEP';
+  return null;
+}
+
 function asyncTaskRunning(task?: AsyncGenerationTask | null) {
+  if (isLegacyGenerationTask(task)) return false;
   return task?.status === 'PENDING' || task?.status === 'RUNNING';
 }
 
@@ -361,23 +370,69 @@ function asyncTaskFinished(task?: AsyncGenerationTask | null) {
     || task?.status === 'CANCELED';
 }
 
+function withExpectedTaskType(task: AsyncGenerationTask, taskType: string): AsyncGenerationTask {
+  return {
+    ...task,
+    taskType: task.taskType || taskType,
+  };
+}
+
+function shouldShowAsyncTaskCard(task?: AsyncGenerationTask | null) {
+  if (!task) return false;
+  if (isLegacyGenerationTask(task)) return false;
+  return asyncTaskRunning(task) || task.status === 'FAILED' || task.status === 'TIMEOUT';
+}
+
+function normalizedTaskType(task?: AsyncGenerationTask | null) {
+  return (task?.taskType || '').trim().toUpperCase();
+}
+
+function hasTaskStage(task: AsyncGenerationTask | null | undefined, matcher: (stage: NonNullable<AsyncGenerationTask['stages']>[number]) => boolean) {
+  return (task?.stages || []).some(matcher);
+}
+
+function isActualCaseGenerationTask(task?: AsyncGenerationTask | null) {
+  const type = normalizedTaskType(task);
+  return type === 'TEST_CASE_GENERATION' || type === 'TEST_CASE_GEN';
+}
+
+function isLegacyGenerationTask(task?: AsyncGenerationTask | null) {
+  return normalizedTaskType(task) === 'GENERATION';
+}
 
 function isRequirementAnalysisTask(task?: AsyncGenerationTask | null) {
-  return task?.taskType === 'REQUIREMENT_ANALYSIS'
-    || task?.taskType === 'REQUIREMENT_SCOPE_CONTINUATION'
-    || task?.taskType === 'TEST_POINT_SCOPE_CONTINUATION';
+  const type = normalizedTaskType(task);
+  return type === 'REQUIREMENT_ANALYSIS'
+    || type === 'REQUIREMENT_SCOPE_CONTINUATION'
+    || type === 'TEST_POINT_SCOPE_CONTINUATION';
 }
 
 function isRequirementScopeContinuationTask(task?: AsyncGenerationTask | null) {
-  return task?.taskType === 'REQUIREMENT_SCOPE_CONTINUATION';
+  const type = normalizedTaskType(task);
+  return type === 'REQUIREMENT_SCOPE_CONTINUATION'
+    || type === 'REQUIREMENT_SCOPE'
+    || hasTaskStage(task, stage => {
+      const code = (stage.code || '').toUpperCase();
+      const label = stage.label || '';
+      return !isActualCaseGenerationTask(task)
+        && (code.startsWith('COVERAGE_MATRIX') || code.startsWith('TEST_POINTS') || label.includes('覆盖矩阵') || label.includes('测试点'));
+    });
 }
 
 function isTestPointScopeContinuationTask(task?: AsyncGenerationTask | null) {
-  return task?.taskType === 'TEST_POINT_SCOPE_CONTINUATION';
+  const type = normalizedTaskType(task);
+  return type === 'TEST_POINT_SCOPE_CONTINUATION'
+    || type === 'TEST_POINT_SCOPE'
+    || hasTaskStage(task, stage => {
+      const code = (stage.code || '').toUpperCase();
+      const label = stage.label || '';
+      return !isActualCaseGenerationTask(task)
+        && (code.startsWith('CASE_COMPOSITION') || label.includes('编排'));
+    });
 }
 
 function isIncrementalCaseTask(task?: AsyncGenerationTask | null) {
-  return task?.taskType === 'INCREMENTAL_CASE_GENERATION';
+  return normalizedTaskType(task) === 'INCREMENTAL_CASE_GENERATION';
 }
 
 function shouldUseAsyncAnalysis(session: GenerationSession | null | undefined, content: string) {
@@ -385,7 +440,8 @@ function shouldUseAsyncAnalysis(session: GenerationSession | null | undefined, c
   // a recovered/stale session is still parked at ASK_TOM_MODE.
   if (isCaseGenerationIntent(content)) return false;
   const stage = (session?.currentStage || '').trim().toUpperCase();
-  if (stage === 'ASK_TOM_MODE') return true;
+  if (stage === 'ASK_TOM_MODE') return false;
+  if (stage === 'ASK_CASE_GENERATION_DEPTH') return false;
   if (isReanalysisIntent(content)) return true;
   if ((stage === 'WAITING_REQUIREMENT_SCOPE' || stage === 'WAITING_USER_CONFIRMATION' || stage === 'ANALYSIS_READY')
       && !isCaseGenerationIntent(content) && !isConfirmIntent(content)) {
@@ -394,24 +450,13 @@ function shouldUseAsyncAnalysis(session: GenerationSession | null | undefined, c
   return false;
 }
 
-function requiresScopeConfirmation(session: GenerationSession | null | undefined,
-                                   analysis: RequirementAnalysis | null | undefined) {
-  const status = (analysis?.status || '').trim().toUpperCase();
-  if (['NEED_SCOPE_CONFIRMATION', 'SCOPE_CONFIRMED',
-    'NEED_TEST_POINT_SCOPE_CONFIRMATION', 'TEST_POINT_SCOPE_CONFIRMED', 'NEED_CONFIRMATION'].includes(status)) {
-    return true;
-  }
-  const stage = (session?.currentStage || '').trim().toUpperCase();
-  return stage === 'WAITING_REQUIREMENT_SCOPE'
-    || (stage === 'WAITING_USER_CONFIRMATION' && status !== 'CONFIRMED' && status !== 'GENERATED');
-}
-
 function asyncTaskTitle(task?: AsyncGenerationTask | null) {
   if (isTestPointScopeContinuationTask(task)) return '用例编排任务';
   if (isRequirementScopeContinuationTask(task)) return '测试点生成任务';
   if (isRequirementAnalysisTask(task)) return '异步需求分析任务';
   if (isIncrementalCaseTask(task)) return '异步增量更新任务';
-  return '异步生成任务';
+  if (isActualCaseGenerationTask(task)) return '异步用例生成任务';
+  return '异步任务';
 }
 
 function asyncTaskRunningLabel(task?: AsyncGenerationTask | null) {
@@ -419,7 +464,8 @@ function asyncTaskRunningLabel(task?: AsyncGenerationTask | null) {
   if (isRequirementScopeContinuationTask(task)) return '按确认需求范围生成测试点';
   if (isRequirementAnalysisTask(task)) return '需求分析中';
   if (isIncrementalCaseTask(task)) return '增量更新中';
-  return '用例生成中';
+  if (isActualCaseGenerationTask(task)) return '用例生成中';
+  return '任务执行中';
 }
 
 function asyncTaskRunningDescription(task?: AsyncGenerationTask | null) {
@@ -442,7 +488,10 @@ function asyncTaskRunningDescription(task?: AsyncGenerationTask | null) {
   if (isIncrementalCaseTask(task)) {
     return '增量更新任务正在后台执行，完成后会自动刷新右侧草稿箱。';
   }
-  return '生成任务正在后台执行，完成后会自动刷新右侧草稿箱。';
+  if (isActualCaseGenerationTask(task)) {
+    return '用例生成任务正在后台执行，完成后会自动刷新右侧草稿箱。';
+  }
+  return '后台任务正在执行，完成后会自动刷新当前结果。';
 }
 
 function currentAsyncStage(task?: AsyncGenerationTask | null) {
@@ -515,9 +564,12 @@ function AsyncErrorDetails({ message, compact = false }: { message: string; comp
 }
 
 function asyncTaskButtonLabel(task?: AsyncGenerationTask | null) {
+  if (isTestPointScopeContinuationTask(task)) return '编排中...';
+  if (isRequirementScopeContinuationTask(task)) return '生成测试点中...';
   if (isRequirementAnalysisTask(task)) return '分析中...';
   if (isIncrementalCaseTask(task)) return '更新中...';
-  return '生成中...';
+  if (isActualCaseGenerationTask(task)) return '生成中...';
+  return '执行中...';
 }
 
 function asyncTaskErrorMessage(task?: AsyncGenerationTask | null) {
@@ -884,7 +936,7 @@ export function AnalysisPanel({
     const canEditRequirementScope = isLatest && a.status === 'NEED_SCOPE_CONFIRMATION'
       && Boolean(onConfirmRequirementScope);
     const canEditScope = isLatest
-      && ['NEED_TEST_POINT_SCOPE_CONFIRMATION', 'NEED_CONFIRMATION'].includes(a.status)
+      && a.status === 'NEED_TEST_POINT_SCOPE_CONFIRMATION'
       && Boolean(onConfirmTestPointScope);
     const requirementVersionDraft = requirementScopeDrafts[a.id] || {};
     const versionScopeDraft = scopeDrafts[a.id] || {};
@@ -1417,7 +1469,7 @@ export function AnalysisPanel({
   if (analyses.length === 0) {
     return (
       <div className="text-sm text-gray-400 text-center py-4">
-        {latestAnalysis ? '暂无历史分析' : '发送需求后自动生成'}
+        {latestAnalysis ? '暂无历史分析' : '发送需求后显示分析记录'}
       </div>
     );
   }
@@ -1679,7 +1731,9 @@ export default function TestCaseGeneration() {
               && asyncTaskRunning(task)) {
             return current;
           }
-          return task;
+          return current?.taskId === task.taskId && !task.taskType && current.taskType
+            ? { ...task, taskType: current.taskType }
+            : task;
         });
         const interimRefresh = isRequirementAnalysisTask(task)
           ? await refreshSessionData(activeSession.id).catch(() => null)
@@ -1798,7 +1852,7 @@ export default function TestCaseGeneration() {
       setDrafts([]);
       setActionNotice({
         title: '已创建新会话',
-        body: '现在可以直接输入需求，系统会结合当前项目上下文开始生成草稿用例。',
+        body: '现在可以输入需求，系统只会先做需求分析。完成澄清、范围和测试点确认后，再输入“生成用例”选择生成强度。',
       });
     } catch {
       showToast('创建会话失败', 'error');
@@ -1829,7 +1883,7 @@ export default function TestCaseGeneration() {
       } : prev);
       setActionNotice({
         title: '会话配置已更新',
-        body: '当前会话后续的分析与生成会按新的模型、提示模板和已选择的 TOM 使用模式继续执行。',
+        body: '当前会话后续的分析会按新的模型和提示模板继续执行。用例生成强度会在输入“生成用例”后单独选择。',
       });
       showToast('会话配置已更新');
     } catch (error: any) {
@@ -1897,12 +1951,69 @@ export default function TestCaseGeneration() {
     setInput('');
     setMessages(prev => mergeSentMessages(prev, optimisticMessage, []));
 
+    const currentStage = (activeSession.currentStage || '').trim().toUpperCase();
+    const selectedDepth = currentStage === 'ASK_CASE_GENERATION_DEPTH'
+      ? resolveGenerationDepthChoice(content)
+      : null;
+    if (selectedDepth) {
+      setSending(true);
+      setAnalysisLoading(true);
+      setAsyncTaskBusy(true);
+      let selectionRecorded = false;
+      try {
+        const reply = await sendGenerationMessage(Number(projectId), activeSession.id, content);
+        selectionRecorded = true;
+        setMessages(prev => mergeSentMessages(prev, optimisticMessage, reply.newMessages || []));
+        if (reply.analysis) {
+          const nextAnalysis = reply.analysis as RequirementAnalysis;
+          setAnalysis(nextAnalysis);
+          setAnalyses(prev => [nextAnalysis, ...prev.filter(item => item.id !== nextAnalysis.id)]);
+        }
+
+        const task = withExpectedTaskType(
+          await startSessionCaseGenerationTask(Number(projectId), activeSession.id, content),
+          'TEST_CASE_GENERATION',
+        );
+        setActiveAsyncTask(task);
+        setMessages(prev => mergeSentMessages(prev, optimisticMessage, [{
+          id: -Date.now() - 1,
+          sessionId: activeSession.id,
+          role: 'ASSISTANT',
+          content: `已创建用例生成任务 #${task.taskId}，正在按所选强度后台生成草稿。`,
+          structuredPayload: null,
+          analysisVersion: analysis?.version ?? null,
+          stage: 'SYSTEM_CASE_GENERATING',
+          createdAt: new Date().toISOString(),
+        }]));
+        setActionNotice({
+          title: '用例生成中',
+          body: `任务 #${task.taskId} 已开始执行。系统会自动刷新右侧草稿箱，重复点击不会创建重复模型调用。`,
+        });
+        void refreshSessionData(activeSession.id);
+        void loadSessions(true);
+      } catch (error: any) {
+        if (!selectionRecorded) {
+          setMessages(prev => prev.filter(item => item.id !== optimisticMessage.id));
+          setInput(content);
+        }
+        setSending(false);
+        setAnalysisLoading(false);
+        showToast(error.message || '启动生成任务失败', 'error');
+      } finally {
+        setAsyncTaskBusy(false);
+      }
+      return;
+    }
+
     if (shouldUseAsyncAnalysis(activeSession, content)) {
       setSending(true);
       setAnalysisLoading(true);
       setAsyncTaskBusy(true);
       try {
-        const task = await startSessionRequirementAnalysisTask(Number(projectId), activeSession.id, content);
+        const task = withExpectedTaskType(
+          await startSessionRequirementAnalysisTask(Number(projectId), activeSession.id, content),
+          'REQUIREMENT_ANALYSIS',
+        );
         setActiveAsyncTask(task);
         setMessages(prev => mergeSentMessages(prev, optimisticMessage, [{
           id: -Date.now() - 1,
@@ -1925,40 +2036,6 @@ export default function TestCaseGeneration() {
         setSending(false);
         setAnalysisLoading(false);
         showToast(error.message || '启动需求分析任务失败', 'error');
-      } finally {
-        setAsyncTaskBusy(false);
-      }
-      return;
-    }
-
-    if (isCaseGenerationIntent(content) && !requiresScopeConfirmation(activeSession, analysis)) {
-      setSending(true);
-      setAnalysisLoading(true);
-      setAsyncTaskBusy(true);
-      try {
-        const task = await startSessionCaseGenerationTask(Number(projectId), activeSession.id, content);
-        setActiveAsyncTask(task);
-        setMessages(prev => mergeSentMessages(prev, optimisticMessage, [{
-          id: -Date.now() - 1,
-          sessionId: activeSession.id,
-          role: 'ASSISTANT',
-          content: `已创建用例生成任务 #${task.taskId}，正在后台生成草稿。生成期间你可以留在当前页面查看进度。`,
-          structuredPayload: null,
-          analysisVersion: analysis?.version ?? null,
-          stage: 'SYSTEM_CASE_GENERATING',
-          createdAt: new Date().toISOString(),
-        }]));
-        setActionNotice({
-          title: '用例生成中',
-          body: `任务 #${task.taskId} 已开始执行。系统会自动刷新右侧草稿箱，重复点击不会创建重复模型调用。`,
-        });
-        void refreshSessionData(activeSession.id);
-      } catch (error: any) {
-        setMessages(prev => prev.filter(item => item.id !== optimisticMessage.id));
-        setInput(content);
-        setSending(false);
-        setAnalysisLoading(false);
-        showToast(error.message || '启动生成任务失败', 'error');
       } finally {
         setAsyncTaskBusy(false);
       }
@@ -2120,7 +2197,10 @@ export default function TestCaseGeneration() {
     }
     setIncrementalGenerating(true);
     try {
-      const task = await startSessionIncrementalGenerationTask(Number(projectId), activeSession.id, selectedDraftIds);
+      const task = withExpectedTaskType(
+        await startSessionIncrementalGenerationTask(Number(projectId), activeSession.id, selectedDraftIds),
+        'INCREMENTAL_CASE_GENERATION',
+      );
       setActiveAsyncTask(task);
       setAffectedModalOpen(false);
       setSending(true);
@@ -2142,7 +2222,10 @@ export default function TestCaseGeneration() {
     setSavingTestPointScope(true);
     try {
       setAnalysisLoading(true);
-      const task = await confirmGenerationTestPointScope(Number(projectId), activeSession.id, version, decisions);
+      const task = withExpectedTaskType(
+        await confirmGenerationTestPointScope(Number(projectId), activeSession.id, version, decisions),
+        'TEST_POINT_SCOPE_CONTINUATION',
+      );
       setActiveAsyncTask(task);
       setActionNotice({
         title: '测试点范围已确认',
@@ -2164,7 +2247,10 @@ export default function TestCaseGeneration() {
     setSavingRequirementScope(true);
     setAnalysisLoading(true);
     try {
-      const task = await confirmGenerationRequirementScope(Number(projectId), activeSession.id, version, decisions);
+      const task = withExpectedTaskType(
+        await confirmGenerationRequirementScope(Number(projectId), activeSession.id, version, decisions),
+        'REQUIREMENT_SCOPE_CONTINUATION',
+      );
       setActiveAsyncTask(task);
       setActionNotice({
         title: '需求范围已确认',
@@ -2447,7 +2533,7 @@ export default function TestCaseGeneration() {
                 </div>
               </div>
             )}
-            {activeAsyncTask && (
+            {activeAsyncTask && shouldShowAsyncTaskCard(activeAsyncTask) && (
               <div className={`mx-5 mt-3 max-h-[42vh] shrink-0 overflow-y-auto rounded-xl border px-4 py-3 ${
                 activeAsyncTask.status === 'SUCCEEDED'
                   ? 'border-green-200 bg-green-50'
@@ -2561,7 +2647,7 @@ export default function TestCaseGeneration() {
                         ? '正在读取该会话已有的后台任务，完成后会自动恢复进度或允许继续发送。'
                         : asyncTaskRunning(activeAsyncTask)
                         ? asyncTaskRunningDescription(activeAsyncTask)
-                        : '正在分析需求、整理测试点并生成草稿用例，完成后会自动更新右侧分析结果和草稿箱。'}
+                        : '正在处理当前请求，完成后会自动刷新会话和右侧结果。'}
                     </div>
                   </div>
                 </div>
@@ -2660,7 +2746,7 @@ export default function TestCaseGeneration() {
             )}
             {!analysis ? (
               <div className={`text-sm text-gray-400 text-center ${sending ? 'py-2' : 'py-4'}`}>
-                {activeSession ? '暂无分析结果，发送需求后自动生成' : '选择会话后查看分析'}
+                {activeSession ? '暂无分析结果，发送需求后会先生成需求分析' : '选择会话后查看分析'}
               </div>
             ) : (
               <AnalysisPanel
@@ -2678,7 +2764,7 @@ export default function TestCaseGeneration() {
           <div className="px-4 py-3 border-b border-gray-100 bg-gray-50/50">
             <div className="flex items-center justify-between">
               <h3 className="text-sm font-semibold text-gray-900">草稿箱</h3>
-              <span className="text-[11px] font-mono text-gray-400">{asyncTaskRunning(activeAsyncTask) ? asyncTaskRunningLabel(activeAsyncTask) : sending ? '生成中...' : `${drafts.filter(d => d.status !== 'DEPRECATED').length} 条`}</span>
+              <span className="text-[11px] font-mono text-gray-400">{asyncTaskRunning(activeAsyncTask) ? asyncTaskRunningLabel(activeAsyncTask) : sending ? '处理中...' : `${drafts.filter(d => d.status !== 'DEPRECATED').length} 条`}</span>
             </div>
             <div className="text-[11px] text-gray-500 mt-1">
               当前会话沉淀出来的最近草稿，可直接查看详情或舍弃。
@@ -2687,7 +2773,7 @@ export default function TestCaseGeneration() {
           <div>
             {drafts.filter(d => d.status !== 'DEPRECATED').length === 0 ? (
               <div className="px-4 py-12 text-center text-gray-400 text-sm">
-                {activeSession ? '暂无草稿，发送需求后自动生成' : '选择会话后查看草稿'}
+                {activeSession ? '暂无草稿，输入“生成用例”并完成强度选择后显示' : '选择会话后查看草稿'}
               </div>
             ) : (
               <div className="divide-y divide-gray-100">

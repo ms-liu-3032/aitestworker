@@ -21,7 +21,7 @@ class DirectCaseGenerationServiceTest {
         strip.setAccessible(true);
         String requirement = """
                 ## 原始需求
-                申请人预约需要审批。
+                审批申请需要审批。
 
                 ## 测试点
                 [{"title":"预约提交","requirement_refs":["R1"]},{"title":"审批处理","requirement_refs":["R2"]}]
@@ -71,7 +71,7 @@ class DirectCaseGenerationServiceTest {
                 "summarizePreconditionPoints", List.class, Map.class);
         summarize.setAccessible(true);
         Map<String, Map<String, Object>> points = Map.of(
-                "TP1", Map.of("id", "TP1", "title", "预约已提交", "description", "申请人已提交预约并进入待审批状态",
+                "TP1", Map.of("id", "TP1", "title", "预约已提交", "description", "申请已提交并进入待审批状态",
                         "requirement_refs", List.of("R1"), "source_basis", List.of("需求")),
                 "TP2", Map.of("id", "TP2", "title", "审批处理", "description", "审批人处理待审批预约")
         );
@@ -82,7 +82,7 @@ class DirectCaseGenerationServiceTest {
         assertEquals(1, material.size());
         assertEquals("TP1", material.get(0).get("trace_ref"));
         assertEquals("预约已提交", material.get(0).get("title"));
-        assertEquals("申请人已提交预约并进入待审批状态", material.get(0).get("description"));
+        assertEquals("申请已提交并进入待审批状态", material.get(0).get("description"));
         assertFalse(material.get(0).containsKey("id"));
     }
 
@@ -264,5 +264,56 @@ class DirectCaseGenerationServiceTest {
         List<String> result = (List<String>) quality.invoke(service, List.of(valid));
 
         assertTrue(result.isEmpty());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void acceptsCombinationDesignWhenSeparateCasesCompleteItsCoverageSet() throws Exception {
+        var service = new DirectCaseGenerationService(null, null, null, null, null, null, null, null);
+        Method missing = DirectCaseGenerationService.class.getDeclaredMethod(
+                "missingDesignObligations", List.class, List.class);
+        missing.setAccessible(true);
+        Map<String, Object> design = Map.of(
+                "id", "CD21", "scenario_type", "COMBINATION",
+                "design_methods", List.of("判定表", "因果图法"),
+                "coverage_requirements", List.of("AUTHORIZED", "UNAUTHORIZED", "DATA_SCOPE_ISOLATION"));
+        var authorized = new DirectCaseGenerationService.CaseDraftInput(
+                "有权限访问", "权限", "", "1. 访问", "1. 成功", "P1", "POSITIVE",
+                List.of("判定表"), List.of("AUTHORIZED"), "CP21", "CD21", "权限控制",
+                List.of("TP29"), List.of("需求"), List.of(), 0.9);
+        var unauthorized = new DirectCaseGenerationService.CaseDraftInput(
+                "无权限拒绝", "权限", "", "1. 访问", "1. 拒绝", "P1", "NEGATIVE",
+                List.of("判定表"), List.of("UNAUTHORIZED"), "CP21", "CD21", "权限控制",
+                List.of("TP29"), List.of("需求"), List.of(), 0.9);
+        var isolated = new DirectCaseGenerationService.CaseDraftInput(
+                "数据隔离", "权限", "", "1. 查看", "1. 隔离", "P1", "NEGATIVE",
+                List.of("因果图法"), List.of("DATA_SCOPE_ISOLATION"), "CP21", "CD21", "权限控制",
+                List.of("TP29"), List.of("需求"), List.of(), 0.9);
+
+        List<String> result = (List<String>) missing.invoke(service, List.of(design), List.of(authorized, unauthorized, isolated));
+
+        assertTrue(result.isEmpty());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void rejectsCombinationDesignWhenOneRequiredCoverageItemIsMissing() throws Exception {
+        var service = new DirectCaseGenerationService(null, null, null, null, null, null, null, null);
+        Method missing = DirectCaseGenerationService.class.getDeclaredMethod(
+                "missingDesignObligations", List.class, List.class);
+        missing.setAccessible(true);
+        Map<String, Object> design = Map.of(
+                "id", "CD21", "scenario_type", "COMBINATION",
+                "design_methods", List.of("判定表"),
+                "coverage_requirements", List.of("AUTHORIZED", "UNAUTHORIZED"));
+        var authorized = new DirectCaseGenerationService.CaseDraftInput(
+                "有权限访问", "权限", "", "1. 访问", "1. 成功", "P1", "POSITIVE",
+                List.of("判定表"), List.of("AUTHORIZED"), "CP21", "CD21", "权限控制",
+                List.of("TP29"), List.of("需求"), List.of(), 0.9);
+
+        List<String> result = (List<String>) missing.invoke(service, List.of(design), List.of(authorized));
+
+        assertTrue(result.contains("CD21/覆盖:UNAUTHORIZED"));
+        assertTrue(result.contains("CD21/场景:COMBINATION"));
     }
 }

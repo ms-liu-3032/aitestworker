@@ -13,6 +13,7 @@ public record GenerationSessionRecord(
         String promptSnapshot,
         boolean useMiniTom,
         String tomMode,
+        String generationDepth,
         int latestAnalysisVersion,
         Long executionTaskId,
         Long createdBy,
@@ -27,6 +28,17 @@ public record GenerationSessionRecord(
         this(id, projectId, sessionTitle, status, currentStage, modelConfigId, promptTemplateId,
                 promptSnapshot, useMiniTom,
                 useMiniTom ? "PROJECT_AND_SYSTEM_TOM" : "DIRECT",
+                "STANDARD",
                 latestAnalysisVersion, executionTaskId, createdBy, createdAt, updatedAt);
+    }
+
+    public GenerationSessionRecord(Long id, Long projectId, String sessionTitle, String status,
+                                   String currentStage, Long modelConfigId, Long promptTemplateId,
+                                   String promptSnapshot, boolean useMiniTom, String tomMode,
+                                   int latestAnalysisVersion, Long executionTaskId, Long createdBy,
+                                   LocalDateTime createdAt, LocalDateTime updatedAt) {
+        this(id, projectId, sessionTitle, status, currentStage, modelConfigId, promptTemplateId,
+                promptSnapshot, useMiniTom, tomMode, "STANDARD", latestAnalysisVersion,
+                executionTaskId, createdBy, createdAt, updatedAt);
     }
 }

@@ -5,10 +5,11 @@ public record CreateSessionCommand(
         Long modelConfigId,
         Long promptTemplateId,
         boolean useMiniTom,
-        String tomMode
+        String tomMode,
+        String generationDepth
 ) {
     public CreateSessionCommand(String sessionTitle, Long modelConfigId, Long promptTemplateId,
                                 boolean useMiniTom) {
-        this(sessionTitle, modelConfigId, promptTemplateId, useMiniTom, null);
+        this(sessionTitle, modelConfigId, promptTemplateId, useMiniTom, null, null);
     }
 }

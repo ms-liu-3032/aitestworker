@@ -13,7 +13,7 @@ class IntentRecognizerTest {
     @Test
     void clarificationAnswerWithConfirmWordsIsSupplementInWaitingStage() {
         String answer = """
-                规则配置的具体入口需要确认：在申请人管理中新增管理页面。
+                规则配置的具体入口需要确认：在业务管理中新增管理页面。
                 适用对象字段为单选。
                 批量配置不支持。
                 """;
@@ -49,13 +49,13 @@ class IntentRecognizerTest {
     }
 
     @Test
-    void generationCommandStillGeneratesCases() {
+    void generationCommandStillGeneratesCasesAfterAnalysisButNotWhileChoosingTom() {
         assertEquals(
                 UserIntent.GENERATE_CASES,
                 recognizer.recognize("生成用例", "WAITING_USER_CONFIRMATION")
         );
         assertEquals(
-                UserIntent.GENERATE_CASES,
+                UserIntent.UNKNOWN,
                 recognizer.recognize("生成用例", "ASK_TOM_MODE")
         );
     }

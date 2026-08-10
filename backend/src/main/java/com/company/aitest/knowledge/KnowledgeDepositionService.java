@@ -14,6 +14,7 @@ import java.util.Objects;
 
 import com.company.aitest.common.CurrentUser;
 import com.company.aitest.common.TimeProvider;
+import com.company.aitest.trace.TraceSummaryRecord;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -180,6 +181,38 @@ public class KnowledgeDepositionService {
             }
         }
         return total;
+    }
+
+    /** A confirmed trace summary is evidence, not an active rule: create reviewable candidates only. */
+    @Transactional
+    public DepositionResult depositConfirmedTraceSummary(TraceSummaryRecord summary, CurrentUser user) {
+        if (summary == null || summary.projectId() == null || summary.id() == null) {
+            return new DepositionResult(0, 0, 0);
+        }
+        Long createdBy = user == null ? (summary.confirmedBy() == null ? 1L : summary.confirmedBy()) : user.id();
+        Long packId = ensureAutoPack(summary.projectId(), createdBy);
+        String title = firstNonBlank(summary.overview(), "轨迹摘要 #" + summary.id());
+        String content = "业务摘要：\n" + firstNonBlank(summary.businessSummary(), "无")
+                + "\n\n关键步骤：\n" + firstNonBlank(summary.keyStepsJson(), "无")
+                + "\n\n关键接口：\n" + firstNonBlank(summary.keyApiJson(), "无")
+                + "\n\n异常摘要：\n" + firstNonBlank(summary.exceptionSummary(), "无")
+                + "\n\n用例建议：\n" + firstNonBlank(summary.caseGenerationSuggestionJson(), "无");
+        String refs = sourceRefs("TRACE_SUMMARY", "TRACE_SUMMARY", summary.id(),
+                summary.version(), String.valueOf(summary.traceGroupId()));
+        boolean wiki = insertWikiCandidate(packId, "HISTORY", title, content,
+                "TRACE_SUMMARY", "TRACE_SUMMARY", summary.id(),
+                "TRACE_SUMMARY:WIKI:" + summary.id(), refs, createdBy);
+        Map<String, Object> traceProperties = new LinkedHashMap<>();
+        traceProperties.put("traceGroupId", summary.traceGroupId());
+        traceProperties.put("traceSessionId", summary.traceSessionId());
+        traceProperties.put("issueClipId", summary.issueClipId());
+        traceProperties.put("validityLabel", summary.validityLabel());
+        boolean tom = insertTomCandidate(summary.projectId(), "FLOW", title, content,
+                "轨迹摘要", "TRACE_SUMMARY", summary.id(),
+                "TRACE_SUMMARY:TOM:" + summary.id(), refs,
+                properties(traceProperties, Map.of()),
+                new BigDecimal("0.75"), createdBy);
+        return new DepositionResult(wiki ? 1 : 0, tom ? 1 : 0, (wiki ? 0 : 1) + (tom ? 0 : 1));
     }
 
     /**

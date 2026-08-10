@@ -630,12 +630,64 @@ export function listAdminSummaries(params?: AdminAssetParams) {
   return api<any[]>(`/api/admin/assets/summaries${buildAssetQuery(params)}`)
 }
 
+/** Project-facing trace summaries. Unlike the admin asset endpoint, this endpoint is scoped by project access. */
+export function listProjectSummaries(projectId: number) {
+  return api<any[]>(`/api/trace/projects/${projectId}/summaries`)
+}
+
 export function listAdminSkills(params?: AdminAssetParams) {
   return api<any[]>(`/api/admin/assets/skills${buildAssetQuery(params)}`)
 }
 
 export function listAdminTools(params?: AdminAssetParams) {
   return api<any[]>(`/api/admin/assets/tools${buildAssetQuery(params)}`)
+}
+
+export interface ProjectSkillAsset {
+  id: number
+  projectId: number
+  skillName: string
+  applicableScene: string | null
+  flowSteps: string | null
+  sourceType: string | null
+  sourceId: number | null
+  status: string
+  deprecatedReason: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+export interface ProjectToolAsset {
+  id: number
+  projectId: number
+  toolName: string
+  operationSteps: string | null
+  sourceType: string | null
+  sourceId: number | null
+  status: string
+  deprecatedReason: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+export function listProjectSkills(projectId: number) {
+  return api<ProjectSkillAsset[]>(`/api/trace/projects/${projectId}/skills`)
+}
+
+export function updateProjectSkill(projectId: number, skillId: number, payload: Pick<ProjectSkillAsset, 'skillName' | 'applicableScene' | 'flowSteps'>) {
+  return api<ProjectSkillAsset>(`/api/trace/projects/${projectId}/skills/${skillId}`, {
+    method: 'PATCH', body: JSON.stringify(payload),
+  })
+}
+
+export function listProjectTools(projectId: number) {
+  return api<ProjectToolAsset[]>(`/api/trace/projects/${projectId}/tools`)
+}
+
+export function updateProjectTool(projectId: number, toolId: number, payload: Pick<ProjectToolAsset, 'toolName' | 'operationSteps'>) {
+  return api<ProjectToolAsset>(`/api/trace/projects/${projectId}/tools/${toolId}`, {
+    method: 'PATCH', body: JSON.stringify(payload),
+  })
 }
 
 export function deprecateAdminAsset(type: string, id: number, reason?: string) {
@@ -714,6 +766,7 @@ export interface GenerationSession {
   promptTemplateId: number | null
   useMiniTom: boolean
   tomMode: 'DIRECT' | 'PROJECT_TOM' | 'PROJECT_AND_SYSTEM_TOM'
+  generationDepth: 'BASIC' | 'STANDARD' | 'DEEP'
   latestAnalysisVersion: number | null
   executionTaskId: number | null
   createdBy: number
@@ -742,14 +795,14 @@ export function listGenerationSessions(projectId: number, params?: { page?: numb
   return api<PageResult<GenerationSession>>(`/api/projects/${projectId}/generation/sessions${query ? '?' + query : ''}`)
 }
 
-export function createGenerationSession(projectId: number, body: { sessionTitle?: string; modelConfigId?: number; promptTemplateId?: number; useMiniTom?: boolean; tomMode?: 'DIRECT' | 'PROJECT_TOM' | 'PROJECT_AND_SYSTEM_TOM' }) {
+export function createGenerationSession(projectId: number, body: { sessionTitle?: string; modelConfigId?: number; promptTemplateId?: number; useMiniTom?: boolean; tomMode?: 'DIRECT' | 'PROJECT_TOM' | 'PROJECT_AND_SYSTEM_TOM'; generationDepth?: 'BASIC' | 'STANDARD' | 'DEEP' }) {
   return api<GenerationSession>(`/api/projects/${projectId}/generation/sessions`, { method: 'POST', body: JSON.stringify(body) })
 }
 
 export function updateGenerationSession(
   projectId: number,
   sessionId: number,
-  body: { sessionTitle?: string; modelConfigId?: number | null; promptTemplateId?: number | null; useMiniTom?: boolean; tomMode?: 'DIRECT' | 'PROJECT_TOM' | 'PROJECT_AND_SYSTEM_TOM' }
+  body: { sessionTitle?: string; modelConfigId?: number | null; promptTemplateId?: number | null; useMiniTom?: boolean; tomMode?: 'DIRECT' | 'PROJECT_TOM' | 'PROJECT_AND_SYSTEM_TOM'; generationDepth?: 'BASIC' | 'STANDARD' | 'DEEP' }
 ) {
   return api<void>(`/api/projects/${projectId}/generation/sessions/${sessionId}`, { method: 'PATCH', body: JSON.stringify(body) })
 }
@@ -1521,6 +1574,12 @@ export function updateWikiPackStatus(packId: number, status: string) {
   })
 }
 
+export function updateWikiPack(packId: number, name: string, description: string) {
+  return api<WikiPack>(`/api/wiki/packs/${packId}`, {
+    method: 'PATCH', body: JSON.stringify({ name, description }),
+  })
+}
+
 export function deleteWikiPack(packId: number) {
   return api<void>(`/api/wiki/packs/${packId}`, { method: 'DELETE' })
 }
@@ -1535,6 +1594,12 @@ export function createWikiEntry(packId: number, entryType: string, title: string
 
 export function reviewWikiEntry(entryId: number, reviewStatus: string) {
   return api<WikiEntry>(`/api/wiki/entries/${entryId}/review`, { method: 'PATCH', body: JSON.stringify({ reviewStatus }) })
+}
+
+export function updateWikiEntry(entryId: number, entryType: string, title: string, content: string) {
+  return api<WikiEntry>(`/api/wiki/entries/${entryId}`, {
+    method: 'PATCH', body: JSON.stringify({ entryType, title, content }),
+  })
 }
 
 // ===== Loop API =====

@@ -41,14 +41,15 @@ public class GenerationTaskService {
     public GenerationTaskRecord create(Long projectId, CreateTaskCommand command, CurrentUser user) {
         LocalDateTime now = timeProvider.now();
         String mode = normalizeGenerationMode(command.generationMode(), command.useMiniTom());
+        String depth = GenerationDepth.resolve(command.generationDepth()).name();
         boolean useTom = Boolean.TRUE.equals(command.useMiniTom());
         jdbcTemplate.update("""
                 insert into generation_task(project_id, task_name, requirement_text, current_stage, status,
-                  run_status, generation_mode, use_mini_tom, model_config_id, prompt_template_id, prompt_version,
+                  run_status, task_type, generation_mode, generation_depth, use_mini_tom, model_config_id, prompt_template_id, prompt_version,
                   prompt_snapshot, created_by, created_at, updated_at)
-                values (?, ?, ?, 'CREATED', 'CREATED', 'PENDING', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                values (?, ?, ?, 'CREATED', 'CREATED', 'PENDING', 'TEST_CASE_GENERATION', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, projectId, command.taskName(), command.requirementText(),
-                mode, useTom ? 1 : 0, command.modelConfigId(),
+                mode, depth, useTom ? 1 : 0, command.modelConfigId(),
                 command.promptTemplateId(), command.promptVersion(),
                 command.promptSnapshot(), user.id(), now, now);
         Long id = jdbc.sql("select last_insert_id()").query(Long.class).single();
@@ -92,14 +93,15 @@ public class GenerationTaskService {
                                             String requestHash, CurrentUser user) {
         LocalDateTime now = timeProvider.now();
         String mode = normalizeGenerationMode(command.generationMode(), command.useMiniTom());
+        String depth = GenerationDepth.resolve(command.generationDepth()).name();
         boolean useTom = Boolean.TRUE.equals(command.useMiniTom());
         jdbcTemplate.update("""
                 insert into generation_task(project_id, task_name, requirement_text, current_stage, status,
-                  run_status, request_hash, task_type, generation_mode, use_mini_tom, model_config_id,
+                  run_status, request_hash, task_type, generation_mode, generation_depth, use_mini_tom, model_config_id,
                   prompt_template_id, prompt_version, prompt_snapshot, created_by, created_at, updated_at)
-                values (?, ?, ?, 'CREATED', 'CREATED', 'PENDING', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                values (?, ?, ?, 'CREATED', 'CREATED', 'PENDING', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, projectId, command.taskName(), command.requirementText(),
-                requestHash, taskType, mode, useTom ? 1 : 0, command.modelConfigId(),
+                requestHash, taskType, mode, depth, useTom ? 1 : 0, command.modelConfigId(),
                 command.promptTemplateId(), command.promptVersion(), command.promptSnapshot(), user.id(), now, now);
         Long id = jdbc.sql("select last_insert_id()").query(Long.class).single();
         return get(projectId, id);
@@ -317,6 +319,7 @@ public class GenerationTaskService {
                 rs.getTimestamp("updated_at").toLocalDateTime(),
                 rs.getString("generation_mode"),
                 rs.getBoolean("use_mini_tom"),
+                rs.getString("generation_depth"),
                 rs.getString("mini_tom_context_snapshot"),
                 rs.getString("test_scope_snapshot"),
                 rs.getInt("tom_hit_count"),
@@ -330,7 +333,13 @@ public class GenerationTaskService {
 
     public record CreateTaskCommand(String taskName, String requirementText, Long modelConfigId,
                                     Long promptTemplateId, Integer promptVersion, String promptSnapshot,
-                                    String generationMode, Boolean useMiniTom) {
+                                    String generationMode, Boolean useMiniTom, String generationDepth) {
+        public CreateTaskCommand(String taskName, String requirementText, Long modelConfigId,
+                                 Long promptTemplateId, Integer promptVersion, String promptSnapshot,
+                                 String generationMode, Boolean useMiniTom) {
+            this(taskName, requirementText, modelConfigId, promptTemplateId, promptVersion,
+                    promptSnapshot, generationMode, useMiniTom, GenerationDepth.defaultDepth().name());
+        }
     }
 
     static String normalizeGenerationMode(String generationMode, Boolean useMiniTom) {

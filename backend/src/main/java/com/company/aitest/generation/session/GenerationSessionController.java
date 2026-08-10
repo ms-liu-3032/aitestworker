@@ -76,6 +76,9 @@ public class GenerationSessionController {
         if (body.containsKey("sessionTitle")) {
             sessionService.updateTitle(projectId, sessionId, (String) body.get("sessionTitle"), user);
         }
+        if (body.containsKey("generationDepth")) {
+            throw new com.company.aitest.common.BusinessException("生成强度只能在输入“生成用例”后的会话反问中选择");
+        }
         if (body.containsKey("modelConfigId") || body.containsKey("promptTemplateId")
                 || body.containsKey("useMiniTom") || body.containsKey("tomMode")) {
             GenerationSessionRecord current = sessionService.get(projectId, sessionId, user);
@@ -87,13 +90,16 @@ public class GenerationSessionController {
                     : current.promptTemplateId();
             boolean useMiniTom = body.containsKey("useMiniTom") && Boolean.TRUE.equals(body.get("useMiniTom"));
             String tomMode = body.get("tomMode") == null ? null : String.valueOf(body.get("tomMode"));
+            String generationDepth = current.generationDepth();
             if (tomMode == null && body.containsKey("useMiniTom")) {
-                sessionService.updateConfig(projectId, sessionId, modelConfigId, promptTemplateId, useMiniTom, user);
+                sessionService.updateConfig(projectId, sessionId, modelConfigId, promptTemplateId,
+                        useMiniTom ? "PROJECT_AND_SYSTEM_TOM" : "DIRECT", generationDepth, user);
             } else {
                 if (tomMode == null) {
                     tomMode = current.tomMode();
                 }
-                sessionService.updateConfig(projectId, sessionId, modelConfigId, promptTemplateId, tomMode, user);
+                sessionService.updateConfig(projectId, sessionId, modelConfigId, promptTemplateId,
+                        tomMode, generationDepth, user);
             }
         }
         return ApiResponse.ok(null);

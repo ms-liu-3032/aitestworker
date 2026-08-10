@@ -55,12 +55,15 @@ public class IntentRecognizer {
 
         // 1. Stage-specific checks first (highest priority)
 
-        // Explicit generation remains a generation command even when a recovered/stale
-        // session is parked at ASK_TOM_MODE. The generator itself verifies that an analysis exists.
         if ("ASK_TOM_MODE".equals(currentStage)) {
-            if (matchesAny(lower, GENERATE_KEYWORDS)) return UserIntent.GENERATE_CASES;
-            if (len <= 4 && matchesAny(lower, GENERATE_SHORT)) return UserIntent.GENERATE_CASES;
+            if (matchesAny(lower, GENERATE_KEYWORDS)) return UserIntent.UNKNOWN;
+            if (len <= 4 && matchesAny(lower, GENERATE_SHORT)) return UserIntent.UNKNOWN;
             return UserIntent.CHOOSE_TOM_MODE;
+        }
+
+        if ("ASK_CASE_GENERATION_DEPTH".equals(currentStage)) {
+            if (isExplicitGenerationDepthChoice(raw)) return UserIntent.START_CASE_GENERATION_AFTER_DEPTH;
+            return UserIntent.CHOOSE_GENERATION_DEPTH;
         }
 
         // REQUIREMENT_INPUT: long text = requirement, short = check keywords
@@ -123,6 +126,13 @@ public class IntentRecognizer {
         return matchesAny(lower, TOM_NO_KEYWORDS)
                 || matchesAny(lower, TOM_PROJECT_ONLY_KEYWORDS)
                 || matchesAny(lower, TOM_YES_KEYWORDS);
+    }
+
+    public boolean isExplicitGenerationDepthChoice(String message) {
+        if (message == null || message.isBlank() || message.trim().length() > 30) return false;
+        String lower = message.trim().toLowerCase().replaceAll("[\\s,.，。、!?！？:：;；]", "");
+        return Set.of("1", "2", "3", "basic", "standard", "deep", "基础", "标准", "深度", "基础覆盖", "标准覆盖", "深度覆盖")
+                .contains(lower);
     }
 
     private boolean matchesAny(String text, Set<String> keywords) {

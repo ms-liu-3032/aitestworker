@@ -17,6 +17,7 @@ import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.company.aitest.common.TimeProvider;
 import com.company.aitest.common.TomUsageMode;
 import com.company.aitest.generation.DirectCaseGenerationService;
+import com.company.aitest.generation.GenerationDepth;
 import com.company.aitest.generation.GenerationTaskCheckpointService;
 import com.company.aitest.generation.GenerationTaskService;
 import com.company.aitest.generation.FunctionalTestDesignPolicy;
@@ -61,6 +62,9 @@ public class RequirementAnalysisService {
     private static final String SCOPE_GENERATE = "GENERATE";
     private static final String SCOPE_REFERENCE_ONLY = "REFERENCE_ONLY";
     private static final String SCOPE_EXCLUDED = "EXCLUDED";
+    private static final List<String> COVERAGE_DIMENSIONS = List.of(
+            "main_flow", "branch", "boundary", "exception", "state", "data", "auth", "concurrency", "idempotent"
+    );
 
     private final JdbcClient jdbc;
     private final JdbcTemplate jdbcTemplate;
@@ -183,18 +187,9 @@ public class RequirementAnalysisService {
             previousAnswers = prevAnalysis.clarificationAnswers();
         }
 
-        // 5. Ensure internal task exists for LLM gateway
-        Long taskId = session.executionTaskId();
-        if (taskId == null) {
-            var taskCmd = new GenerationTaskService.CreateTaskCommand(
-                    session.sessionTitle(), requirementText, session.modelConfigId(),
-                    session.promptTemplateId(), null,
-                    session.promptSnapshot(), tomMode.name(), tomMode.usesTom()
-            );
-            var task = taskService.create(projectId, taskCmd, user);
-            taskId = task.id();
-            sessionService.updateExecutionTaskId(sessionId, taskId);
-        }
+        // 5. Use the real async analysis task when present. Synchronous TOM selection must
+        // not create a legacy generation_task row, otherwise the UI treats analysis as case generation.
+        Long taskId = activeAnalysisTaskId(session);
 
         // 6. Reserve a unique analysis version for this round to avoid duplicate inserts under concurrent re-analyze.
         int newVersion = sessionService.reserveNextAnalysisVersion(sessionId);
@@ -208,7 +203,8 @@ public class RequirementAnalysisService {
                         tomSnapshot, semanticContext, previousAnswers, null)
                 : runStagedRequirementAnalysis(user, projectId, taskId, session.modelConfigId(),
                         session.promptTemplateId(), "REQUIREMENT_ANALYSIS", requirementText,
-                        tomSnapshot, semanticContext, previousAnswers, null, null);
+                        tomSnapshot, semanticContext, previousAnswers, null, null,
+                        GenerationDepth.DEEP);
         String clarificationQuestions = staged.clarificationQuestions();
         String analysisResult = staged.analysisResult();
         String testPoints = staged.testPoints();
@@ -310,18 +306,9 @@ public class RequirementAnalysisService {
         ProjectSemanticContextService.BuildResult semanticContext =
                 buildSemanticEvidence(projectId, semanticInput.toString().trim(), tomMode);
 
-        // 4. Ensure internal task exists
-        Long taskId = session.executionTaskId();
-        if (taskId == null) {
-            var taskCmd = new GenerationTaskService.CreateTaskCommand(
-                    session.sessionTitle(), previousAnalysis.requirementText(), session.modelConfigId(),
-                    session.promptTemplateId(), null,
-                    session.promptSnapshot(), tomMode.name(), tomMode.usesTom()
-            );
-            var task = taskService.create(projectId, taskCmd, user);
-            taskId = task.id();
-            sessionService.updateExecutionTaskId(sessionId, taskId);
-        }
+        // 4. Use the real async analysis task when present. Do not manufacture a legacy
+        // GENERATION task for a re-analysis round.
+        Long taskId = activeAnalysisTaskId(session);
 
         String previousContext = buildPreviousAnalysisContext(previousAnalysis);
         StagedAnalysisResult staged = scopeOnly
@@ -332,7 +319,8 @@ public class RequirementAnalysisService {
                 : runStagedRequirementAnalysis(user, projectId, taskId, session.modelConfigId(),
                         session.promptTemplateId(), "REQUIREMENT_ANALYSIS_INCREMENTAL",
                         previousAnalysis.requirementText(), tomSnapshot, semanticContext,
-                        supplementContent, previousContext, sessionId);
+                        supplementContent, previousContext, sessionId,
+                        GenerationDepth.DEEP);
         String clarificationQuestions = staged.clarificationQuestions();
         String analysisResult = staged.analysisResult();
         String testPoints = staged.testPoints();
@@ -379,6 +367,20 @@ public class RequirementAnalysisService {
         var latest = getLatestAnalysis(sessionId);
         if (latest == null) return false;
         return latest.subVersion() < MAX_INCREMENTAL_VERSIONS;
+    }
+
+    private Long activeAnalysisTaskId(GenerationSessionRecord session) {
+        if (session == null || session.executionTaskId() == null) {
+            return null;
+        }
+        try {
+            String taskType = taskService.get(session.projectId(), session.executionTaskId()).taskType();
+            return taskType != null && taskType.toUpperCase().startsWith("REQUIREMENT_ANALYSIS")
+                    ? session.executionTaskId()
+                    : null;
+        } catch (RuntimeException ignored) {
+            return null;
+        }
     }
 
     private String buildIncrementalSystemPrompt() {
@@ -635,10 +637,12 @@ public class RequirementAnalysisService {
                 buildSemanticEvidence(session.projectId(), analysis.requirementText(), tomMode);
         String taskPrefix = "REQUIREMENT_SCOPE_CONTINUATION";
         CoverageStageResult coverageStage = runCoverageMatrixStages(user, session.projectId(), taskId,
-                session.modelConfigId(), session.promptTemplateId(), taskPrefix, generationCore, semanticContext);
+                session.modelConfigId(), session.promptTemplateId(), taskPrefix, generationCore, semanticContext,
+                GenerationDepth.DEEP);
         TestPointStageResult testPointStage = runTestPointStages(user, session.projectId(), taskId,
                 session.modelConfigId(), session.promptTemplateId(), taskPrefix, analysis.requirementText(),
-                generationCore, coverageStage.coverageMatrix(), semanticContext);
+                generationCore, coverageStage.coverageMatrix(), semanticContext,
+                GenerationDepth.DEEP);
         String testPoints = initializeTestPointScopes(testPointStage.testPoints(), generationCore);
         Map<String, Object> downstream = readJsonObject(mergeStagedAnalysis(generationCore,
                 coverageStage.coverageMatrix(), coverageStage.matrixReviewNotes(),
@@ -715,6 +719,10 @@ public class RequirementAnalysisService {
         if ("GENERATED".equals(analysis.status())) {
             throw new BusinessException("该分析已生成用例，不能再修改测试点范围；请重新分析后确认新范围");
         }
+        if ("NEED_CONFIRMATION".equals(analysis.status()) && hasUsableEmbeddedCasePlan(analysis.analysisResult())) {
+            promoteCasePlanReadyAnalysis(sessionId, analysis);
+            throw new BusinessException("该分析已完成用例编排计划，请直接输入“生成用例”，不要重复确认测试点范围");
+        }
         if (!Set.of("NEED_TEST_POINT_SCOPE_CONFIRMATION", "NEED_CONFIRMATION", "TEST_POINT_SCOPE_CONFIRMED")
                 .contains(analysis.status())) {
             throw new BusinessException("当前分析不处于测试点范围确认阶段");
@@ -786,9 +794,9 @@ public class RequirementAnalysisService {
     public RequirementAnalysisRecord continueAfterTestPointScope(Long sessionId, int version, CurrentUser user) {
         GenerationSessionRecord session = sessionService.get(null, sessionId, user);
         RequirementAnalysisRecord analysis = getAnalysis(sessionId, version);
+        analysis = promoteCasePlanReadyAnalysis(sessionId, analysis);
         if (!"TEST_POINT_SCOPE_CONFIRMED".equals(analysis.status())) {
-            if (extractEmbeddedCasePlan(analysis.analysisResult()) != null
-                    && !"[]".equals(extractEmbeddedCasePlan(analysis.analysisResult()))) return analysis;
+            if (hasUsableEmbeddedCasePlan(analysis.analysisResult())) return analysis;
             throw new BusinessException("请先确认测试点范围，再生成用例编排计划");
         }
         String generationCore = buildGenerationCore(analysis.analysisResult());
@@ -804,18 +812,33 @@ public class RequirementAnalysisService {
                 buildSemanticEvidence(session.projectId(), analysis.requirementText(), tomMode);
         CaseCompositionStageResult composition = runCaseCompositionStage(user, session.projectId(), taskId,
                 session.modelConfigId(), session.promptTemplateId(), "TEST_POINT_SCOPE_CONTINUATION",
-                analysis.requirementText(), generationCore, coverageMatrix, generationPoints, semanticContext);
+                analysis.requirementText(), generationCore, coverageMatrix, generationPoints, semanticContext,
+                GenerationDepth.DEEP);
         Object casePlan = readJsonValue(composition.casePlan());
         result.put("case_plan", casePlan == null ? List.of() : casePlan);
         String merged = toJson(result);
-        jdbcTemplate.update("UPDATE requirement_analysis SET analysis_result = ?, status = 'NEED_CONFIRMATION', updated_at = ? WHERE id = ? AND status = 'TEST_POINT_SCOPE_CONFIRMED'",
+        jdbcTemplate.update("UPDATE requirement_analysis SET analysis_result = ?, status = 'CONFIRMED', updated_at = ? WHERE id = ? AND status = 'TEST_POINT_SCOPE_CONFIRMED'",
                 merged, timeProvider.now(), analysis.id());
         sessionService.updateStage(sessionId, "WAITING_USER_CONFIRMATION");
         sessionService.updateStatus(sessionId, "ACTIVE");
         messageService.appendAssistantMessage(sessionId,
-                "已按确认后的测试点范围生成用例编排计划。请检查节点用例和完整流程，确认后输入“生成用例”。",
+                "已按确认后的测试点范围生成用例编排计划。请检查节点用例和完整流程；如无问题，输入“生成用例”选择生成强度并创建草稿。",
                 merged, "REQUIREMENT_ANALYSIS_RESULT", analysis.version());
         return getAnalysis(sessionId, version);
+    }
+
+    private RequirementAnalysisRecord promoteCasePlanReadyAnalysis(Long sessionId, RequirementAnalysisRecord analysis) {
+        if (analysis == null || !hasUsableEmbeddedCasePlan(analysis.analysisResult())) return analysis;
+        if ("CONFIRMED".equals(analysis.status()) || "GENERATED".equals(analysis.status())) return analysis;
+        if (!Set.of("NEED_CONFIRMATION", "TEST_POINT_SCOPE_CONFIRMED").contains(analysis.status())) return analysis;
+        jdbcTemplate.update("""
+                UPDATE requirement_analysis
+                SET status = 'CONFIRMED', updated_at = ?
+                WHERE id = ? AND status IN ('NEED_CONFIRMATION', 'TEST_POINT_SCOPE_CONFIRMED')
+                """, timeProvider.now(), analysis.id());
+        sessionService.updateStage(sessionId, "WAITING_USER_CONFIRMATION");
+        sessionService.updateStatus(sessionId, "ACTIVE");
+        return getAnalysis(sessionId, analysis.version());
     }
 
     private static String normalizeScopeDisposition(String value) {
@@ -1170,7 +1193,8 @@ public class RequirementAnalysisService {
         sessionService.updateStatus(sessionId, "GENERATING");
 
         try {
-            String generationRequirementText = buildGenerationRequirementText(latest);
+            GenerationDepth selectedDepth = GenerationDepth.resolve(session.generationDepth());
+            String generationRequirementText = buildGenerationRequirementText(latest, selectedDepth);
             String generationPromptSnapshot = buildGenerationPromptSnapshot(session.promptSnapshot(), latest);
 
             // Create internal generation task
@@ -1182,7 +1206,8 @@ public class RequirementAnalysisService {
                     latest.version(),
                     generationPromptSnapshot,
                     TomUsageMode.resolve(session.tomMode(), session.useMiniTom()).name(),
-                    TomUsageMode.resolve(session.tomMode(), session.useMiniTom()).usesTom()
+                    TomUsageMode.resolve(session.tomMode(), session.useMiniTom()).usesTom(),
+                    session.generationDepth()
             );
             var task = taskService.create(session.projectId(), cmd, user);
             sessionService.updateExecutionTaskId(sessionId, task.id());
@@ -1214,18 +1239,23 @@ public class RequirementAnalysisService {
         if (latest == null) {
             throw new BusinessException("没有分析结果");
         }
+        latest = promoteCasePlanReadyAnalysis(sessionId, latest);
+        if (!"CONFIRMED".equals(latest.status()) && !"GENERATED".equals(latest.status())) {
+            throw new BusinessException("当前分析还未完成确认，不能启动用例生成。请先完成需求澄清、范围确认和测试点范围确认。");
+        }
         return new SessionGenerationPlan(
                 session.projectId(),
                 session.id(),
                 latest.id(),
                 latest.version(),
                 session.sessionTitle(),
-                buildGenerationRequirementText(latest),
+                buildGenerationRequirementText(latest, GenerationDepth.resolve(session.generationDepth())),
                 buildGenerationPromptSnapshot(session.promptSnapshot(), latest),
                 session.modelConfigId(),
                 session.promptTemplateId(),
                 TomUsageMode.resolve(session.tomMode(), session.useMiniTom()).usesTom(),
-                TomUsageMode.resolve(session.tomMode(), session.useMiniTom()).name()
+                TomUsageMode.resolve(session.tomMode(), session.useMiniTom()).name(),
+                GenerationDepth.resolve(session.generationDepth()).name()
         );
     }
 
@@ -1265,13 +1295,22 @@ public class RequirementAnalysisService {
     public record SessionGenerationPlan(Long projectId, Long sessionId, Long analysisId, int analysisVersion,
                                         String taskName, String requirementText, String promptSnapshot,
                                         Long modelConfigId, Long promptTemplateId, boolean useMiniTom,
-                                        String tomMode) {
+                                        String tomMode, String generationDepth) {
+        public SessionGenerationPlan(Long projectId, Long sessionId, Long analysisId, int analysisVersion,
+                                     String taskName, String requirementText, String promptSnapshot,
+                                     Long modelConfigId, Long promptTemplateId, boolean useMiniTom,
+                                     String tomMode) {
+            this(projectId, sessionId, analysisId, analysisVersion, taskName, requirementText,
+                    promptSnapshot, modelConfigId, promptTemplateId, useMiniTom, tomMode,
+                    GenerationDepth.defaultDepth().name());
+        }
+
         public SessionGenerationPlan(Long projectId, Long sessionId, Long analysisId, int analysisVersion,
                                      String taskName, String requirementText, String promptSnapshot,
                                      Long modelConfigId, Long promptTemplateId, boolean useMiniTom) {
             this(projectId, sessionId, analysisId, analysisVersion, taskName, requirementText,
                     promptSnapshot, modelConfigId, promptTemplateId, useMiniTom,
-                    useMiniTom ? "PROJECT_AND_SYSTEM_TOM" : "DIRECT");
+                    useMiniTom ? "PROJECT_AND_SYSTEM_TOM" : "DIRECT", GenerationDepth.defaultDepth().name());
         }
     }
 
@@ -1487,11 +1526,20 @@ public class RequirementAnalysisService {
     }
 
     static String buildGenerationRequirementText(RequirementAnalysisRecord analysis) {
+        return buildGenerationRequirementText(analysis, GenerationDepth.defaultDepth());
+    }
+
+    /**
+     * Analysis assets are always generated at full depth. This is a per-task projection,
+     * so a user's generation choice never erases reusable coverage or becomes a default.
+     */
+    static String buildGenerationRequirementText(RequirementAnalysisRecord analysis, GenerationDepth generationDepth) {
         requireConfirmedScopeReview(analysis);
-        String generationPoints = filterTestPointsByScope(analysis.testPoints(), Set.of(SCOPE_GENERATE));
+        GenerationDepth effectiveDepth = generationDepth == null ? GenerationDepth.defaultDepth() : generationDepth;
+        String generationPoints = filterTestPointsByScopeAndDepth(analysis.testPoints(), Set.of(SCOPE_GENERATE), effectiveDepth);
         String referencePoints = filterTestPointsByScope(analysis.testPoints(), Set.of(SCOPE_REFERENCE_ONLY));
-        String effectiveCasePlan = filterCasePlanByScope(
-                extractEmbeddedCasePlan(analysis.analysisResult()), analysis.testPoints());
+        String effectiveCasePlan = filterCasePlanByScopeAndDepth(
+                extractEmbeddedCasePlan(analysis.analysisResult()), analysis.testPoints(), effectiveDepth);
         StringBuilder sb = new StringBuilder();
         appendSection(sb, "原始需求", analysis.requirementText(), MAX_GENERATION_REQUIREMENT_CHARS);
         appendSection(sb, "已确认/最新需求分析", buildGenerationAnalysisContext(analysis.analysisResult()), MAX_GENERATION_ANALYSIS_CHARS);
@@ -1502,6 +1550,7 @@ public class RequirementAnalysisService {
         appendSection(sb, "TOM/项目证据快照", analysis.tomScopeSnapshot(), MAX_GENERATION_TOM_CHARS);
         appendSection(sb, "澄清答案", analysis.clarificationAnswers(), MAX_GENERATION_SMALL_SECTION_CHARS);
         appendSection(sb, "生成假设", analysis.assumptions(), MAX_GENERATION_SMALL_SECTION_CHARS);
+        appendSection(sb, "本次生成强度", effectiveDepth.displayName() + "：" + effectiveDepth.promptPolicy(), 2_000);
         sb.append("""
 
                 ## 用例生成约束
@@ -1543,9 +1592,41 @@ public class RequirementAnalysisService {
                 .filter(point -> acceptedScopes.contains(scopeOf(point))).toList());
     }
 
+    private static String filterTestPointsByScopeAndDepth(String testPointsJson, Set<String> acceptedScopes,
+                                                           GenerationDepth generationDepth) {
+        return writeStaticJson(parseObjectList(testPointsJson).stream()
+                .filter(point -> acceptedScopes.contains(scopeOf(point)))
+                .filter(point -> generationDepth.enables(testPointDimension(point)))
+                .toList());
+    }
+
+    private static String testPointDimension(Map<String, Object> point) {
+        String dimension = String.valueOf(point.getOrDefault("test_dimension", "")).trim().toLowerCase(Locale.ROOT);
+        if (!dimension.isBlank()) return dimension;
+        String pointType = String.valueOf(point.getOrDefault("point_type", "")).trim().toUpperCase(Locale.ROOT);
+        return switch (pointType) {
+            case "MAIN_FLOW", "FUNCTIONAL" -> "main_flow";
+            case "BRANCH" -> "branch";
+            case "BOUNDARY", "BOUNDARY_SUPPLEMENT" -> "boundary";
+            case "EXCEPTION", "NEGATIVE" -> "exception";
+            case "STATE", "STATE_TRANSITION" -> "state";
+            case "DATA", "DATA_CONSISTENCY" -> "data";
+            case "AUTH", "PERMISSION" -> "auth";
+            case "CONCURRENCY" -> "concurrency";
+            case "IDEMPOTENT", "IDEMPOTENCY" -> "idempotent";
+            default -> "main_flow";
+        };
+    }
+
     private static String filterCasePlanByScope(String casePlanJson, String testPointsJson) {
+        return filterCasePlanByScopeAndDepth(casePlanJson, testPointsJson, GenerationDepth.DEEP);
+    }
+
+    private static String filterCasePlanByScopeAndDepth(String casePlanJson, String testPointsJson,
+                                                         GenerationDepth generationDepth) {
         List<Map<String, Object>> points = parseObjectList(testPointsJson);
         Set<String> generated = points.stream().filter(point -> SCOPE_GENERATE.equals(scopeOf(point)))
+                .filter(point -> generationDepth.enables(testPointDimension(point)))
                 .map(point -> String.valueOf(point.getOrDefault("id", ""))).filter(id -> !id.isBlank()).collect(Collectors.toSet());
         Set<String> availableAsContext = points.stream().filter(point -> !SCOPE_EXCLUDED.equals(scopeOf(point)))
                 .map(point -> String.valueOf(point.getOrDefault("id", ""))).filter(id -> !id.isBlank()).collect(Collectors.toSet());
@@ -1614,6 +1695,17 @@ public class RequirementAnalysisService {
             return value.isMissingNode() || value.isNull() ? null : objectMapper.writeValueAsString(value);
         } catch (Exception ignored) {
             return null;
+        }
+    }
+
+    static boolean hasUsableEmbeddedCasePlan(String analysisResult) {
+        String embedded = extractEmbeddedCasePlan(analysisResult);
+        if (embedded == null || embedded.isBlank() || "[]".equals(embedded)) return false;
+        try {
+            var node = objectMapper.readTree(embedded);
+            return node.isArray() && node.size() > 0;
+        } catch (Exception ignored) {
+            return false;
         }
     }
 
@@ -1828,7 +1920,8 @@ public class RequirementAnalysisService {
                                                              ProjectSemanticContextService.BuildResult semanticContext,
                                                              String userSupplement,
                                                              String previousContext,
-                                                             Long sessionId) {
+                                                             Long sessionId,
+                                                             GenerationDepth generationDepth) {
         CoreStageResult coreStage = runCoreAnalysisStages(user, projectId, taskId, modelConfigId, promptTemplateId,
                 taskTypePrefix, requirementText, tomSnapshot, semanticContext, userSupplement, previousContext);
         String coreOutput = coreStage.rawOutput();
@@ -1843,21 +1936,21 @@ public class RequirementAnalysisService {
         requireTestUnits(coreJson);
 
         CoverageStageResult coverageStage = runCoverageMatrixStages(user, projectId, taskId, modelConfigId,
-                promptTemplateId, taskTypePrefix, coreJson, semanticContext);
+                promptTemplateId, taskTypePrefix, coreJson, semanticContext, generationDepth);
         String matrixOutput = coverageStage.rawOutput();
         String coverageMatrix = coverageStage.coverageMatrix();
         String matrixReviewNotes = coverageStage.matrixReviewNotes();
 
         TestPointStageResult testPointStage = runTestPointStages(
                 user, projectId, taskId, modelConfigId, promptTemplateId, taskTypePrefix,
-                requirementText, coreJson, coverageMatrix, semanticContext);
+                requirementText, coreJson, coverageMatrix, semanticContext, generationDepth);
         String testPointOutput = testPointStage.rawOutput();
         String testPoints = initializeTestPointScopes(testPointStage.testPoints(), coreJson);
         String skillSelfCheck = testPointStage.skillSelfCheck();
 
         CaseCompositionStageResult caseCompositionStage = runCaseCompositionStage(
                 user, projectId, taskId, modelConfigId, promptTemplateId, taskTypePrefix,
-                requirementText, coreJson, coverageMatrix, testPoints, semanticContext);
+                requirementText, coreJson, coverageMatrix, testPoints, semanticContext, generationDepth);
 
         String mergedAnalysis = mergeStagedAnalysis(coreJson, coverageMatrix, matrixReviewNotes, skillSelfCheck,
                 caseCompositionStage.casePlan());
@@ -2319,7 +2412,8 @@ public class RequirementAnalysisService {
                                                          Long promptTemplateId,
                                                          String taskTypePrefix,
                                                          String coreJson,
-                                                         ProjectSemanticContextService.BuildResult semanticContext) {
+                                                         ProjectSemanticContextService.BuildResult semanticContext,
+                                                         GenerationDepth generationDepth) {
         List<Map<String, Object>> atoms = requirementAtoms(coreJson);
         List<Map<String, Object>> units = testUnits(coreJson);
         List<Map<String, Object>> mergedRows = new ArrayList<>();
@@ -2331,10 +2425,11 @@ public class RequirementAnalysisService {
             int currentNode = nodeIndex++;
             String output = invokeAnalysisStage(user, projectId, taskId, modelConfigId, promptTemplateId,
                     taskTypePrefix + "_COVERAGE_MATRIX_BATCH_" + currentNode,
-                    buildCoverageMatrixSystemPrompt(),
-                    buildCoverageMatrixBatchUserPrompt(batch, semanticContext),
+                    buildCoverageMatrixSystemPrompt(generationDepth),
+                    buildCoverageMatrixBatchUserPrompt(batch, semanticContext, generationDepth),
                     ANALYSIS_MAX_TOKENS, "覆盖矩阵（批次 " + currentNode + " / " + batch.size() + " 个主题）");
             String matrix = normalizeCoverageMatrixJson(normalizeJsonColumn(extractJson(output, "coverage_matrix")));
+            matrix = applyGenerationDepthToCoverageMatrix(matrix, generationDepth);
             List<Map<String, Object>> batchRows = readJsonObjectList(matrix);
             Map<String, Object> nodeRecord = new LinkedHashMap<>();
             nodeRecord.put("initial", safeJsonValue(output));
@@ -2349,8 +2444,8 @@ public class RequirementAnalysisService {
                     String repairOutput = invokeAnalysisStage(user, projectId, taskId, modelConfigId, promptTemplateId,
                             taskTypePrefix + "_COVERAGE_MATRIX_REPAIR_" + currentNode + "_"
                                     + safeStageSuffix(item.unitId()) + "_" + repairAttempt,
-                            buildCoverageMatrixSystemPrompt(),
-                            buildCoverageMatrixBatchUserPrompt(List.of(item), semanticContext)
+                            buildCoverageMatrixSystemPrompt(generationDepth),
+                            buildCoverageMatrixBatchUserPrompt(List.of(item), semanticContext, generationDepth)
                                     + "\n\n上一次结果存在以下确定问题：" + problems
                                     + "\n请返回本主题的完整替换矩阵，不要只返回差异。逐条覆盖本节点 R*；"
                                     + "不得用空数组、只有 count 的对象或通用模板占位。",
@@ -2359,6 +2454,7 @@ public class RequirementAnalysisService {
                                     + MAX_COVERAGE_REPAIR_ATTEMPTS + " 次）");
                     String repairedMatrix = normalizeCoverageMatrixJson(
                             normalizeJsonColumn(extractJson(repairOutput, "coverage_matrix")));
+                    repairedMatrix = applyGenerationDepthToCoverageMatrix(repairedMatrix, generationDepth);
                     unitRows = coverageRowsForWorkItem(readJsonObjectList(repairedMatrix), item, true);
                     nodeRecord.put("repair_" + item.unitId() + "_" + repairAttempt,
                             safeJsonValue(repairOutput));
@@ -2371,7 +2467,7 @@ public class RequirementAnalysisService {
                                     + describeCoverageProblems(unitRows, item)
                                     + "。未使用通用模板伪造测试点，可从当前失败节点继续。");
                 }
-                addCoverageRows(mergedRows, unitRows, item);
+                addCoverageRows(mergedRows, applyGenerationDepthToCoverageRows(unitRows, generationDepth), item);
             }
             appendJsonValues(reviewNotes, normalizeJsonColumn(extractJson(output, "matrix_review_notes")));
             nodeRecord.put("test_unit_refs", batch.stream().map(CoverageWorkItem::unitId).toList());
@@ -2380,6 +2476,19 @@ public class RequirementAnalysisService {
         }
         requireCoverageMatrixCoversAllWorkItems(mergedRows, workItems);
         return new CoverageStageResult(toJson(rawStages), toJson(mergedRows), toJson(distinctJsonValues(reviewNotes)));
+    }
+
+    @SuppressWarnings("unused")
+    private CoverageStageResult runCoverageMatrixStages(CurrentUser user,
+                                                         Long projectId,
+                                                         Long taskId,
+                                                         Long modelConfigId,
+                                                         Long promptTemplateId,
+                                                         String taskTypePrefix,
+                                                         String coreJson,
+                                                         ProjectSemanticContextService.BuildResult semanticContext) {
+        return runCoverageMatrixStages(user, projectId, taskId, modelConfigId, promptTemplateId,
+                taskTypePrefix, coreJson, semanticContext, GenerationDepth.defaultDepth());
     }
 
     private List<CoverageWorkItem> buildCoverageWorkItems(List<Map<String, Object>> units,
@@ -2525,7 +2634,6 @@ public class RequirementAnalysisService {
     private String normalizeCoverageMatrixJson(String matrixJson) {
         List<Map<String, Object>> rows = readJsonObjectList(matrixJson);
         if (rows == null) return matrixJson;
-        List<String> dimensions = List.of("main_flow", "branch", "boundary", "exception", "state", "data", "auth", "concurrency", "idempotent");
         Map<String, List<String>> aliases = Map.ofEntries(
                 Map.entry("main_flow", List.of("mainFlow", "mainflow", "happy_path")),
                 Map.entry("branch", List.of("branches", "condition", "conditions")),
@@ -2541,7 +2649,7 @@ public class RequirementAnalysisService {
         for (Map<String, Object> source : rows) {
             Map<String, Object> row = new LinkedHashMap<>(source);
             int total = 0;
-            for (String dimension : dimensions) {
+            for (String dimension : COVERAGE_DIMENSIONS) {
                 Object value = row.get(dimension);
                 if (!(value instanceof Map<?, ?>)) {
                     for (String alias : aliases.getOrDefault(dimension, List.of())) {
@@ -2581,6 +2689,39 @@ public class RequirementAnalysisService {
         return toJson(normalizedRows);
     }
 
+    private String applyGenerationDepthToCoverageMatrix(String matrixJson, GenerationDepth generationDepth) {
+        List<Map<String, Object>> rows = readJsonObjectList(matrixJson);
+        if (rows == null) return matrixJson;
+        return toJson(applyGenerationDepthToCoverageRows(rows, generationDepth));
+    }
+
+    private List<Map<String, Object>> applyGenerationDepthToCoverageRows(List<Map<String, Object>> rows,
+                                                                          GenerationDepth generationDepth) {
+        if (rows == null || rows.isEmpty()) return List.of();
+        Set<String> enabled = generationDepth.enabledDimensionSet();
+        List<Map<String, Object>> filtered = new ArrayList<>();
+        for (Map<String, Object> source : rows) {
+            Map<String, Object> row = new LinkedHashMap<>(source);
+            int total = 0;
+            for (String dimension : COVERAGE_DIMENSIONS) {
+                Object value = row.get(dimension);
+                if (!enabled.contains(dimension)) {
+                    row.put(dimension, Map.of("count", 0, "items", List.of()));
+                    continue;
+                }
+                List<String> items = matrixItems(value);
+                int count = Math.max(numberValue(value instanceof Map<?, ?> map ? map.get("count") : null), items.size());
+                row.put(dimension, Map.of("count", count, "items", items));
+                total += count;
+            }
+            row.put("generation_depth", generationDepth.name());
+            row.put("enabled_dimensions", generationDepth.enabledDimensions());
+            row.put("total", total);
+            filtered.add(row);
+        }
+        return filtered;
+    }
+
     /**
      * 按需求原子分批拆测试点。批次大小只控制一次模型调用的技术负载，
      * 不作为测试点或用例的完成数量上限。
@@ -2594,7 +2735,8 @@ public class RequirementAnalysisService {
                                                      String requirementText,
                                                      String coreJson,
                                                      String coverageMatrix,
-                                                     ProjectSemanticContextService.BuildResult semanticContext) {
+                                                     ProjectSemanticContextService.BuildResult semanticContext,
+                                                     GenerationDepth generationDepth) {
         List<Map<String, Object>> atoms = requirementAtoms(coreJson);
         List<Map<String, Object>> units = testUnits(coreJson);
         List<Map<String, Object>> matrixRows = readJsonObjectList(coverageMatrix);
@@ -2609,7 +2751,8 @@ public class RequirementAnalysisService {
             String unitId = String.valueOf(row.get("test_unit_ref"));
             if (unitId.isBlank() || "null".equals(unitId)) continue;
             List<String> requirementRefs = toStringList(row.get("requirement_refs"));
-            for (String dimension : List.of("main_flow", "branch", "boundary", "exception", "state", "data", "auth", "concurrency", "idempotent")) {
+            for (String dimension : COVERAGE_DIMENSIONS) {
+                if (!generationDepth.enables(dimension)) continue;
                 Object rawDimension = row.get(dimension);
                 if (!(rawDimension instanceof Map<?, ?> detail) || numberValue(detail.get("count")) <= 0) continue;
                 List<String> items = toStringList(detail.get("items"));
@@ -3019,7 +3162,8 @@ public class RequirementAnalysisService {
                                                                  String coreJson,
                                                                  String coverageMatrix,
                                                                  String testPoints,
-                                                                 ProjectSemanticContextService.BuildResult semanticContext) {
+                                                                 ProjectSemanticContextService.BuildResult semanticContext,
+                                                                 GenerationDepth generationDepth) {
         List<Map<String, Object>> allPoints = readJsonObjectList(testPoints);
         List<Map<String, Object>> units = testUnits(coreJson);
         if (allPoints == null || allPoints.isEmpty() || units.isEmpty()) {
@@ -3035,14 +3179,19 @@ public class RequirementAnalysisService {
         // sufficient evidence to turn every edge into an end-to-end case.  Let the compact
         // flow selector choose only real business closures; node plans remain complete if the
         // optional selector cannot produce a trustworthy result.
-        try {
+        if (generationDepth.allowsFlowComposition()) {
+            try {
             List<Map<String, Object>> flowPlans = runFlowCompositionStage(user, projectId, taskId, modelConfigId,
                     promptTemplateId, taskTypePrefix, coreJson, units, allPoints);
             plans.addAll(flowPlans);
             rawStages.put("flow_plan_count", flowPlans.size());
-        } catch (LlmRuntimeException ex) {
+            } catch (LlmRuntimeException ex) {
             rawStages.put("flow_selection", Map.of("status", "SKIPPED", "error_code", ex.errorCode().name(),
                     "message", ex.getMessage()));
+            }
+        } else {
+            rawStages.put("flow_selection", Map.of("status", "DISABLED_BY_GENERATION_DEPTH",
+                    "generation_depth", generationDepth.name()));
         }
         assignStableCasePlanIds(plans);
         String casePlan = mergeCasePlanJson(toJson(List.of()), toJson(plans));
@@ -3052,6 +3201,7 @@ public class RequirementAnalysisService {
                     "用例编排未覆盖测试点：" + String.join("、", missing));
         }
         rawStages.put("mode", "OBJECTIVE_CLUSTERED_CASE_COMPOSITION");
+        rawStages.put("generation_depth", generationDepth.name());
         rawStages.put("test_point_count", allPoints.size());
         rawStages.put("node_focused_plan_count", plans.stream()
                 .filter(plan -> "NODE_FOCUSED".equals(String.valueOf(plan.get("case_strategy")))).count());
@@ -4185,11 +4335,18 @@ public class RequirementAnalysisService {
                 .toList();
     }
 
-    private String buildCoverageMatrixSystemPrompt() {
+    private String buildCoverageMatrixSystemPrompt(GenerationDepth generationDepth) {
+        String disabledDimensions = COVERAGE_DIMENSIONS.stream()
+                .filter(dimension -> !generationDepth.enables(dimension))
+                .collect(Collectors.joining("、"));
         return """
                 你是测试覆盖矩阵设计器。当前只执行第 2 阶段：覆盖矩阵。
                 你必须严格基于第 1 阶段 analysis，不得改写需求理解、业务域、需求类型和影响范围。
                 如果你认为第 1 阶段理解有问题，只能写入 matrix_review_notes，不能自行改成另一个需求。
+
+                当前生成强度：%s。
+                启用维度：%s。
+                禁用维度：%s。禁用维度必须返回 {"count":0,"items":[]}，不得偷塞内容。
 
                 请严格返回 JSON 对象：
                 {
@@ -4217,21 +4374,39 @@ public class RequirementAnalysisService {
                 2. 每个维度 items 最多 3 条短句；每条只写“测试条件/动作 + 可验证结果”，不重复背景、原因、影响和套话。
                 3. count 必须等于 items 数量；不能只返回数字，也不能用一条长段落代替多个独立场景。
                 4. 覆盖矩阵是后续生成用例的主依据，不是风险问题汇总。已出现的流程、字段、角色、状态、接口、同步、批量、时间或权限信息，必须映射到对应维度，不能全部塞进“异常”。
-                5. 除非 analysis 明确没有相应信息，否则不得只返回“主流程 + 异常”两个维度；有审批/状态时必须给 STATE，有角色/权限时必须给 AUTH，有字段/同步/接口时必须给 DATA，有时间/数量/有效期时必须给 BOUNDARY。
+                5. 只在启用维度内映射覆盖项：BASIC 只映射主流程、关键异常和高风险点；STANDARD 映射主流程、分支、边界、异常、权限；DEEP 才映射状态、数据、并发、幂等、恢复和组合路径相关维度。
                 6. requirement_refs 只能引用当前 test_unit_ref 输入中真实存在的 R 编号；不得遗漏当前主题的需求原子。
                 7. 不生成测试点和测试用例。
-                """;
+                8. 除非当前生成强度明确禁用对应维度，否则不得只返回“主流程 + 异常”两个维度。
+                """.formatted(generationDepth.promptPolicy(),
+                String.join("、", generationDepth.enabledDimensions()),
+                disabledDimensions.isBlank() ? "无" : disabledDimensions);
+    }
+
+    @SuppressWarnings("unused")
+    private String buildCoverageMatrixSystemPrompt() {
+        return buildCoverageMatrixSystemPrompt(GenerationDepth.defaultDepth());
     }
 
     private String buildCoverageMatrixBatchUserPrompt(List<CoverageWorkItem> workItems,
-                                                       ProjectSemanticContextService.BuildResult semanticContext) {
+                                                       ProjectSemanticContextService.BuildResult semanticContext,
+                                                       GenerationDepth generationDepth) {
         List<Map<String, Object>> payload = workItems.stream().map(CoverageWorkItem::promptPayload).toList();
         StringBuilder sb = new StringBuilder();
         sb.append("## 当前覆盖工作项（逐项输出，不可遗漏）\n").append(toJson(payload));
         appendSemanticPrompt(sb, semanticContext);
-        sb.append("\n\n每个 test_unit_ref 至少返回一行 coverage_matrix；每个 R* 必须进入对应主题的 requirement_refs，")
-                .append("并映射到实际覆盖维度。文字保持紧凑，但不得删除独立规则、状态、字段、权限、接口或边界场景。");
+        sb.append("\n\n生成强度：").append(generationDepth.name()).append("，")
+                .append(generationDepth.promptPolicy()).append("\n")
+                .append("每个 test_unit_ref 至少返回一行 coverage_matrix；每个 R* 必须进入对应主题的 requirement_refs，")
+                .append("并映射到当前强度允许的实际覆盖维度。文字保持紧凑，但不得删除可验证场景；")
+                .append("超出当前强度的细节只保留在需求原子，不展开成矩阵项。");
         return sb.toString();
+    }
+
+    @SuppressWarnings("unused")
+    private String buildCoverageMatrixBatchUserPrompt(List<CoverageWorkItem> workItems,
+                                                       ProjectSemanticContextService.BuildResult semanticContext) {
+        return buildCoverageMatrixBatchUserPrompt(workItems, semanticContext, GenerationDepth.defaultDepth());
     }
 
     private String buildCoverageMatrixForUnitUserPrompt(Map<String, Object> unit,

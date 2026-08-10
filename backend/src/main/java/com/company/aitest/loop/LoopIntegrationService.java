@@ -26,7 +26,7 @@ public class LoopIntegrationService {
     private void recordAndAutoCluster(Long projectId, String eventType, String sourceStage,
                                        String rawInput, String normalizedIssue, String suggestedAssetType,
                                        String sourceRefsJson, CurrentUser user) {
-        loopService.recordEvent(projectId, eventType, sourceStage, rawInput, normalizedIssue,
+        loopService.recordEventIfAbsent(projectId, eventType, sourceStage, rawInput, normalizedIssue,
                 suggestedAssetType, sourceRefsJson, user);
         try {
             loopService.autoCluster(projectId);
@@ -120,6 +120,29 @@ public class LoopIntegrationService {
         String normalizedIssue = issues.isEmpty() ? "中文化检查通过" : String.join("; ", issues);
         recordAndAutoCluster(projectId, "LOCALIZATION_CHECK", sourceStage,
                 truncate(content, 2000), normalizedIssue, "WIKI", null, user);
+    }
+
+    /** Human approval/rejection is a first-class Loop signal, but never activates an asset by itself. */
+    public void onCaseFeedback(Long projectId, Long caseId, String sourceType, String action,
+                               String caseTitle, CurrentUser user) {
+        if (!isEnabled() || projectId == null || caseId == null) return;
+        String refs = "{\"sourceType\":\"" + safe(sourceType) + "\",\"caseId\":" + caseId
+                + ",\"action\":\"" + safe(action) + "\"}";
+        recordAndAutoCluster(projectId, "HUMAN_CASE_FEEDBACK", "CASE_" + safe(action),
+                truncate(caseTitle, 2000), "人工" + action + "用例：" + safe(caseTitle), "WIKI", refs, user);
+    }
+
+    public void onTraceCorrectionFeedback(Long projectId, Long correctionId, String action,
+                                          String summary, CurrentUser user) {
+        if (!isEnabled() || projectId == null || correctionId == null) return;
+        String refs = "{\"sourceType\":\"TRACE_CORRECTION\",\"correctionId\":" + correctionId
+                + ",\"action\":\"" + safe(action) + "\"}";
+        recordAndAutoCluster(projectId, "HUMAN_TRACE_FEEDBACK", "TRACE_CORRECTION_" + safe(action),
+                truncate(summary, 2000), "人工" + action + "轨迹修正：" + safe(summary), "WIKI", refs, user);
+    }
+
+    private String safe(String value) {
+        return value == null ? "" : value.replace("\\", "\\\\").replace("\"", "\\\"");
     }
 
     private int countOccurrences(String text, String sub) {

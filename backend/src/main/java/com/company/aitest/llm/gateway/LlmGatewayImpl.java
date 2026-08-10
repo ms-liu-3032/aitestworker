@@ -254,7 +254,8 @@ public class LlmGatewayImpl implements LlmGateway {
         if (req.stage() == null) return "stage 必填";
         if (req.modelConfigId() == null) return "modelConfigId 必填";
         // 无任务上下文的阶段允许 taskId 为空
-        if (req.taskId() == null && req.stage() != LlmStage.TOM_SEMANTIC_MATCH
+        if (req.taskId() == null && req.stage() != LlmStage.REQ_CLARIFY
+                && req.stage() != LlmStage.TOM_SEMANTIC_MATCH
                 && req.stage() != LlmStage.MINI_TOM_EXTRACTION) {
             return "taskId 必填";
         }

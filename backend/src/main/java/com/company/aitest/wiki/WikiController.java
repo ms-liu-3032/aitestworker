@@ -90,6 +90,19 @@ public class WikiController {
         return ApiResponse.ok(updated);
     }
 
+    @PatchMapping("/packs/{packId}")
+    public ApiResponse<WikiPackRecord> updatePack(@PathVariable Long packId,
+                                                   @RequestBody Map<String, String> body,
+                                                   Authentication auth) {
+        CurrentUser user = (CurrentUser) auth.getPrincipal();
+        WikiPackRecord pack = wikiService.getPack(packId);
+        ensureCanManagePack(pack, user);
+        WikiPackRecord updated = wikiService.updatePackMetadata(packId, body.get("name"), body.get("description"), user);
+        operationLogService.recordQuietly(user.id(), "WIKI_EDIT_PACK", "WIKI_PACK", packId,
+                "{\"projectId\":" + pack.projectId() + "}");
+        return ApiResponse.ok(updated);
+    }
+
     @PatchMapping("/packs/{packId}/review")
     public ApiResponse<WikiPackRecord> reviewPack(@PathVariable Long packId,
                                                    @RequestBody Map<String, String> body,
@@ -158,6 +171,19 @@ public class WikiController {
         WikiEntryRecord entry = wikiService.reviewEntry(entryId, reviewStatus, user);
         operationLogService.recordQuietly(user.id(), "WIKI_REVIEW_ENTRY", "WIKI_ENTRY", entryId,
                 "{\"reviewStatus\":\"" + safe(reviewStatus) + "\"}");
+        return ApiResponse.ok(entry);
+    }
+
+    @PatchMapping("/entries/{entryId}")
+    public ApiResponse<WikiEntryRecord> updateEntry(@PathVariable Long entryId,
+                                                     @RequestBody Map<String, String> body,
+                                                     Authentication auth) {
+        CurrentUser user = (CurrentUser) auth.getPrincipal();
+        WikiPackRecord pack = wikiService.getPackForEntry(entryId);
+        ensureCanManagePack(pack, user);
+        WikiEntryRecord entry = wikiService.updateEntry(entryId, body.get("entryType"), body.get("title"), body.get("content"), user);
+        operationLogService.recordQuietly(user.id(), "WIKI_EDIT_ENTRY", "WIKI_ENTRY", entryId,
+                "{\"packId\":" + pack.id() + "}");
         return ApiResponse.ok(entry);
     }
 

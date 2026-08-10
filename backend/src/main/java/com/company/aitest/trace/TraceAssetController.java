@@ -6,12 +6,15 @@ import java.util.Map;
 import com.company.aitest.common.ApiResponse;
 import com.company.aitest.common.CurrentUser;
 import com.company.aitest.generation.session.GenerationCaseLibraryService;
+import com.company.aitest.audit.OperationLogService;
+import com.company.aitest.project.ProjectAccessService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotNull;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -23,10 +26,15 @@ import org.springframework.web.bind.annotation.RestController;
 public class TraceAssetController {
     private final TraceAssetService traceAssetService;
     private final TraceSummaryService traceSummaryService;
+    private final ProjectAccessService projectAccessService;
+    private final OperationLogService operationLogService;
 
-    public TraceAssetController(TraceAssetService traceAssetService, TraceSummaryService traceSummaryService) {
+    public TraceAssetController(TraceAssetService traceAssetService, TraceSummaryService traceSummaryService,
+                                ProjectAccessService projectAccessService, OperationLogService operationLogService) {
         this.traceAssetService = traceAssetService;
         this.traceSummaryService = traceSummaryService;
+        this.projectAccessService = projectAccessService;
+        this.operationLogService = operationLogService;
     }
 
     /**
@@ -86,6 +94,50 @@ public class TraceAssetController {
         return ApiResponse.ok(traceAssetService.listToolTemplates(groupId, user));
     }
 
+    @GetMapping("/projects/{projectId}/skills")
+    public ApiResponse<List<TestSkillTemplateRecord>> listProjectSkills(@PathVariable Long projectId,
+                                                                          Authentication authentication) {
+        CurrentUser user = (CurrentUser) authentication.getPrincipal();
+        projectAccessService.ensureCanAccess(projectId, user);
+        return ApiResponse.ok(traceAssetService.listProjectSkillTemplates(projectId, user));
+    }
+
+    @PatchMapping("/projects/{projectId}/skills/{skillId}")
+    public ApiResponse<TestSkillTemplateRecord> updateProjectSkill(@PathVariable Long projectId,
+                                                                     @PathVariable Long skillId,
+                                                                     @RequestBody Map<String, String> body,
+                                                                     Authentication authentication) {
+        CurrentUser user = (CurrentUser) authentication.getPrincipal();
+        projectAccessService.ensureCanManageProject(projectId, user);
+        TestSkillTemplateRecord result = traceAssetService.updateProjectSkillTemplate(projectId, skillId,
+                body.get("skillName"), body.get("applicableScene"), body.get("flowSteps"), user);
+        operationLogService.recordQuietly(user.id(), "PROJECT_ASSET_EDIT_SKILL", "TEST_SKILL_TEMPLATE", skillId,
+                "{\"projectId\":" + projectId + "}");
+        return ApiResponse.ok(result);
+    }
+
+    @GetMapping("/projects/{projectId}/tools")
+    public ApiResponse<List<TestToolTemplateRecord>> listProjectTools(@PathVariable Long projectId,
+                                                                        Authentication authentication) {
+        CurrentUser user = (CurrentUser) authentication.getPrincipal();
+        projectAccessService.ensureCanAccess(projectId, user);
+        return ApiResponse.ok(traceAssetService.listProjectToolTemplates(projectId, user));
+    }
+
+    @PatchMapping("/projects/{projectId}/tools/{toolId}")
+    public ApiResponse<TestToolTemplateRecord> updateProjectTool(@PathVariable Long projectId,
+                                                                   @PathVariable Long toolId,
+                                                                   @RequestBody Map<String, String> body,
+                                                                   Authentication authentication) {
+        CurrentUser user = (CurrentUser) authentication.getPrincipal();
+        projectAccessService.ensureCanManageProject(projectId, user);
+        TestToolTemplateRecord result = traceAssetService.updateProjectToolTemplate(projectId, toolId,
+                body.get("toolName"), body.get("operationSteps"), user);
+        operationLogService.recordQuietly(user.id(), "PROJECT_ASSET_EDIT_TOOL", "TEST_TOOL_TEMPLATE", toolId,
+                "{\"projectId\":" + projectId + "}");
+        return ApiResponse.ok(result);
+    }
+
     @PostMapping("/groups/{groupId}/cases:generate")
     public ApiResponse<List<TraceGeneratedCaseRecord>> generateCases(@PathVariable Long groupId,
                                                                      @Valid @RequestBody GenerateCasesRequest request,
@@ -101,6 +153,17 @@ public class TraceAssetController {
                                                                           Authentication authentication) {
         CurrentUser user = (CurrentUser) authentication.getPrincipal();
         return ApiResponse.ok(traceAssetService.listGeneratedCases(projectId, user));
+    }
+
+    /**
+     * 项目资产页读取已确认轨迹摘要。不能复用管理员资产接口，否则普通项目成员会因权限看到空列表。
+     */
+    @GetMapping("/projects/{projectId}/summaries")
+    public ApiResponse<List<TraceSummaryRecord>> listProjectSummaries(@PathVariable Long projectId,
+                                                                        Authentication authentication) {
+        CurrentUser user = (CurrentUser) authentication.getPrincipal();
+        projectAccessService.ensureCanAccess(projectId, user);
+        return ApiResponse.ok(traceSummaryService.listConfirmedByProject(projectId));
     }
 
     @GetMapping("/projects/{projectId}/generated-cases/page")

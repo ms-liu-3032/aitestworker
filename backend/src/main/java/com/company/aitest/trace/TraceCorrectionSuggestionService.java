@@ -33,6 +33,7 @@ import com.company.aitest.semantic.ProjectSemanticContextService;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
@@ -58,6 +59,7 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class TraceCorrectionSuggestionService {
     private static final int MAX_PROMPT_EVENTS = 24;
+    private final com.company.aitest.loop.LoopIntegrationService loopIntegrationService;
     private static final int MAX_PROMPT_RULES = 8;
     private static final int MAX_PROMPT_STEPS = 20;
     private static final int MAX_STEP_CANDIDATES = 8;
@@ -123,11 +125,22 @@ public class TraceCorrectionSuggestionService {
     private final List<TraceRulePack> traceRulePacks;
     private final ProjectSemanticContextService semanticContextService;
 
+    TraceCorrectionSuggestionService(JdbcClient jdbc, JdbcTemplate jdbcTemplate,
+                                     TimeProvider timeProvider, TraceDataService traceDataService,
+                                     LlmGateway llmGateway,
+                                     ProjectSemanticContextService semanticContextService,
+                                     List<TraceRulePack> traceRulePacks) {
+        this(jdbc, jdbcTemplate, timeProvider, traceDataService, llmGateway, semanticContextService,
+                traceRulePacks, null);
+    }
+
+    @Autowired
     public TraceCorrectionSuggestionService(JdbcClient jdbc, JdbcTemplate jdbcTemplate,
                                             TimeProvider timeProvider, TraceDataService traceDataService,
                                             LlmGateway llmGateway,
                                             ProjectSemanticContextService semanticContextService,
-                                            List<TraceRulePack> traceRulePacks) {
+                                            List<TraceRulePack> traceRulePacks,
+                                            com.company.aitest.loop.LoopIntegrationService loopIntegrationService) {
         this.jdbc = jdbc;
         this.jdbcTemplate = jdbcTemplate;
         this.timeProvider = timeProvider;
@@ -135,6 +148,7 @@ public class TraceCorrectionSuggestionService {
         this.llmGateway = llmGateway;
         this.semanticContextService = semanticContextService;
         this.traceRulePacks = traceRulePacks;
+        this.loopIntegrationService = loopIntegrationService;
         this.objectMapper = new ObjectMapper();
     }
 
@@ -294,7 +308,9 @@ public class TraceCorrectionSuggestionService {
                 where id = ?
                 """, finalValue, finalStepText, user.id(), now, now, id);
         learnPatternFromConfirmedSuggestions(existing.traceGroupId(), user);
-        return getById(id);
+        TraceCorrectionCandidateRecord confirmed = getById(id);
+        publishLoopFeedback(confirmed, "CONFIRMED", user);
+        return confirmed;
     }
 
     @Transactional
@@ -362,7 +378,9 @@ public class TraceCorrectionSuggestionService {
                 now,
                 "CONFIRMED");
         learnPatternFromConfirmedSuggestions(traceGroupId, user);
-        return getById(id);
+        TraceCorrectionCandidateRecord confirmed = getById(id);
+        publishLoopFeedback(confirmed, "CONFIRMED", user);
+        return confirmed;
     }
 
     String manualStepCandidateValue(String sourceText, String operationType, String normalizedStepText) {
@@ -400,7 +418,16 @@ public class TraceCorrectionSuggestionService {
                     updated_at = ?
                 where id = ?
                 """, user.id(), now, reason, now, id);
-        return getById(id);
+        TraceCorrectionCandidateRecord rejected = getById(id);
+        publishLoopFeedback(rejected, "REJECTED", user);
+        return rejected;
+    }
+
+    private void publishLoopFeedback(TraceCorrectionCandidateRecord record, String action, CurrentUser user) {
+        if (loopIntegrationService != null && record != null) {
+            loopIntegrationService.onTraceCorrectionFeedback(record.projectId(), record.id(), action,
+                    firstNonBlank(record.confirmedValue(), record.candidateValue(), record.candidateReason()), user);
+        }
     }
 
     /**

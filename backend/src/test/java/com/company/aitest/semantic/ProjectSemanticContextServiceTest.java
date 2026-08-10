@@ -1,6 +1,7 @@
 package com.company.aitest.semantic;
 
 import java.time.LocalDateTime;
+import java.sql.ResultSet;
 import java.util.List;
 import java.util.Set;
 
@@ -10,6 +11,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowCallbackHandler;
 import org.springframework.jdbc.core.RowMapper;
+import org.mockito.ArgumentCaptor;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -66,6 +68,33 @@ class ProjectSemanticContextServiceTest {
         assertTrue(prompt.contains("【项目语义包（自动沉淀）】"));
         assertTrue(prompt.contains("步骤模板"));
         assertTrue(prompt.contains("选择时间“{{visit_time}}”"));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void patternSignals_shouldSelectCandidateValueUsedAsSourceFallback() throws Exception {
+        JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
+        ProjectSemanticContextService contextService = new ProjectSemanticContextService(jdbcTemplate);
+        when(jdbcTemplate.query(anyString(), any(RowMapper.class), anyLong())).thenAnswer(invocation -> {
+            RowMapper<ProjectSemanticContextService.SemanticSignal> mapper = invocation.getArgument(1);
+            ResultSet rs = mock(ResultSet.class);
+            when(rs.getString("source_text")).thenReturn("");
+            when(rs.getString("candidate_value")).thenReturn("点击提交");
+            when(rs.getString("confirmed_step_text")).thenReturn("点击保存");
+            when(rs.getString("confirmed_value")).thenReturn("");
+            when(rs.getString("operation_type")).thenReturn("REWRITE");
+            return List.of(mapper.mapRow(rs, 0));
+        });
+
+        var method = ProjectSemanticContextService.class.getDeclaredMethod("loadPatternSignals", Long.class);
+        method.setAccessible(true);
+        List<ProjectSemanticContextService.SemanticSignal> signals =
+                (List<ProjectSemanticContextService.SemanticSignal>) method.invoke(contextService, 9L);
+
+        ArgumentCaptor<String> sql = ArgumentCaptor.forClass(String.class);
+        verify(jdbcTemplate).query(sql.capture(), any(RowMapper.class), eq(9L));
+        assertTrue(sql.getValue().contains("candidate_value"));
+        assertEquals("原始：点击提交；采用：点击保存", signals.get(0).summary());
     }
 
     @Test

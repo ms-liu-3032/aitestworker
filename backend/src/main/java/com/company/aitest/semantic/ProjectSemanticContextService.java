@@ -393,7 +393,7 @@ public class ProjectSemanticContextService {
 
     private List<SemanticSignal> loadPatternSignals(Long projectId) {
         return jdbcTemplate.query("""
-                select source_text, confirmed_step_text, confirmed_value, operation_type, updated_at
+                select source_text, candidate_value, confirmed_step_text, confirmed_value, operation_type, updated_at
                 from trace_correction_candidate
                 where project_id = ? and status = 'CONFIRMED' and correction_scope = 'STEP'
                 order by confirmed_at desc, id desc

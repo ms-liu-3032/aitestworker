@@ -8,6 +8,8 @@ import {
   listWikiEntries,
   reviewWikiEntry,
   reviewWikiPack,
+  updateWikiEntry,
+  updateWikiPack,
   updateWikiPackStatus,
   type Project,
   type WikiEntry,
@@ -38,6 +40,11 @@ export default function WikiAssetManager() {
   const [showCreate, setShowCreate] = useState(false);
   const [newPack, setNewPack] = useState({ projectId: '', scope: 'REUSABLE', name: '', description: '' });
   const [newEntry, setNewEntry] = useState({ entryType: 'RULE', title: '', content: '' });
+  const [viewingEntry, setViewingEntry] = useState<WikiEntry | null>(null);
+  const [editingPack, setEditingPack] = useState<WikiPack | null>(null);
+  const [editingEntry, setEditingEntry] = useState<WikiEntry | null>(null);
+  const [editPack, setEditPack] = useState({ name: '', description: '' });
+  const [editEntry, setEditEntry] = useState({ entryType: 'RULE', title: '', content: '' });
 
   const projectNames = useMemo(() => new Map(projects.map(project => [project.id, project.projectName])), [projects]);
 
@@ -134,6 +141,36 @@ export default function WikiAssetManager() {
     }
   };
 
+  const openPackEditor = (pack: WikiPack) => {
+    setEditPack({ name: pack.name, description: pack.description || '' });
+    setEditingPack(pack);
+  };
+
+  const savePackEdit = async () => {
+    if (!editingPack || !editPack.name.trim()) return;
+    try {
+      replacePack(await updateWikiPack(editingPack.id, editPack.name.trim(), editPack.description.trim()));
+      setEditingPack(null);
+      showToast('知识包已保存，已回到待审核状态');
+    } catch (error: any) { showToast(error.message || '保存知识包失败', 'error'); }
+  };
+
+  const openEntryEditor = (entry: WikiEntry) => {
+    setEditEntry({ entryType: entry.entryType, title: entry.title, content: entry.content });
+    setEditingEntry(entry);
+  };
+
+  const saveEntryEdit = async () => {
+    if (!editingEntry || !editEntry.title.trim() || !editEntry.content.trim()) return;
+    try {
+      const updated = await updateWikiEntry(editingEntry.id, editEntry.entryType, editEntry.title.trim(), editEntry.content.trim());
+      setEntries(current => current.map(entry => entry.id === updated.id ? updated : entry));
+      setViewingEntry(current => current?.id === updated.id ? updated : current);
+      setEditingEntry(null);
+      showToast('知识条目已保存，已回到待审核状态');
+    } catch (error: any) { showToast(error.message || '保存知识条目失败', 'error'); }
+  };
+
   const filteredPacks = useMemo(() => {
     const term = keyword.trim().toLowerCase();
     if (!term) return packs;
@@ -199,8 +236,9 @@ export default function WikiAssetManager() {
           <div className="rounded-xl border border-gray-200 bg-white p-4">
             {!selectedPack ? <div className="py-20 text-center text-sm text-gray-400">选择左侧知识包查看和审核条目</div> : <>
               <div className="flex flex-wrap items-start justify-between gap-3 border-b border-gray-100 pb-3">
-                <div><div className="font-semibold text-gray-900">{selectedPack.name}</div><div className="mt-1 text-xs text-gray-500">{wikiScopeLabel(selectedPack.scope)} · {statusLabel(selectedPack.status)} · {statusLabel(selectedPack.reviewStatus)}</div></div>
+                <div><div className="font-semibold text-gray-900">{selectedPack.name}</div><div className="mt-1 text-xs text-gray-500">{wikiScopeLabel(selectedPack.scope)} · {statusLabel(selectedPack.status)} · {statusLabel(selectedPack.reviewStatus)}</div><div className="mt-1 text-xs text-gray-500">{selectedPack.description || '暂无用途说明'}</div></div>
                 <div className="flex flex-wrap gap-2">
+                  <button onClick={() => openPackEditor(selectedPack)} className="text-xs font-medium text-slate-700">编辑知识包</button>
                   {selectedPack.reviewStatus === 'PENDING' && <><button onClick={() => void changePackReviewStatus('APPROVED')} className="text-xs font-medium text-green-700">审核通过</button><button onClick={() => void changePackReviewStatus('REJECTED')} className="text-xs font-medium text-red-600">驳回</button></>}
                   {selectedPack.reviewStatus === 'APPROVED' && selectedPack.status !== 'ACTIVE' && <button onClick={() => void changePackStatus('ACTIVE')} className="rounded bg-slate-900 px-2.5 py-1.5 text-xs font-semibold text-white">激活</button>}
                   {selectedPack.status === 'ACTIVE' && <button onClick={() => void changePackStatus('INACTIVE')} className="text-xs font-medium text-amber-700">停用</button>}
@@ -217,9 +255,9 @@ export default function WikiAssetManager() {
               <div className="max-h-[460px] space-y-2 overflow-y-auto pr-1">
                 {entries.map(entry => <div key={entry.id} className="rounded-lg border border-gray-100 bg-gray-50 p-3">
                   <div className="flex flex-wrap items-center gap-2"><span className="text-xs font-semibold text-gray-900">{entry.title}</span><span className="rounded bg-white px-1.5 py-0.5 text-[10px] text-gray-600">{wikiEntryTypeLabel(entry.entryType)}</span><span className={`rounded px-1.5 py-0.5 text-[10px] ${badgeTone[entry.reviewStatus] || 'bg-gray-100 text-gray-600'}`}>{statusLabel(entry.reviewStatus)}</span><span className="rounded bg-white px-1.5 py-0.5 text-[10px] text-gray-600">{statusLabel(entry.effectiveStatus)}</span></div>
-                  <div className="mt-2 whitespace-pre-wrap text-xs text-gray-600">{entry.content}</div>
+                  <div className="mt-2 line-clamp-3 whitespace-pre-wrap text-xs text-gray-600">{entry.content}</div>
                   {entry.sourceRefsJson && <details className="mt-2 text-xs text-gray-500"><summary className="cursor-pointer">查看来源追溯</summary><pre className="mt-1 max-h-32 overflow-auto whitespace-pre-wrap rounded bg-white p-2">{entry.sourceRefsJson}</pre></details>}
-                  {entry.reviewStatus === 'PENDING' && <div className="mt-2 flex gap-3"><button onClick={() => void changeEntryReviewStatus(entry, 'APPROVED')} className="text-xs font-medium text-green-700">通过</button><button onClick={() => void changeEntryReviewStatus(entry, 'REJECTED')} className="text-xs font-medium text-red-600">驳回</button></div>}
+                  <div className="mt-2 flex flex-wrap gap-3"><button onClick={() => setViewingEntry(entry)} className="text-xs font-medium text-slate-700">查看详情</button><button onClick={() => openEntryEditor(entry)} className="text-xs font-medium text-blue-700">编辑</button>{entry.reviewStatus === 'PENDING' && <><button onClick={() => void changeEntryReviewStatus(entry, 'APPROVED')} className="text-xs font-medium text-green-700">通过</button><button onClick={() => void changeEntryReviewStatus(entry, 'REJECTED')} className="text-xs font-medium text-red-600">驳回</button></>}</div>
                 </div>)}
                 {!entries.length && <div className="py-10 text-center text-xs text-gray-400">暂无知识条目</div>}
               </div>
@@ -227,6 +265,12 @@ export default function WikiAssetManager() {
           </div>
         </div>
       )}
+
+      {viewingEntry && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onClick={() => setViewingEntry(null)}><div className="max-h-[85vh] w-full max-w-2xl overflow-y-auto rounded-lg bg-white p-5 shadow-xl" onClick={event => event.stopPropagation()}><div className="flex items-start justify-between gap-4"><div><h3 className="text-base font-semibold text-gray-900">{viewingEntry.title}</h3><div className="mt-1 text-xs text-gray-500">{wikiEntryTypeLabel(viewingEntry.entryType)} · {statusLabel(viewingEntry.reviewStatus)} · {statusLabel(viewingEntry.effectiveStatus)}</div></div><button onClick={() => setViewingEntry(null)} className="text-sm text-gray-500">关闭</button></div><div className="mt-4 whitespace-pre-wrap rounded-lg bg-gray-50 p-3 text-sm leading-6 text-gray-700">{viewingEntry.content}</div><div className="mt-4 text-xs font-medium text-gray-600">来源追溯</div><pre className="mt-1 max-h-44 overflow-auto whitespace-pre-wrap rounded-lg bg-gray-50 p-3 text-xs text-gray-600">{viewingEntry.sourceRefsJson || '该条目暂无来源追溯信息。'}</pre><div className="mt-4 flex justify-end gap-2"><button onClick={() => openEntryEditor(viewingEntry)} className="rounded-lg bg-slate-900 px-3 py-2 text-xs font-semibold text-white">编辑</button><button onClick={() => setViewingEntry(null)} className="px-3 py-2 text-xs text-gray-500">关闭</button></div></div></div>}
+
+      {editingPack && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onClick={() => setEditingPack(null)}><div className="w-full max-w-md rounded-lg bg-white p-5 shadow-xl" onClick={event => event.stopPropagation()}><h3 className="text-base font-semibold text-gray-900">编辑知识包</h3><p className="mt-1 text-xs text-amber-700">保存后知识包将回到待审核、草稿状态，需重新审核后才可激活。</p><label className="mt-4 block text-xs text-gray-600">名称</label><input value={editPack.name} onChange={event => setEditPack(current => ({ ...current, name: event.target.value }))} className="mt-1 h-9 w-full rounded-lg border border-gray-200 px-3 text-sm" /><label className="mt-3 block text-xs text-gray-600">用途说明</label><textarea value={editPack.description} onChange={event => setEditPack(current => ({ ...current, description: event.target.value }))} rows={4} className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm" /><div className="mt-4 flex justify-end gap-2"><button onClick={() => setEditingPack(null)} className="px-3 py-2 text-xs text-gray-500">取消</button><button onClick={savePackEdit} className="rounded-lg bg-slate-900 px-3 py-2 text-xs font-semibold text-white">保存并重新审核</button></div></div></div>}
+
+      {editingEntry && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onClick={() => setEditingEntry(null)}><div className="max-h-[85vh] w-full max-w-2xl overflow-y-auto rounded-lg bg-white p-5 shadow-xl" onClick={event => event.stopPropagation()}><h3 className="text-base font-semibold text-gray-900">编辑知识条目</h3><p className="mt-1 text-xs text-amber-700">保存后条目会回到待审核并停止参与生成；来源追溯保持不变。</p><label className="mt-4 block text-xs text-gray-600">类型</label><select value={editEntry.entryType} onChange={event => setEditEntry(current => ({ ...current, entryType: event.target.value }))} className="mt-1 h-9 w-full rounded-lg border border-gray-200 px-3 text-sm"><option value="RULE">规则</option><option value="DECISION">决策</option><option value="HISTORY">历史</option><option value="IMPLEMENTATION">实现说明</option><option value="EXCEPTION">例外</option><option value="FAQ">FAQ</option></select><label className="mt-3 block text-xs text-gray-600">标题</label><input value={editEntry.title} onChange={event => setEditEntry(current => ({ ...current, title: event.target.value }))} className="mt-1 h-9 w-full rounded-lg border border-gray-200 px-3 text-sm" /><label className="mt-3 block text-xs text-gray-600">内容</label><textarea value={editEntry.content} onChange={event => setEditEntry(current => ({ ...current, content: event.target.value }))} rows={12} className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm" /><div className="mt-4 flex justify-end gap-2"><button onClick={() => setEditingEntry(null)} className="px-3 py-2 text-xs text-gray-500">取消</button><button onClick={saveEntryEdit} className="rounded-lg bg-slate-900 px-3 py-2 text-xs font-semibold text-white">保存并重新审核</button></div></div></div>}
     </div>
   );
 }

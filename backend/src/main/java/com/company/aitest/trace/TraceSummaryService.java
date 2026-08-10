@@ -84,6 +84,7 @@ public class TraceSummaryService {
     private final ProjectSemanticContextService semanticContextService;
     private final List<TraceRulePack> traceRulePacks;
     private final com.company.aitest.loop.LoopIntegrationService loopIntegrationService;
+    private final com.company.aitest.knowledge.KnowledgeDepositionService knowledgeDepositionService;
 
     public TraceSummaryService(JdbcClient jdbc, JdbcTemplate jdbcTemplate, TimeProvider timeProvider,
                                TraceDataService traceDataService, BrowserTraceGroupService groupService,
@@ -93,7 +94,8 @@ public class TraceSummaryService {
                                TraceCorrectionSuggestionService correctionService,
                                ProjectSemanticContextService semanticContextService,
                                List<TraceRulePack> traceRulePacks,
-                               com.company.aitest.loop.LoopIntegrationService loopIntegrationService) {
+                               com.company.aitest.loop.LoopIntegrationService loopIntegrationService,
+                               com.company.aitest.knowledge.KnowledgeDepositionService knowledgeDepositionService) {
         this.jdbc = jdbc;
         this.jdbcTemplate = jdbcTemplate;
         this.timeProvider = timeProvider;
@@ -106,6 +108,7 @@ public class TraceSummaryService {
         this.semanticContextService = semanticContextService;
         this.traceRulePacks = traceRulePacks;
         this.loopIntegrationService = loopIntegrationService;
+        this.knowledgeDepositionService = knowledgeDepositionService;
         this.objectMapper = new ObjectMapper();
         this.traceStepNormalizer = new TraceStepNormalizer(this.traceRulePacks);
     }
@@ -212,7 +215,9 @@ public class TraceSummaryService {
             throw new BusinessException("该摘要已被其他用户处理，请刷新后查看最新状态");
         }
         refreshSemanticSnapshotQuietly(existing.projectId());
-        return getSummaryById(summaryId);
+        TraceSummaryRecord confirmed = getSummaryById(summaryId);
+        knowledgeDepositionService.depositConfirmedTraceSummary(confirmed, user);
+        return confirmed;
     }
 
     /**

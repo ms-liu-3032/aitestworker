@@ -12,6 +12,7 @@ import com.company.aitest.common.BusinessException;
 import com.company.aitest.common.CurrentUser;
 import com.company.aitest.common.TimeProvider;
 import com.company.aitest.common.TomUsageMode;
+import com.company.aitest.generation.GenerationDepth;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
@@ -32,11 +33,12 @@ public class GenerationSessionService {
     public GenerationSessionRecord create(Long projectId, CreateSessionCommand cmd, CurrentUser user) {
         LocalDateTime now = timeProvider.now();
         TomUsageMode tomMode = parseTomMode(cmd.tomMode(), cmd.useMiniTom());
+        GenerationDepth generationDepth = GenerationDepth.resolve(cmd.generationDepth());
         jdbcTemplate.update("""
-                INSERT INTO generation_session(project_id, session_title, status, model_config_id, prompt_template_id, use_mini_tom, tom_mode, created_by, created_at, updated_at)
-                VALUES (?, ?, 'ACTIVE', ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO generation_session(project_id, session_title, status, model_config_id, prompt_template_id, use_mini_tom, tom_mode, generation_depth, created_by, created_at, updated_at)
+                VALUES (?, ?, 'ACTIVE', ?, ?, ?, ?, ?, ?, ?, ?)
                 """, projectId, cmd.sessionTitle(), cmd.modelConfigId(), cmd.promptTemplateId(),
-                tomMode.usesTom() ? 1 : 0, tomMode.name(), user.id(), now, now);
+                tomMode.usesTom() ? 1 : 0, tomMode.name(), generationDepth.name(), user.id(), now, now);
         Long id = jdbc.sql("SELECT last_insert_id()").query(Long.class).single();
         return get(projectId, id, user);
     }
@@ -92,16 +94,22 @@ public class GenerationSessionService {
 
     public void updateConfig(Long projectId, Long sessionId, Long modelConfigId, Long promptTemplateId, boolean useMiniTom, CurrentUser user) {
         updateConfig(projectId, sessionId, modelConfigId, promptTemplateId,
-                TomUsageMode.resolve(null, useMiniTom).name(), user);
+                TomUsageMode.resolve(null, useMiniTom).name(), null, user);
     }
 
     public void updateConfig(Long projectId, Long sessionId, Long modelConfigId, Long promptTemplateId,
                              String tomModeValue, CurrentUser user) {
+        updateConfig(projectId, sessionId, modelConfigId, promptTemplateId, tomModeValue, null, user);
+    }
+
+    public void updateConfig(Long projectId, Long sessionId, Long modelConfigId, Long promptTemplateId,
+                             String tomModeValue, String generationDepthValue, CurrentUser user) {
         LocalDateTime now = timeProvider.now();
         TomUsageMode tomMode = parseTomMode(tomModeValue, false);
-        jdbcTemplate.update("UPDATE generation_session SET model_config_id = ?, prompt_template_id = ?, use_mini_tom = ?, tom_mode = ?, updated_at = ? WHERE id = ? AND project_id = ? AND created_by = ?",
+        GenerationDepth generationDepth = GenerationDepth.resolve(generationDepthValue);
+        jdbcTemplate.update("UPDATE generation_session SET model_config_id = ?, prompt_template_id = ?, use_mini_tom = ?, tom_mode = ?, generation_depth = ?, updated_at = ? WHERE id = ? AND project_id = ? AND created_by = ?",
                 modelConfigId, promptTemplateId, tomMode.usesTom() ? 1 : 0, tomMode.name(),
-                now, sessionId, projectId, user.id());
+                generationDepth.name(), now, sessionId, projectId, user.id());
     }
 
     private TomUsageMode parseTomMode(String tomModeValue, boolean legacyUseMiniTom) {
@@ -125,6 +133,12 @@ public class GenerationSessionService {
         String normalizedStage = requireSessionStage(stage);
         LocalDateTime now = timeProvider.now();
         jdbcTemplate.update("UPDATE generation_session SET current_stage = ?, updated_at = ? WHERE id = ?", normalizedStage, now, sessionId);
+    }
+
+    /** The selected depth belongs to one generation task, never to a future run. */
+    public void resetGenerationDepthToDefault(Long projectId, Long sessionId, CurrentUser user) {
+        jdbcTemplate.update("UPDATE generation_session SET generation_depth = ?, updated_at = ? WHERE id = ? AND project_id = ? AND created_by = ?",
+                GenerationDepth.defaultDepth().name(), timeProvider.now(), sessionId, projectId, user.id());
     }
 
     static String requireSessionStatus(String status) {
@@ -208,6 +222,7 @@ public class GenerationSessionService {
                 modelConfigId, promptTemplateId,
                 rs.getString("prompt_snapshot"),
                 rs.getInt("use_mini_tom") == 1, rs.getString("tom_mode"),
+                rs.getString("generation_depth"),
                 rs.getInt("latest_analysis_version"),
                 execTaskId, rs.getLong("created_by"),
                 rs.getTimestamp("created_at").toLocalDateTime(),

@@ -529,11 +529,30 @@ public class DirectCaseGenerationService {
             requiredCoverage.stream().filter(item -> !coverage.contains(item))
                     .forEach(item -> missing.add(designId + "/覆盖:" + item));
             String requiredScenario = FunctionalTestDesignPolicy.normalizeScenarioType(str(design.get("scenario_type"), "POSITIVE"));
-            if (!designCases.isEmpty() && designCases.stream().noneMatch(item -> requiredScenario.equals(item.scenarioType()))) {
+            if (!scenarioObligationSatisfied(requiredScenario, designCases, requiredCoverage, coverage)) {
                 missing.add(designId + "/场景:" + requiredScenario);
             }
         }
         return missing;
+    }
+
+    /**
+     * COMBINATION describes a design set, not necessarily one individual draft. For example,
+     * permission coverage is normally fulfilled by separate authorized, unauthorized and data
+     * isolation cases. Requiring one case to carry a synthetic COMBINATION label rejects that
+     * complete and more readable result.
+     */
+    private boolean scenarioObligationSatisfied(String requiredScenario,
+                                                List<CaseDraftInput> designCases,
+                                                List<String> requiredCoverage,
+                                                java.util.Set<String> coveredRequirements) {
+        if (designCases.isEmpty()) {
+            return true;
+        }
+        if ("COMBINATION".equals(requiredScenario) && !requiredCoverage.isEmpty()) {
+            return coveredRequirements.containsAll(requiredCoverage);
+        }
+        return designCases.stream().anyMatch(item -> requiredScenario.equals(item.scenarioType()));
     }
 
     private record CasePlanBatchPayload(List<Map<String, Object>> plans,

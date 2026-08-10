@@ -125,6 +125,7 @@ function makeSession(overrides: Partial<GenerationSession> = {}): GenerationSess
     promptTemplateId: null,
     useMiniTom: true,
     tomMode: 'PROJECT_AND_SYSTEM_TOM',
+    generationDepth: 'STANDARD',
     latestAnalysisVersion: 1,
     executionTaskId: null,
     createdBy: 1,
@@ -184,6 +185,7 @@ function mockPage(session: GenerationSession = makeSession()) {
 beforeEach(() => {
   vi.clearAllMocks()
   mockPage()
+  apiMocks.sendGenerationMessage.mockResolvedValue({ newMessages: [], analysis: makeAnalysis({ status: 'CONFIRMED' }) })
   Element.prototype.scrollIntoView = vi.fn()
 })
 
@@ -281,6 +283,33 @@ describe('AnalysisPanel - 用例编排计划', () => {
     expect(container.innerHTML).toContain('FLOW_COMPOSED')
     expect(container.innerHTML).toContain('CD1')
     expect(container.innerHTML).toContain('提交到通知')
+  })
+
+  it('已有用例编排计划的待确认分析不再展示测试点范围确认入口', () => {
+    const analysis = makeAnalysis({
+      status: 'NEED_CONFIRMATION',
+      testPoints: [
+        { id: 'TP1', title: '提交预约', generation_scope: 'GENERATE' },
+      ],
+      analysisResult: JSON.stringify({
+        requirement_understanding: '提交后审批并通知',
+        test_point_scope_review: { status: 'CONFIRMED' },
+        test_points: [{ id: 'TP1', title: '提交预约', generation_scope: 'GENERATE' }],
+        case_plan: [
+          { id: 'CP1', title: '预约提交用例', case_strategy: 'NODE_FOCUSED', source_test_point_refs: ['TP1'] },
+        ],
+      }),
+    })
+
+    render(<AnalysisPanel
+      analyses={[analysis]}
+      latestAnalysis={analysis}
+      onConfirmTestPointScope={vi.fn()}
+    />)
+
+    expect(screen.getByText('用例编排计划 (1)')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: '确认测试点范围' })).toBeNull()
+    expect(screen.queryByText('待人工确认')).toBeNull()
   })
 })
 
@@ -385,7 +414,7 @@ describe('AnalysisPanel - 测试点标签', () => {
     const analysis = makeAnalysis({
       analysisResult: JSON.stringify({
         requirement_understanding: '测试',
-        evidence_summary: { tom_node_refs: ['请假审批流程'] },
+        evidence_summary: { tom_node_refs: ['业务审批流程'] },
         test_points: [{
           title: '验证预约主流程',
           point_type: 'MAIN_FLOW',
@@ -426,6 +455,7 @@ describe('AnalysisPanel - 测试点标签', () => {
       { id: 'TP2', title: '历史背景说明', scope_recommendation: 'REFERENCE_ONLY', generation_scope: 'REFERENCE_ONLY' },
     ]
     const analysis = makeAnalysis({
+      status: 'NEED_TEST_POINT_SCOPE_CONFIRMATION',
       testPoints: points,
       analysisResult: JSON.stringify({
         requirement_understanding: '测试',
@@ -546,6 +576,7 @@ describe('AnalysisPanel - 测试点标签', () => {
       generation_scope: 'GENERATE',
     }))
     const analysis = makeAnalysis({
+      status: 'NEED_TEST_POINT_SCOPE_CONFIRMATION',
       testPoints: points,
       analysisResult: JSON.stringify({
         requirement_understanding: '测试',
@@ -607,6 +638,65 @@ describe('TestCaseGeneration', () => {
     expect(screen.getByRole('button', { name: '分析中...' })).toBeDisabled()
   })
 
+  it('测试点范围确认后的编排任务不显示成用例生成', async () => {
+    mockPage(makeSession({ executionTaskId: 779, currentStage: 'WAITING_USER_CONFIRMATION' }))
+    apiMocks.getAsyncGenerationTask.mockResolvedValue(makeTask({
+      taskId: 779,
+      taskType: 'TEST_POINT_SCOPE_CONTINUATION',
+      status: 'RUNNING',
+      stages: [{ code: 'CASE_COMPOSITION', label: '编排节点用例与完整流程', status: 'RUNNING' }],
+    }))
+
+    render(<TestCaseGeneration />)
+
+    await waitForSessionLoaded()
+    await screen.findByText('用例编排任务 #779')
+    expect(screen.getAllByText('按确认测试点编排用例').length).toBeGreaterThan(0)
+    expect(screen.getByRole('button', { name: '编排中...' })).toBeDisabled()
+    expect(screen.queryByText('用例生成中')).not.toBeInTheDocument()
+    expect(screen.queryByText('生成任务正在后台执行，完成后会自动刷新右侧草稿箱。')).not.toBeInTheDocument()
+  })
+
+  it('未知异步任务运行中不冒充用例生成', async () => {
+    mockPage(makeSession({ executionTaskId: 780, currentStage: 'WAITING_USER_CONFIRMATION' }))
+    apiMocks.getAsyncGenerationTask.mockResolvedValue(makeTask({
+      taskId: 780,
+      taskType: 'CUSTOM_BACKGROUND_JOB',
+      status: 'RUNNING',
+      stages: [],
+    }))
+
+    render(<TestCaseGeneration />)
+
+    await waitForSessionLoaded()
+    await screen.findByText('异步任务 #780')
+    expect(screen.getAllByText('任务执行中').length).toBeGreaterThan(0)
+    expect(screen.getByRole('button', { name: '执行中...' })).toBeDisabled()
+    expect(screen.queryByText('用例生成中')).not.toBeInTheDocument()
+    expect(screen.queryByText('生成任务正在后台执行，完成后会自动刷新右侧草稿箱。')).not.toBeInTheDocument()
+  })
+
+  it('历史 GENERATION 任务不再当作用例生成任务锁住输入', async () => {
+    mockPage(makeSession({ executionTaskId: 781, currentStage: 'WAITING_USER_CONFIRMATION' }))
+    apiMocks.getAsyncGenerationTask.mockResolvedValue(makeTask({
+      taskId: 781,
+      taskType: 'GENERATION',
+      status: 'PENDING',
+      stages: [{ code: 'CASE_NODE', label: '生成测试用例', status: 'PENDING' }],
+    }))
+
+    render(<TestCaseGeneration />)
+
+    await waitForSessionLoaded()
+    await waitFor(() => {
+    expect(apiMocks.getAsyncGenerationTask).toHaveBeenCalledWith(1, 781)
+    })
+    expect(screen.queryByText('异步用例生成任务 #781')).not.toBeInTheDocument()
+    expect(screen.queryByText('用例生成中')).not.toBeInTheDocument()
+    fireEvent.change(screen.getByPlaceholderText(/输入需求描述/), { target: { value: '补充澄清内容' } })
+    expect(screen.getByRole('button', { name: '发送' })).not.toBeDisabled()
+  })
+
   it('会话刷新恢复到已完成分析任务时释放思考状态并允许继续澄清', async () => {
     const session = makeSession({ currentStage: 'WAITING_REQUIREMENT_SCOPE', latestAnalysisVersion: 1 })
     const completedSession = makeSession({
@@ -646,7 +736,7 @@ describe('TestCaseGeneration', () => {
     fireEvent.click(screen.getByRole('button', { name: '刷新' }))
 
     await waitFor(() => expect(apiMocks.getAsyncGenerationTask).toHaveBeenCalledTimes(2))
-    await screen.findByText(/状态：已成功/)
+    await waitFor(() => expect(screen.queryByText(/状态：已成功/)).not.toBeInTheDocument())
     expect(composer).not.toBeDisabled()
     fireEvent.change(composer, { target: { value: '继续补充另一条澄清' } })
     expect(screen.getByRole('button', { name: '发送' })).not.toBeDisabled()
@@ -662,6 +752,7 @@ describe('TestCaseGeneration', () => {
   it('等待确认阶段补充内容启动异步需求分析，不走同步消息接口', async () => {
     mockPage(makeSession({ currentStage: 'WAITING_USER_CONFIRMATION', latestAnalysisVersion: 1 }))
     apiMocks.startSessionRequirementAnalysisTask.mockResolvedValue(makeTask({ taskType: 'REQUIREMENT_ANALYSIS', status: 'PENDING' }))
+    apiMocks.getAsyncGenerationTask.mockResolvedValue(makeTask({ taskType: 'REQUIREMENT_ANALYSIS', status: 'RUNNING' }))
 
     render(<TestCaseGeneration />)
     await waitForSessionLoaded()
@@ -728,7 +819,7 @@ describe('TestCaseGeneration', () => {
     expect(apiMocks.startSessionRequirementAnalysisTask).not.toHaveBeenCalled()
   })
 
-  it('选择 TOM 时启动异步需求分析任务，不走同步消息接口', async () => {
+  it('选择 TOM 时走会话消息接口，由后端决定分析链路', async () => {
     mockPage(makeSession({ currentStage: 'ASK_TOM_MODE', latestAnalysisVersion: 0 }))
     apiMocks.getLatestGenerationAnalysis.mockResolvedValue(null)
     apiMocks.listGenerationAnalyses.mockResolvedValue([])
@@ -743,12 +834,9 @@ describe('TestCaseGeneration', () => {
     fireEvent.click(screen.getByRole('button', { name: '发送' }))
 
     await waitFor(() => {
-      expect(apiMocks.startSessionRequirementAnalysisTask).toHaveBeenCalledWith(1, 10, '使用 TOM')
+      expect(apiMocks.sendGenerationMessage).toHaveBeenCalledWith(1, 10, '使用 TOM')
     })
-    expect(apiMocks.sendGenerationMessage).not.toHaveBeenCalled()
-    expect(screen.getByRole('button', { name: '分析中...' })).toBeDisabled()
-    expect(screen.getAllByText('需求分析中').length).toBeGreaterThan(0)
-    expect(screen.getByText(/异步需求分析任务 #501/)).toBeInTheDocument()
+    expect(apiMocks.startSessionRequirementAnalysisTask).not.toHaveBeenCalled()
   })
 
   it('已有分析但阶段残留 ASK_TOM_MODE 时生成命令不重复启动需求分析', async () => {
@@ -764,12 +852,13 @@ describe('TestCaseGeneration', () => {
     fireEvent.click(screen.getByRole('button', { name: '发送' }))
 
     await waitFor(() => {
-      expect(apiMocks.startSessionCaseGenerationTask).toHaveBeenCalledWith(1, 10, '生成用例')
+      expect(apiMocks.sendGenerationMessage).toHaveBeenCalledWith(1, 10, '生成用例')
     })
+    expect(apiMocks.startSessionCaseGenerationTask).not.toHaveBeenCalled()
     expect(apiMocks.startSessionRequirementAnalysisTask).not.toHaveBeenCalled()
   })
 
-  it('跳过确认直接生成用例启动异步生成任务，不走同步消息接口', async () => {
+  it('跳过确认直接生成用例先进入生成强度选择，不直接启动异步生成', async () => {
     mockPage(makeSession({ currentStage: 'WAITING_USER_CONFIRMATION', latestAnalysisVersion: 1 }))
     apiMocks.startSessionCaseGenerationTask.mockResolvedValue(makeTask({ status: 'PENDING' }))
 
@@ -780,12 +869,12 @@ describe('TestCaseGeneration', () => {
     fireEvent.click(screen.getByRole('button', { name: '发送' }))
 
     await waitFor(() => {
-      expect(apiMocks.startSessionCaseGenerationTask).toHaveBeenCalledWith(1, 10, '跳过确认直接生成用例')
+      expect(apiMocks.sendGenerationMessage).toHaveBeenCalledWith(1, 10, '跳过确认直接生成用例')
     })
-    expect(apiMocks.sendGenerationMessage).not.toHaveBeenCalled()
+    expect(apiMocks.startSessionCaseGenerationTask).not.toHaveBeenCalled()
   })
 
-  it('输入生成用例时启动会话异步任务，不调用旧同步消息接口', async () => {
+  it('输入生成用例时先请求生成强度，不直接启动异步任务', async () => {
     apiMocks.startSessionCaseGenerationTask.mockResolvedValue(makeTask({ status: 'PENDING' }))
     apiMocks.getAsyncGenerationTask.mockResolvedValue(makeTask({ status: 'RUNNING' }))
 
@@ -797,16 +886,25 @@ describe('TestCaseGeneration', () => {
     })
     fireEvent.click(screen.getByRole('button', { name: '发送' }))
 
-    await screen.findByText('异步生成任务 #501')
-    expect(apiMocks.startSessionCaseGenerationTask).toHaveBeenCalledWith(1, 10, '生成用例')
-    expect(apiMocks.sendGenerationMessage).not.toHaveBeenCalled()
-    expect(screen.getByRole('button', { name: '生成中...' })).toBeDisabled()
-    expect(screen.getAllByText('用例生成中').length).toBeGreaterThan(0)
+    await waitFor(() => {
+      expect(apiMocks.sendGenerationMessage).toHaveBeenCalledWith(1, 10, '生成用例')
+    })
+    expect(apiMocks.startSessionCaseGenerationTask).not.toHaveBeenCalled()
+  })
+
+  it('生成强度不在会话配置中提前选择', async () => {
+    render(<TestCaseGeneration />)
+
+    await waitForSessionLoaded()
+
+    expect(screen.queryByText('生成强度')).not.toBeInTheDocument()
+    expect(screen.queryByText(/基础覆盖：主流程/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/深度覆盖：状态/)).not.toBeInTheDocument()
   })
 
   it('异步需求分析完成后刷新分析结果并提示完成', async () => {
     mockImmediatePolling()
-    mockPage(makeSession({ currentStage: 'ASK_TOM_MODE', latestAnalysisVersion: 0 }))
+    mockPage(makeSession({ currentStage: 'WAITING_USER_CONFIRMATION', latestAnalysisVersion: 1 }))
     apiMocks.getLatestGenerationAnalysis
       .mockResolvedValueOnce(null)
       .mockResolvedValueOnce(makeAnalysis({ status: 'NEED_CONFIRMATION', version: 2 }))
@@ -819,7 +917,7 @@ describe('TestCaseGeneration', () => {
     render(<TestCaseGeneration />)
     await waitForSessionLoaded()
 
-    fireEvent.change(screen.getByPlaceholderText(/输入需求描述/), { target: { value: '使用 TOM' } })
+    fireEvent.change(screen.getByPlaceholderText(/输入需求描述/), { target: { value: '补充规则入口' } })
     fireEvent.click(screen.getByRole('button', { name: '发送' }))
 
     await waitFor(() => {
@@ -871,6 +969,7 @@ describe('TestCaseGeneration', () => {
 
   it('轮询到任务成功后刷新草稿箱并展示完成提示', async () => {
     mockImmediatePolling()
+    mockPage(makeSession({ currentStage: 'ASK_CASE_GENERATION_DEPTH' }))
     apiMocks.startSessionCaseGenerationTask.mockResolvedValue(makeTask({ status: 'PENDING' }))
     apiMocks.getAsyncGenerationTask.mockResolvedValue(makeTask({ status: 'SUCCEEDED', draftCount: 1 }))
     apiMocks.listGenerationDrafts
@@ -882,10 +981,10 @@ describe('TestCaseGeneration', () => {
 
     await waitForSessionLoaded()
     fireEvent.change(screen.getByPlaceholderText('输入需求描述... (Ctrl+Enter 发送，Shift+Enter 换行)'), {
-      target: { value: '生成测试用例' },
+      target: { value: '2' },
     })
     fireEvent.click(screen.getByRole('button', { name: '发送' }))
-    await screen.findByText('异步生成任务 #501')
+    await screen.findByText('异步用例生成任务 #501')
 
     await screen.findByText('用例生成完成')
     await screen.findByText('审批通过生成草稿')
@@ -905,13 +1004,14 @@ describe('TestCaseGeneration', () => {
 
     await waitForSessionLoaded()
     await screen.findByText('用例生成完成')
-    expect(screen.getByText(/状态：已成功/)).toBeInTheDocument()
+    expect(screen.queryByText(/状态：已成功/)).not.toBeInTheDocument()
     expect(screen.queryByText('生成任务正在后台执行，完成后会自动刷新右侧草稿箱。')).not.toBeInTheDocument()
     expect(apiMocks.getAsyncGenerationTask).toHaveBeenCalledTimes(2)
   })
 
   it('任务查询短暂失败后自动重试并恢复为完成状态', async () => {
     mockImmediatePolling()
+    mockPage(makeSession({ currentStage: 'ASK_CASE_GENERATION_DEPTH' }))
     apiMocks.startSessionCaseGenerationTask.mockResolvedValue(makeTask({ status: 'PENDING' }))
     apiMocks.getAsyncGenerationTask
       .mockRejectedValueOnce(new Error('任务状态查询暂时不可用'))
@@ -920,7 +1020,7 @@ describe('TestCaseGeneration', () => {
 
     render(<TestCaseGeneration />)
     await waitForSessionLoaded()
-    fireEvent.change(screen.getByPlaceholderText(/输入需求描述/), { target: { value: '生成用例' } })
+    fireEvent.change(screen.getByPlaceholderText(/输入需求描述/), { target: { value: '2' } })
     fireEvent.click(screen.getByRole('button', { name: '发送' }))
 
     await screen.findByText('用例生成完成')
@@ -931,6 +1031,7 @@ describe('TestCaseGeneration', () => {
 
   it('轮询到任务失败后展示错误并允许重试', async () => {
     mockImmediatePolling()
+    mockPage(makeSession({ currentStage: 'ASK_CASE_GENERATION_DEPTH' }))
     apiMocks.startSessionCaseGenerationTask.mockResolvedValue(makeTask({ status: 'RUNNING' }))
     apiMocks.getAsyncGenerationTask.mockResolvedValue(makeTask({
       status: 'TIMEOUT',
@@ -943,10 +1044,10 @@ describe('TestCaseGeneration', () => {
 
     await waitForSessionLoaded()
     fireEvent.change(screen.getByPlaceholderText('输入需求描述... (Ctrl+Enter 发送，Shift+Enter 换行)'), {
-      target: { value: '重新生成' },
+      target: { value: '2' },
     })
     fireEvent.click(screen.getByRole('button', { name: '发送' }))
-    await screen.findByText('异步生成任务 #501')
+    await screen.findByText('异步用例生成任务 #501')
 
     await screen.findByText('模型响应超时')
     fireEvent.click(screen.getByRole('button', { name: '从失败节点继续' }))

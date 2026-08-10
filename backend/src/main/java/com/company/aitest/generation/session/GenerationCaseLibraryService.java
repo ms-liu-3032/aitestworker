@@ -12,6 +12,7 @@ import java.util.Map;
 import com.company.aitest.common.BusinessException;
 import com.company.aitest.common.CurrentUser;
 import com.company.aitest.common.TimeProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
@@ -22,11 +23,19 @@ public class GenerationCaseLibraryService {
     private final JdbcClient jdbc;
     private final JdbcTemplate jdbcTemplate;
     private final TimeProvider timeProvider;
+    private final com.company.aitest.loop.LoopIntegrationService loopIntegrationService;
 
-    public GenerationCaseLibraryService(JdbcClient jdbc, JdbcTemplate jdbcTemplate, TimeProvider timeProvider) {
+    @Autowired
+    public GenerationCaseLibraryService(JdbcClient jdbc, JdbcTemplate jdbcTemplate, TimeProvider timeProvider,
+                                        com.company.aitest.loop.LoopIntegrationService loopIntegrationService) {
         this.jdbc = jdbc;
         this.jdbcTemplate = jdbcTemplate;
         this.timeProvider = timeProvider;
+        this.loopIntegrationService = loopIntegrationService;
+    }
+
+    GenerationCaseLibraryService(JdbcClient jdbc, JdbcTemplate jdbcTemplate, TimeProvider timeProvider) {
+        this(jdbc, jdbcTemplate, timeProvider, null);
     }
 
     public List<LocalCaseDraftView> list(Long projectId, CurrentUser user) {
@@ -311,7 +320,10 @@ public class GenerationCaseLibraryService {
                 draftId,
                 projectId,
                 user.id());
-        return getOwnedDraft(projectId, draftId, user);
+        LocalCaseDraftView confirmed = getOwnedDraft(projectId, draftId, user);
+        if (loopIntegrationService != null) loopIntegrationService.onCaseFeedback(projectId, Math.abs(draftId), draft.sourceType(), "CONFIRMED",
+                confirmed.caseTitle(), user);
+        return confirmed;
     }
 
     private LocalCaseDraftView updateTraceDraft(Long projectId, Long draftId, UpdateLocalCaseCommand cmd,
@@ -446,6 +458,7 @@ public class GenerationCaseLibraryService {
                 user.id(),
                 now);
         updateGenerationStatus(projectId, draftId, user.id(), "SUBMITTED");
+        if (loopIntegrationService != null) loopIntegrationService.onCaseFeedback(projectId, draftId, draft.sourceType(), "SUBMITTED", draft.caseTitle(), user);
     }
 
     private void submitTraceDraftToFormal(Long projectId, Long draftId, CurrentUser user, LocalCaseDraftView draft) {
@@ -481,6 +494,7 @@ public class GenerationCaseLibraryService {
                 traceSessionId,
                 issueClipId);
         updateTraceStatus(projectId, draftId, user.id(), "SUBMITTED");
+        if (loopIntegrationService != null) loopIntegrationService.onCaseFeedback(projectId, Math.abs(draftId), draft.sourceType(), "SUBMITTED", draft.caseTitle(), user);
     }
 
     private void updateGenerationStatus(Long projectId, Long draftId, Long userId, String status) {

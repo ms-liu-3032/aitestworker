@@ -1,4 +1,5 @@
 import { useState, useCallback } from 'react';
+import { useApp } from '../../context/AppContext';
 
 const tools = [
   { key: 'id-card', name: '大陆身份证', icon: '🪪', desc: '生成随机大陆身份证号码，支持省市区、出生日期、性别、批量生成' },
@@ -36,12 +37,39 @@ function validateIdCard(id: string): { valid: boolean; info: string } {
   return { valid: true, info: `出生日期: ${birthday.substring(0,4)}-${birthday.substring(4,6)}-${birthday.substring(6,8)}，性别: ${gender}` };
 }
 
-function copyText(text: string) {
-  navigator.clipboard.writeText(text);
+async function copyTextToClipboard(text: string): Promise<boolean> {
+  if (!text) return false;
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      // Fallback below handles non-secure origins, denied permissions and embedded WebViews.
+    }
+  }
+
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.setAttribute('readonly', 'true');
+  textarea.style.position = 'fixed';
+  textarea.style.top = '-1000px';
+  textarea.style.opacity = '0';
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+  textarea.setSelectionRange(0, text.length);
+  try {
+    return document.execCommand('copy');
+  } catch {
+    return false;
+  } finally {
+    document.body.removeChild(textarea);
+  }
 }
 
 // ==================== 身份证工具 ====================
 function IdCardTool() {
+  const { showToast } = useApp();
   const [province, setProvince] = useState('110101');
   const [gender, setGender] = useState('random');
   const [count, setCount] = useState(1);
@@ -50,8 +78,13 @@ function IdCardTool() {
   const [validateResult, setValidateResult] = useState('');
   const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
 
-  const handleCopyItem = (text: string, idx?: number) => {
-    navigator.clipboard.writeText(text);
+  const handleCopy = async (text: string, idx?: number) => {
+    const copied = await copyTextToClipboard(text);
+    if (!copied) {
+      showToast('复制失败，请手动复制', 'error');
+      return;
+    }
+    showToast('已复制');
     if (idx !== undefined) { setCopiedIdx(idx); setTimeout(() => setCopiedIdx(null), 1500); }
   };
 
@@ -101,12 +134,12 @@ function IdCardTool() {
         <div className="bg-gray-50 border border-gray-200 rounded-lg p-3">
           <div className="mb-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <span className="text-xs text-gray-400">生成结果（{results.length}条）</span>
-            <button onClick={() => copyText(results.join('\n'))} className="text-xs text-blue-600 hover:text-blue-700">复制全部</button>
+            <button onClick={() => void handleCopy(results.join('\n'))} className="text-xs text-blue-600 hover:text-blue-700">复制全部</button>
           </div>
           {results.map((r, i) => (
             <div key={i} className="group flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
               <span className="break-all font-mono text-sm text-gray-900">{r}</span>
-              <button onClick={() => handleCopyItem(r, i)} className="text-xs text-gray-400 hover:text-blue-600 opacity-0 group-hover:opacity-100 transition-opacity">
+              <button onClick={() => void handleCopy(r, i)} className="text-xs text-gray-400 hover:text-blue-600 opacity-0 group-hover:opacity-100 transition-opacity">
                 {copiedIdx === i ? '✓' : '复制'}
               </button>
             </div>
@@ -127,12 +160,18 @@ function IdCardTool() {
 
 // ==================== 时间戳工具 ====================
 function TimestampTool() {
+  const { showToast } = useApp();
   const [mode, setMode] = useState<'current' | 'ts2date' | 'date2ts'>('current');
   const [tsInput, setTsInput] = useState('');
   const [dateInput, setDateInput] = useState('');
   const [result, setResult] = useState('');
 
   const now = Math.floor(Date.now() / 1000);
+
+  const handleCopy = async (text: string) => {
+    const copied = await copyTextToClipboard(text);
+    showToast(copied ? '已复制' : '复制失败，请手动复制', copied ? 'success' : 'error');
+  };
 
   const handleModeChange = (newMode: 'current' | 'ts2date' | 'date2ts') => {
     setMode(newMode);
@@ -167,7 +206,7 @@ function TimestampTool() {
             <div className="text-xs text-gray-400 mb-1">当前时间戳（秒级）</div>
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <div className="break-all text-2xl font-mono font-bold text-gray-900">{now}</div>
-              <button onClick={() => copyText(String(now))} className="text-xs text-blue-600 hover:text-blue-700">复制</button>
+              <button onClick={() => void handleCopy(String(now))} className="text-xs text-blue-600 hover:text-blue-700">复制</button>
             </div>
             <div className="text-sm text-gray-500 mt-2">{new Date(now * 1000).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}</div>
           </div>
@@ -175,7 +214,7 @@ function TimestampTool() {
             <div className="text-xs text-gray-400 mb-1">当前时间戳（毫秒级）</div>
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <div className="break-all text-lg font-mono font-bold text-gray-900">{Date.now()}</div>
-              <button onClick={() => copyText(String(Date.now()))} className="text-xs text-blue-600 hover:text-blue-700">复制</button>
+              <button onClick={() => void handleCopy(String(Date.now()))} className="text-xs text-blue-600 hover:text-blue-700">复制</button>
             </div>
           </div>
         </div>
@@ -196,7 +235,7 @@ function TimestampTool() {
         <div className="bg-gray-50 border border-gray-200 rounded-lg p-3">
           <div className="mb-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <span className="text-xs text-gray-400">转换结果</span>
-            <button onClick={() => copyText(result)} className="text-xs text-blue-600 hover:text-blue-700">复制全部</button>
+            <button onClick={() => void handleCopy(result)} className="text-xs text-blue-600 hover:text-blue-700">复制全部</button>
           </div>
           <pre className="text-sm font-mono text-gray-900 whitespace-pre-wrap">{result}</pre>
         </div>
@@ -207,6 +246,7 @@ function TimestampTool() {
 
 // ==================== JSON 格式化 ====================
 function JsonFormatter() {
+  const { showToast } = useApp();
   const [input, setInput] = useState('');
   const [output, setOutput] = useState('');
   const [error, setError] = useState('');
@@ -226,6 +266,11 @@ function JsonFormatter() {
     try { JSON.parse(input); setError(''); setOutput('✅ JSON 格式正确'); }
     catch (e: any) { setError(`❌ JSON 格式错误: ${e.message}`); setOutput(''); }
   }, [input]);
+
+  const handleCopy = async () => {
+    const copied = await copyTextToClipboard(output);
+    showToast(copied ? '已复制' : '复制失败，请手动复制', copied ? 'success' : 'error');
+  };
 
   return (
     <div className="space-y-4">
@@ -248,7 +293,7 @@ function JsonFormatter() {
         <div className="bg-gray-50 border border-gray-200 rounded-lg p-3">
           <div className="mb-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <span className="text-xs text-gray-400">输出结果</span>
-            <button onClick={() => copyText(output)} className="text-xs text-blue-600 hover:text-blue-700">复制</button>
+            <button onClick={() => void handleCopy()} className="text-xs text-blue-600 hover:text-blue-700">复制</button>
           </div>
           <pre className="text-sm font-mono text-gray-900 whitespace-pre-wrap overflow-auto max-h-96">{output}</pre>
         </div>
@@ -259,6 +304,7 @@ function JsonFormatter() {
 
 // ==================== YAML 格式化 ====================
 function YamlFormatter() {
+  const { showToast } = useApp();
   const [input, setInput] = useState('');
   const [output, setOutput] = useState('');
   const [error, setError] = useState('');
@@ -348,6 +394,11 @@ function YamlFormatter() {
     catch (e: any) { setError(`❌ YAML 格式错误: ${e.message}`); setOutput(''); }
   }, [input]);
 
+  const handleCopy = async () => {
+    const copied = await copyTextToClipboard(output);
+    showToast(copied ? '已复制' : '复制失败，请手动复制', copied ? 'success' : 'error');
+  };
+
   return (
     <div className="space-y-4">
       <div>
@@ -363,7 +414,7 @@ function YamlFormatter() {
         <div className="bg-gray-50 border border-gray-200 rounded-lg p-3">
           <div className="mb-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <span className="text-xs text-gray-400">输出结果</span>
-            <button onClick={() => copyText(output)} className="text-xs text-blue-600 hover:text-blue-700">复制</button>
+            <button onClick={() => void handleCopy()} className="text-xs text-blue-600 hover:text-blue-700">复制</button>
           </div>
           <pre className="text-sm font-mono text-gray-900 whitespace-pre-wrap overflow-auto max-h-96">{output}</pre>
         </div>

@@ -79,6 +79,24 @@ public class LoopService {
         return getEvent(id);
     }
 
+    /** Stable feedback references make automatic human-feedback collection idempotent. */
+    @Transactional
+    public LoopEventRecord recordEventIfAbsent(Long projectId, String eventType, String sourceStage,
+                                               String rawInput, String normalizedIssue, String suggestedAssetType,
+                                               String sourceRefsJson, CurrentUser user) {
+        if (sourceRefsJson != null && !sourceRefsJson.isBlank()) {
+            var existing = jdbc.sql("""
+                    SELECT * FROM learning_loop_event
+                    WHERE project_id = ? AND event_type = ? AND source_stage = ? AND source_refs_json = ?
+                    ORDER BY id DESC LIMIT 1
+                    """).param(projectId).param(eventType).param(sourceStage).param(sourceRefsJson)
+                    .query(this::mapEvent).list();
+            if (!existing.isEmpty()) return existing.get(0);
+        }
+        return recordEvent(projectId, eventType, sourceStage, rawInput, normalizedIssue,
+                suggestedAssetType, sourceRefsJson, user);
+    }
+
     public LoopEventRecord getEvent(Long eventId) {
         var results = jdbc.sql("SELECT * FROM learning_loop_event WHERE id = ?")
                 .param(eventId)

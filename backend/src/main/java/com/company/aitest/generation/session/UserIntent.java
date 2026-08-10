@@ -3,6 +3,8 @@ package com.company.aitest.generation.session;
 public enum UserIntent {
     SUBMIT_REQUIREMENT,
     CHOOSE_TOM_MODE,
+    CHOOSE_GENERATION_DEPTH,
+    START_CASE_GENERATION_AFTER_DEPTH,
     SUPPLEMENT_REQUIREMENT,
     REANALYZE_REQUIREMENT,
     CONFIRM_ANALYSIS,

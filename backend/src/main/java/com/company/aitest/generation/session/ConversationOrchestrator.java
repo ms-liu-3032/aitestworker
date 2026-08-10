@@ -3,6 +3,7 @@ package com.company.aitest.generation.session;
 import java.util.List;
 
 import com.company.aitest.common.CurrentUser;
+import com.company.aitest.generation.GenerationDepth;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
@@ -47,6 +48,10 @@ public class ConversationOrchestrator {
         return intentRecognizer.isExplicitTomModeChoice(content);
     }
 
+    public boolean isExplicitGenerationDepthChoice(String content) {
+        return intentRecognizer.isExplicitGenerationDepthChoice(content);
+    }
+
     private ConversationReply processUserMessage(Long sessionId, String userContent, CurrentUser user, boolean propagateAnalysisFailure) {
         var session = sessionService.get(null, sessionId, user);
         long lastMessageIdBefore = latestMessageId(sessionId);
@@ -67,6 +72,8 @@ public class ConversationOrchestrator {
         var reply = switch (intent) {
             case SUBMIT_REQUIREMENT -> handleSubmitRequirement(session, userContent, user);
             case CHOOSE_TOM_MODE -> handleChooseTomMode(session, userContent, user, propagateAnalysisFailure);
+            case CHOOSE_GENERATION_DEPTH -> handleChooseGenerationDepth(session, userContent, user, propagateAnalysisFailure);
+            case START_CASE_GENERATION_AFTER_DEPTH -> handleChooseDepthAndGenerate(session, userContent, user);
             case SUPPLEMENT_REQUIREMENT -> handleSupplementRequirement(session, userContent, user, propagateAnalysisFailure);
             case REANALYZE_REQUIREMENT -> handleReanalyzeRequirement(session, user, propagateAnalysisFailure);
             case CONFIRM_ANALYSIS -> handleConfirmAnalysis(session, user);
@@ -100,7 +107,7 @@ public class ConversationOrchestrator {
         Long sessionId = session.id();
         String tomMode = intentRecognizer.resolveTomMode(content);
         sessionService.updateConfig(session.projectId(), sessionId, session.modelConfigId(),
-                session.promptTemplateId(), tomMode, user);
+                session.promptTemplateId(), tomMode, session.generationDepth(), user);
         sessionService.updateStage(sessionId, "REQUIREMENT_ANALYZING");
 
         String modeDesc = switch (tomMode) {
@@ -139,6 +146,39 @@ public class ConversationOrchestrator {
         }
     }
 
+    private ConversationReply handleChooseGenerationDepth(GenerationSessionRecord session, String content,
+                                                          CurrentUser user, boolean propagateAnalysisFailure) {
+        Long sessionId = session.id();
+        String reply = "请选择本轮用例生成强度。需求分析、覆盖矩阵和测试点会完整保留；这个选择只筛选本次草稿用例的覆盖维度，不会回写资产，也不会成为下次默认选择。\n\n" +
+                "1. 基础覆盖\n" +
+                "- 覆盖：主流程、关键异常、高风险点\n" +
+                "- 适用：需求较小、想快速得到核心功能用例\n" +
+                "- 影响：用例数量较少，成本和耗时最低，但不会系统展开边界、权限、状态、数据一致性等细节\n\n" +
+                "2. 标准覆盖\n" +
+                "- 覆盖：主流程、分支、边界、异常、权限\n" +
+                "- 适用：常规功能测试，兼顾覆盖完整性和生成成本\n" +
+                "- 影响：默认推荐；能覆盖大多数功能测试场景，不主动展开并发、幂等、恢复和复杂组合路径\n\n" +
+                "3. 深度覆盖\n" +
+                "- 覆盖：标准覆盖 + 状态流转、数据一致性、并发、幂等、恢复、真实组合路径\n" +
+                "- 适用：核心链路、上线风险高、涉及资金/权限/状态/多系统集成的需求\n" +
+                "- 影响：用例更完整，但模型调用、生成耗时和草稿数量都会明显增加\n\n" +
+                "请回复 1、2 或 3，系统会按所选强度继续生成。";
+        var msg = messageService.appendAssistantMessage(sessionId, reply, null, "OPERATION_HINT", 0);
+        return new ConversationReply(List.of(msg), analysisService.getLatestAnalysis(sessionId));
+    }
+
+    private ConversationReply handleChooseDepthAndGenerate(GenerationSessionRecord session, String content, CurrentUser user) {
+        Long sessionId = session.id();
+        GenerationDepth depth = GenerationDepth.resolve(content);
+        sessionService.updateConfig(session.projectId(), sessionId, session.modelConfigId(),
+                session.promptTemplateId(), session.tomMode(), depth.name(), user);
+        var msg = messageService.appendAssistantMessage(sessionId,
+                "已选择【" + depth.displayName() + "】。系统会按该强度启动后台用例生成任务，结果仍先进入草稿箱，不会自动提交正式用例库。",
+                null, "OPERATION_HINT", 0);
+        sessionService.updateStage(sessionId, "ANALYSIS_READY");
+        return new ConversationReply(List.of(msg), analysisService.getLatestAnalysis(sessionId));
+    }
+
     private ConversationReply handleSupplementRequirement(GenerationSessionRecord session, String content,
                                                           CurrentUser user, boolean scopeOnly) {
         Long sessionId = session.id();
@@ -161,18 +201,6 @@ public class ConversationOrchestrator {
                     : (scopeOnly ? analysisService.analyzeScopeOnly(sessionId, user)
                             : analysisService.analyze(sessionId, user));
             sessionService.updateStage(sessionId, stageAfterAnalysis(analysis));
-
-            // 增量分析后自动为新测试点生成用例
-            if (!scopeOnly && canIncremental && analysis.newCasesNeeded() != null
-                    && !analysis.newCasesNeeded().isBlank() && !"[]".equals(analysis.newCasesNeeded())) {
-                try {
-                    analysisService.autoGenerateNewCases(sessionId, analysis, user);
-                    // 刷新分析记录（auto-generate 可能更新了 status）
-                    analysis = analysisService.getLatestAnalysis(sessionId);
-                } catch (Exception genEx) {
-                    log.warn("自动为新测试点生成用例失败: {}", genEx.getMessage());
-                }
-            }
 
             String analysisReply = formatAnalysisOutput(analysis);
             var sysMsg = messageService.appendAssistantMessage(sessionId, analysisReply,
@@ -253,7 +281,7 @@ public class ConversationOrchestrator {
         }
         if (hasClarificationQuestions(latest)) {
             var msg = messageService.appendAssistantMessage(sessionId,
-                    "当前分析仍有【需要澄清】的问题。请直接补充答案，系统会重新分析；如果确认按当前假设继续，请回复「生成用例」。",
+                    "当前分析仍有【需要澄清】的问题。请先在输入框补充答案，系统会重新分析；澄清完成、范围和测试点确认后，再输入「生成用例」。",
                     null, "CLARIFICATION_QUESTION", latest.version());
             return new ConversationReply(List.of(msg), latest);
         }
@@ -287,9 +315,36 @@ public class ConversationOrchestrator {
                     null, "OPERATION_HINT", latest.version());
             return new ConversationReply(List.of(msg), latest);
         }
+        if (hasClarificationQuestions(latest)) {
+            var msg = messageService.appendAssistantMessage(sessionId,
+                    "当前分析仍有【需要澄清】的问题，不能直接进入用例生成。请先补充答案；系统重新分析后，再确认本期范围和测试点范围。",
+                    null, "CLARIFICATION_QUESTION", latest.version());
+            return new ConversationReply(List.of(msg), latest);
+        }
+        if (!"CONFIRMED".equals(latest.status()) && !"GENERATED".equals(latest.status())) {
+            var msg = messageService.appendAssistantMessage(sessionId,
+                    "当前分析还未完成确认，不能直接选择生成强度。请先完成需求澄清、范围确认和测试点范围确认。",
+                    null, "OPERATION_HINT", latest.version());
+            return new ConversationReply(List.of(msg), latest);
+        }
+
+        sessionService.updateStage(sessionId, "ASK_CASE_GENERATION_DEPTH");
+        return handleChooseGenerationDepth(session, "", user, false);
+    }
+
+    private ConversationReply executeCaseGeneration(GenerationSessionRecord session, CurrentUser user) {
+        Long sessionId = session.id();
+        var latest = analysisService.getLatestAnalysis(sessionId);
+        if (latest == null) {
+            var errMsg = messageService.appendAssistantMessage(sessionId, "还没有分析结果，请先输入需求。", null, "ERROR", 0);
+            return new ConversationReply(List.of(errMsg), null);
+        }
 
         if (!"CONFIRMED".equals(latest.status()) && !"GENERATED".equals(latest.status())) {
-            analysisService.skipAnalysis(sessionId, latest.version());
+            var msg = messageService.appendAssistantMessage(sessionId,
+                    "当前分析还未完成确认，不能启动用例生成。请先完成需求澄清、范围确认和测试点范围确认，然后输入「生成用例」选择生成强度。",
+                    null, "OPERATION_HINT", latest.version());
+            return new ConversationReply(List.of(msg), latest);
         }
 
         sessionService.updateStage(sessionId, "CASE_GENERATING");
@@ -524,7 +579,7 @@ public class ConversationOrchestrator {
 
     private String buildConfirmPrompt(RequirementAnalysisRecord analysis) {
         if (hasClarificationQuestions(analysis)) {
-            return "\n\n上方【需要澄清】会影响测试范围和用例设计，请直接输入补充说明；系统会基于你的补充重新分析。\n如果确认按当前假设继续，也可以回复「生成用例」。";
+            return "\n\n上方【需要澄清】会影响测试范围和用例设计，请直接输入补充说明；系统会基于你的补充重新分析。澄清完成、范围和测试点确认后，再输入「生成用例」。";
         }
         return "\n\n请确认以上分析是否正确。有什么需要补充或修改的内容可以直接输入。\n如果无误，可以回复「生成用例」。";
     }
