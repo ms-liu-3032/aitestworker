@@ -36,6 +36,20 @@ public class CaseExportController {
                 .body(xmind);
     }
 
+    @PostMapping("/formal-cases/excel")
+    public ResponseEntity<byte[]> exportFormalCasesToExcel(
+            @PathVariable Long projectId,
+            @RequestBody(required = false) List<Long> caseIds,
+            Authentication authentication) {
+        CurrentUser user = (CurrentUser) authentication.getPrincipal();
+        projectAccessService.ensureCanAccess(projectId, user);
+        byte[] excel = caseExportService.exportFormalCasesToExcel(projectId, caseIds);
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"formal-cases.xlsx\"")
+                .contentType(MediaType.parseMediaType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+                .body(excel);
+    }
+
     @PostMapping("/local-cases")
     public ResponseEntity<byte[]> exportLocalCases(
             @PathVariable Long projectId,
@@ -48,5 +62,19 @@ public class CaseExportController {
                 .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"local-cases.xmind\"")
                 .contentType(MediaType.APPLICATION_OCTET_STREAM)
                 .body(xmind);
+    }
+
+    @PostMapping("/local-cases/excel")
+    public ResponseEntity<byte[]> exportLocalCasesToExcel(
+            @PathVariable Long projectId,
+            @RequestBody(required = false) List<Long> caseIds,
+            Authentication authentication) {
+        CurrentUser user = (CurrentUser) authentication.getPrincipal();
+        projectAccessService.ensureCanAccess(projectId, user);
+        byte[] excel = caseExportService.exportLocalCasesToExcel(projectId, caseIds, user);
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"local-cases.xlsx\"")
+                .contentType(MediaType.parseMediaType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+                .body(excel);
     }
 }

@@ -412,7 +412,7 @@ class BusinessPackServiceTest {
         var method = BusinessPackService.class.getDeclaredMethod("extractRoutePrefix", String.class);
         method.setAccessible(true);
         assertEquals("orders", method.invoke(service, "/orders/list"));
-        assertEquals("meeting", method.invoke(service, "/api/meeting/detail"));
+        assertEquals("workflow", method.invoke(service, "/api/workflow/detail"));
         assertEquals("users", method.invoke(service, "/admin/users"));
         assertEquals("crm", method.invoke(service, "/web/crm/customer"));
         assertEquals("orders", method.invoke(service, "/app/orders/list"));

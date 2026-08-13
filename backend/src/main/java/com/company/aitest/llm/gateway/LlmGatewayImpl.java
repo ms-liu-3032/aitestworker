@@ -1,6 +1,8 @@
 package com.company.aitest.llm.gateway;
 
 import java.util.UUID;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 import com.company.aitest.llm.LlmAdapter;
 import com.company.aitest.llm.LlmAdapter.CompletionResponse;
@@ -97,6 +99,7 @@ public class LlmGatewayImpl implements LlmGateway {
 
         String systemPrompt = nullSafe(request.systemPromptOverride());
         String userPrompt = nullSafe(request.userPromptOverride());
+        String imageDataUrl = imageDataUrl(request.variables());
 
         // step 2: 轻量限流
         LlmQuotaService.Decision quota = quotaService.tryAcquire(request);
@@ -122,7 +125,8 @@ public class LlmGatewayImpl implements LlmGateway {
         systemPrompt = sensitiveDataMasker.mask(systemPrompt);
         userPrompt = sensitiveDataMasker.mask(userPrompt);
 
-        int estimatedInputTokens = estimateTokens(systemPrompt) + estimateTokens(userPrompt);
+        int estimatedInputTokens = estimateTokens(systemPrompt) + estimateTokens(userPrompt)
+                + estimateImageTokens(imageDataUrl);
         LlmTokenBudgetService.Decision budget = tokenBudgetService.checkBeforeCall(request, estimatedInputTokens);
         if (!budget.allowed()) {
             recordSecurityEvent("LLM_DAILY_TOKEN_BUDGET_EXCEEDED", "WARN", request, requestId,
@@ -162,7 +166,7 @@ public class LlmGatewayImpl implements LlmGateway {
         try {
             LlmAttemptContext.bind(requestId, request, promptSnapshotId, manifestId);
             completion = llmAdapter.completeWithUsage(new LlmAdapter.CompletionRequest(
-                    request.modelConfigId(), systemPrompt, userPrompt, request.maxTokens()));
+                    request.modelConfigId(), systemPrompt, userPrompt, request.maxTokens(), imageDataUrl));
         } catch (LlmRuntimeException ex) {
             return logAndReturn(request, requestId, promptSnapshotId, manifestId, "", estimatedInputTokens, 0,
                     statusFor(ex.errorCode()),
@@ -241,12 +245,34 @@ public class LlmGatewayImpl implements LlmGateway {
                     request.promptVersion(),
                     systemPrompt,
                     userPrompt,
-                    promptSnapshotService.serializeVariables(request.variables()),
+                    promptSnapshotService.serializeVariables(safeSnapshotVariables(request.variables())),
                     hash));
         } catch (RuntimeException ex) {
             System.err.println("[LlmGateway] prompt_snapshot save failed: " + ex.getMessage());
             return null;
         }
+    }
+
+    /** 图片原始数据只应发往视觉模型，不能落入 prompt 快照或调用日志。 */
+    private Map<String, Object> safeSnapshotVariables(Map<String, Object> variables) {
+        if (variables == null || variables.isEmpty()) return Map.of();
+        Map<String, Object> safe = new LinkedHashMap<>(variables);
+        safe.remove("image_data_url");
+        return safe;
+    }
+
+    private String imageDataUrl(Map<String, Object> variables) {
+        if (variables == null) return null;
+        Object value = variables.get("image_data_url");
+        if (!(value instanceof String dataUrl)) return null;
+        String trimmed = dataUrl.trim();
+        return trimmed.startsWith("data:image/") && trimmed.contains(";base64,") ? trimmed : null;
+    }
+
+    private int estimateImageTokens(String imageDataUrl) {
+        if (imageDataUrl == null || imageDataUrl.isBlank()) return 0;
+        // 仅用于本地预算预检；视觉 provider 的实际 token 仍以返回 usage 为准。
+        return Math.max(512, imageDataUrl.length() / 750);
     }
 
     private String validate(LlmInvocationRequest req) {

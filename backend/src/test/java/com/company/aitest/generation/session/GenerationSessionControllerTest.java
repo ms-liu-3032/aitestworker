@@ -107,7 +107,8 @@ class GenerationSessionControllerTest {
     void confirmTestPointScopeChecksOwnershipAndDelegatesCompleteDecisionSet() {
         when(sessionService.get(eq(100L), eq(200L), any(CurrentUser.class))).thenReturn(null);
         LocalDateTime now = LocalDateTime.of(2026, 7, 18, 12, 0);
-        var decisions = List.of(new RequirementAnalysisService.TestPointScopeDecision("TP1", "GENERATE", "本期范围"));
+        var decisions = List.of(new RequirementAnalysisService.TestPointScopeDecision("TP1", "GENERATE", "本期范围",
+                new RequirementAnalysisService.TestPointContentEdit("修订标题", "修订说明", "模块", "页面", "流程", "BOUNDARY", "RISK")));
         var task = new AsyncGenerationTaskService.TaskView(402L, "TEST_POINT_SCOPE_CONTINUATION",
                 "PENDING", null, null, 0, now, now);
         when(asyncGenerationTaskService.confirmTestPointScopeAndContinue(eq(100L), eq(200L), eq(3),
@@ -295,7 +296,7 @@ class GenerationSessionControllerTest {
         ), auth);
 
         verify(sessionService).updateConfig(eq(100L), eq(200L), eq(12L), eq(13L),
-                eq("PROJECT_TOM"), any(CurrentUser.class));
+                eq("PROJECT_TOM"), eq(null), any(CurrentUser.class));
     }
 
     @Test
@@ -309,7 +310,7 @@ class GenerationSessionControllerTest {
         controller.update(100L, 200L, Map.of("modelConfigId", 22L), auth);
 
         verify(sessionService).updateConfig(eq(100L), eq(200L), eq(22L), eq(13L),
-                eq("PROJECT_TOM"), any(CurrentUser.class));
+                eq("PROJECT_TOM"), eq(null), any(CurrentUser.class));
     }
 
     @Test
@@ -325,6 +326,6 @@ class GenerationSessionControllerTest {
         controller.update(100L, 200L, body, auth);
 
         verify(sessionService).updateConfig(eq(100L), eq(200L), eq(null), eq(13L),
-                eq("PROJECT_TOM"), any(CurrentUser.class));
+                eq("PROJECT_TOM"), eq(null), any(CurrentUser.class));
     }
 }

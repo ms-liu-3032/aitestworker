@@ -60,10 +60,10 @@ describe('MiniTom model selection', () => {
 
     expect(screen.getByLabelText('LLM 模型')).toHaveValue('7');
     fireEvent.change(screen.getByLabelText('文档标题'), {
-      target: { value: '审批操作手册' },
+      target: { value: '业务对象操作手册' },
     });
     fireEvent.change(screen.getByLabelText('业务领域'), {
-      target: { value: '业务审批' },
+      target: { value: '业务对象预约' },
     });
     fireEvent.change(screen.getByLabelText('Markdown 内容'), {
       target: { value: '# 预约\n提交预约后审批。' },
@@ -74,8 +74,8 @@ describe('MiniTom model selection', () => {
     await waitFor(() => {
       expect(apiMocks.importManual).toHaveBeenCalledWith({
         projectId: 12,
-        docTitle: '审批操作手册',
-        businessDomain: '业务审批',
+        docTitle: '业务对象操作手册',
+        businessDomain: '业务对象预约',
         markdownContent: '# 预约\n提交预约后审批。',
         modelConfigId: 7,
       });
@@ -95,14 +95,14 @@ describe('MiniTom model selection', () => {
       target: { value: '8' },
     });
     fireEvent.change(screen.getByLabelText('需求描述'), {
-      target: { value: '修改业务审批流程。' },
+      target: { value: '修改业务对象预约审批流程。' },
     });
     fireEvent.click(screen.getAllByRole('button', { name: '构建测试范围' })[1]);
 
     await waitFor(() => {
       expect(apiMocks.buildTestScope).toHaveBeenCalledWith({
         projectId: 12,
-        requirementText: '修改业务审批流程。',
+        requirementText: '修改业务对象预约审批流程。',
         modelConfigId: 8,
       });
       expect(screen.getByText('预约模块')).toBeInTheDocument();
@@ -123,7 +123,7 @@ describe('MiniTom model selection', () => {
 
     expect(screen.getByText('暂无可用模型')).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText('文档标题'), {
-      target: { value: '审批操作手册' },
+      target: { value: '业务对象操作手册' },
     });
     fireEvent.change(screen.getByLabelText('Markdown 内容'), {
       target: { value: '# 预约\n提交预约后审批。' },

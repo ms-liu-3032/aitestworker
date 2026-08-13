@@ -1,5 +1,6 @@
 package com.company.aitest.export;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -15,6 +16,7 @@ import java.util.zip.ZipInputStream;
 
 import com.company.aitest.common.BusinessException;
 import com.company.aitest.common.CurrentUser;
+import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
 
@@ -84,6 +86,41 @@ class CaseExportServiceTest {
 
         assertTrue(content.contains("选中的需求用例"));
         assertTrue(content.contains("选中的轨迹用例"));
+    }
+
+    @Test
+    void excelExportMatchesProvidedTemplateStructureAndExpandsSteps() throws Exception {
+        JdbcTemplate jdbc = mock(JdbcTemplate.class);
+        when(jdbc.queryForList(anyString(), any(Object[].class))).thenReturn(List.of(Map.ofEntries(
+                Map.entry("case_no", "TC-8"),
+                Map.entry("case_title", "审批通过后通知业务对象"),
+                Map.entry("module_name", "业务对象审批"),
+                Map.entry("precondition", "存在待审批预约"),
+                Map.entry("steps", "打开待审批预约\n点击通过"),
+                Map.entry("expected_result", "展示审批详情\n通知已发送"),
+                Map.entry("priority", "P1"),
+                Map.entry("case_type", "FUNCTIONAL"),
+                Map.entry("scenario_type", "POSITIVE"),
+                Map.entry("design_method", "场景法"),
+                Map.entry("case_status", "CONFIRMED"),
+                Map.entry("created_by", 7L)
+        )));
+        CaseExportService service = new CaseExportService(jdbc);
+
+        byte[] bytes = service.exportFormalCasesToExcel(9L, List.of(8L));
+
+        try (XSSFWorkbook workbook = new XSSFWorkbook(new ByteArrayInputStream(bytes))) {
+            var sheet = workbook.getSheetAt(0);
+            assertEquals("用例名称", sheet.getRow(0).getCell(0).getStringCellValue());
+            assertEquals("所属模块", sheet.getRow(0).getCell(1).getStringCellValue());
+            assertEquals("审批通过后通知业务对象", sheet.getRow(1).getCell(0).getStringCellValue());
+            assertEquals("/业务对象审批", sheet.getRow(1).getCell(1).getStringCellValue());
+            assertEquals("[1] 打开待审批预约", sheet.getRow(1).getCell(4).getStringCellValue());
+            assertEquals("[2] 点击通过", sheet.getRow(2).getCell(4).getStringCellValue());
+            assertEquals("STEP", sheet.getRow(1).getCell(6).getStringCellValue());
+            assertEquals("Underway", sheet.getRow(1).getCell(8).getStringCellValue());
+            assertTrue(sheet.getMergedRegions().stream().anyMatch(region -> region.formatAsString().equals("A2:A3")));
+        }
     }
 
     private Map<String, Object> caseRow(String caseNo, String title) {

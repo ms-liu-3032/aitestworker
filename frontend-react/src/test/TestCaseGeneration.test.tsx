@@ -414,7 +414,7 @@ describe('AnalysisPanel - 测试点标签', () => {
     const analysis = makeAnalysis({
       analysisResult: JSON.stringify({
         requirement_understanding: '测试',
-        evidence_summary: { tom_node_refs: ['业务审批流程'] },
+        evidence_summary: { tom_node_refs: ['业务对象预约流程'] },
         test_points: [{
           title: '验证预约主流程',
           point_type: 'MAIN_FLOW',
@@ -471,6 +471,40 @@ describe('AnalysisPanel - 测试点标签', () => {
     await waitFor(() => expect(onConfirm).toHaveBeenCalledWith(1, [
       expect.objectContaining({ testPointId: 'TP1', disposition: 'GENERATE' }),
       expect.objectContaining({ testPointId: 'TP2', disposition: 'EXCLUDED' }),
+    ]))
+  })
+
+  it('确认测试点范围时会携带人工修订内容', async () => {
+    const onConfirm = vi.fn().mockResolvedValue(undefined)
+    const analysis = makeAnalysis({
+      status: 'NEED_TEST_POINT_SCOPE_CONFIRMATION',
+      testPoints: [{
+        id: 'TP1', title: 'AI 预约流程', description: 'AI 识别的描述', related_module: '业务对象预约',
+        related_page: '预约表单', related_flow: '提交预约', point_type: 'MAIN_FLOW', priority_hint: 'CORE',
+        generation_scope: 'GENERATE',
+      }],
+      analysisResult: JSON.stringify({ requirement_understanding: '测试', test_point_scope_review: { status: 'PENDING' } }),
+    })
+
+    render(<AnalysisPanel analyses={[analysis]} latestAnalysis={analysis} onConfirmTestPointScope={onConfirm} />)
+    fireEvent.click(screen.getByRole('button', { name: '编辑测试点' }))
+    fireEvent.change(screen.getByLabelText('测试点标题-TP1'), { target: { value: '预约时间边界' } })
+    fireEvent.change(screen.getByLabelText('测试点说明-TP1'), { target: { value: '按实际预约时间规则校验' } })
+    fireEvent.change(screen.getByLabelText('测试点维度-TP1'), { target: { value: 'BOUNDARY' } })
+    fireEvent.change(screen.getByLabelText('测试点优先级-TP1'), { target: { value: 'RISK' } })
+    fireEvent.click(screen.getByRole('button', { name: '确认测试点范围' }))
+
+    await waitFor(() => expect(onConfirm).toHaveBeenCalledWith(1, [
+      expect.objectContaining({
+        testPointId: 'TP1',
+        disposition: 'GENERATE',
+        edit: expect.objectContaining({
+          title: '预约时间边界',
+          description: '按实际预约时间规则校验',
+          pointType: 'BOUNDARY',
+          priorityHint: 'RISK',
+        }),
+      }),
     ]))
   })
 
@@ -1059,7 +1093,7 @@ describe('TestCaseGeneration', () => {
   })
 
   it('超长异步错误可展开查看且不会撑死聊天滚动区', async () => {
-    const longError = `已完成的用例编排仍遗漏测试点：${'门禁权限数据、'.repeat(80)}`
+    const longError = `已完成的用例编排仍遗漏测试点：${'权限管理权限数据、'.repeat(80)}`
     mockPage(makeSession({ executionTaskId: 501 }))
     apiMocks.getAsyncGenerationTask.mockResolvedValue(makeTask({
       status: 'FAILED',

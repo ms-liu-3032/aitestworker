@@ -4,6 +4,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 const apiMocks = vi.hoisted(() => ({
   listLocalCasesPage: vi.fn(),
   listFormalCasesPage: vi.fn(),
+  exportFormalCasesToExcel: vi.fn(),
+  exportFormalCasesToXmind: vi.fn(),
+  exportLocalCasesToExcel: vi.fn(),
   exportLocalCasesToXmind: vi.fn(),
 }))
 
@@ -39,6 +42,9 @@ describe('case libraries use server-side filtering', () => {
     apiMocks.listLocalCasesPage.mockResolvedValue(emptyPage)
     apiMocks.listFormalCasesPage.mockResolvedValue(emptyPage)
     apiMocks.exportLocalCasesToXmind.mockResolvedValue(new Blob(['xmind']))
+    apiMocks.exportLocalCasesToExcel.mockResolvedValue(new Blob(['excel']))
+    apiMocks.exportFormalCasesToXmind.mockResolvedValue(new Blob(['xmind']))
+    apiMocks.exportFormalCasesToExcel.mockResolvedValue(new Blob(['excel']))
   })
 
   afterEach(() => cleanup())
@@ -61,12 +67,12 @@ describe('case libraries use server-side filtering', () => {
     expect(await screen.findByText('第 5 / 6 页，共 300 条')).toBeInTheDocument()
 
     fireEvent.change(screen.getByPlaceholderText('搜索用例名称、模块、类型...'), {
-      target: { value: '门禁审批' },
+      target: { value: '权限管理审批' },
     })
     expect(screen.getByText('正在统计筛选结果...')).toBeInTheDocument()
 
     await waitFor(() => expect(apiMocks.listLocalCasesPage).toHaveBeenLastCalledWith(9, 0, 50, {
-      keyword: '门禁审批',
+      keyword: '权限管理审批',
       modules: [],
       priorities: [],
       statuses: [],
@@ -128,12 +134,12 @@ describe('case libraries use server-side filtering', () => {
 
     render(<LocalCaseLibrary />)
     await screen.findByText('已确认审批用例')
-    fireEvent.click(screen.getByRole('button', { name: '导出全部已确认/已提交' }))
+    fireEvent.click(screen.getByRole('button', { name: '导出 XMind' }))
 
     await waitFor(() => expect(apiMocks.exportLocalCasesToXmind).toHaveBeenCalledWith(9, undefined))
     expect(createObjectURL).toHaveBeenCalled()
     expect(revokeObjectURL).toHaveBeenCalledWith('blob:local-cases')
-    expect(appMocks.showToast).toHaveBeenCalledWith('本地用例导出完成')
+    expect(appMocks.showToast).toHaveBeenCalledWith('本地用例 XMind 导出完成')
   })
 
   it('exports only eligible cases from a mixed local selection', async () => {
@@ -161,9 +167,26 @@ describe('case libraries use server-side filtering', () => {
     const checkboxes = screen.getAllByRole('checkbox')
     fireEvent.click(checkboxes[1])
     fireEvent.click(checkboxes[2])
-    fireEvent.click(screen.getByRole('button', { name: '导出已确认/已提交 (1)' }))
+    fireEvent.click(screen.getByRole('button', { name: '导出 XMind (1)' }))
 
     await waitFor(() => expect(apiMocks.exportLocalCasesToXmind).toHaveBeenCalledWith(9, [-8]))
     expect(appMocks.showToast).toHaveBeenCalledWith('导出完成，已忽略 1 条未确认用例')
+  })
+
+  it('exports confirmed local cases as Excel through the same guarded selection', async () => {
+    Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: vi.fn(() => 'blob:local-excel') })
+    Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: vi.fn() })
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    apiMocks.listLocalCasesPage.mockResolvedValue({ ...emptyPage, total: 1, items: [{
+      id: 8, projectId: 9, caseNo: 'TC-8', caseTitle: '已确认审批用例', caseStatus: 'CONFIRMED',
+      sourceType: 'GENERATION', createdAt: '2026-07-21T10:00:00', updatedAt: '2026-07-21T10:00:00',
+    }] })
+
+    render(<LocalCaseLibrary />)
+    await screen.findByText('已确认审批用例')
+    fireEvent.click(screen.getByRole('button', { name: '导出 Excel' }))
+
+    await waitFor(() => expect(apiMocks.exportLocalCasesToExcel).toHaveBeenCalledWith(9, undefined))
+    expect(appMocks.showToast).toHaveBeenCalledWith('本地用例 Excel 导出完成')
   })
 })

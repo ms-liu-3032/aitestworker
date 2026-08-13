@@ -47,7 +47,10 @@ public class AttachmentParseWorker {
     @Scheduled(fixedDelay = 5000)
     public void processPending() {
         List<Map<String, Object>> pending = jdbc.sql(
-                        "SELECT id, session_id, file_name, file_type, storage_path, created_by FROM generation_attachment WHERE parse_status = 'PENDING' LIMIT 5")
+                        "SELECT ga.id, ga.session_id, ga.file_name, ga.file_type, ga.storage_path, ga.created_by, "
+                                + "gs.project_id, gs.model_config_id "
+                                + "FROM generation_attachment ga JOIN generation_session gs ON gs.id = ga.session_id "
+                                + "WHERE ga.parse_status = 'PENDING' LIMIT 5")
                 .query((rs, rowNum) -> {
                     Map<String, Object> row = new java.util.LinkedHashMap<>();
                     row.put("id", rs.getLong("id"));
@@ -56,6 +59,9 @@ public class AttachmentParseWorker {
                     row.put("file_type", rs.getString("file_type"));
                     row.put("storage_path", rs.getString("storage_path"));
                     row.put("created_by", rs.getLong("created_by"));
+                    row.put("project_id", rs.getLong("project_id"));
+                    long modelConfigId = rs.getLong("model_config_id");
+                    row.put("model_config_id", rs.wasNull() ? null : modelConfigId);
                     return row;
                 }).list();
 
@@ -80,15 +86,18 @@ public class AttachmentParseWorker {
                 if (isDocument(fileType)) {
                     parsed = documentParseService.parse(filePath.toString(), fileType);
                 } else if (isImage(fileType)) {
-                    // Try vision analysis - get model config from session
-                    Long modelConfigId = jdbc.sql(
-                                    "SELECT model_config_id FROM generation_session WHERE id = :sid")
-                            .param("sid", sessionId).query((rs, rowNum) -> {
-                                long value = rs.getLong("model_config_id");
-                                return rs.wasNull() ? null : value;
-                            }).single();
-                    if (modelConfigId != null && imageUnderstandingService.supportsVision(modelConfigId)) {
-                        visionResult = imageUnderstandingService.analyzeImage(filePath, modelConfigId, 0L, null);
+                    Long projectId = ((Number) row.get("project_id")).longValue();
+                    Long userId = ((Number) row.get("created_by")).longValue();
+                    Long modelConfigId = (Long) row.get("model_config_id");
+                    if (modelConfigId == null) {
+                        throw new IllegalStateException("图片理解需要先为当前会话选择视觉模型");
+                    }
+                    if (!imageUnderstandingService.supportsVision(modelConfigId)) {
+                        throw new IllegalStateException("当前会话模型不支持图片理解，请切换支持视觉的模型后重新上传图片");
+                    }
+                    visionResult = imageUnderstandingService.analyzeImage(filePath, modelConfigId, userId, projectId);
+                    if (visionResult == null || visionResult.isBlank()) {
+                        throw new IllegalStateException("视觉模型未返回可用的图片理解结果");
                     }
                 }
 

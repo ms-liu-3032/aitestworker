@@ -10,7 +10,7 @@ export default function ModelConfig() {
   const [configs, setConfigs] = useState<ModelConfigRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState({ configName: '', provider: '', modelName: '', endpoint: '', apiKey: '' });
+  const [form, setForm] = useState({ configName: '', provider: '', modelName: '', endpoint: '', apiKey: '', visionEnabled: null as boolean | null });
   const [editingId, setEditingId] = useState<number | null>(null);
   const [savingEdit, setSavingEdit] = useState(false);
   const [keyword, setKeyword] = useState('');
@@ -30,7 +30,7 @@ export default function ModelConfig() {
     try {
       const config = await createModelConfig(form);
       setConfigs(prev => [...prev, config]);
-      setForm({ configName: '', provider: '', modelName: '', endpoint: '', apiKey: '' });
+      setForm({ configName: '', provider: '', modelName: '', endpoint: '', apiKey: '', visionEnabled: null });
       setShowForm(false);
       showToast('模型配置已创建');
     } catch (e: any) {
@@ -47,12 +47,13 @@ export default function ModelConfig() {
       modelName: config.modelName,
       endpoint: config.endpoint || '',
       apiKey: '',
+      visionEnabled: config.visionEnabled,
     });
   };
 
   const handleCancelEdit = () => {
     setEditingId(null);
-    setForm({ configName: '', provider: '', modelName: '', endpoint: '', apiKey: '' });
+    setForm({ configName: '', provider: '', modelName: '', endpoint: '', apiKey: '', visionEnabled: null });
   };
 
   const handleUpdate = async () => {
@@ -94,6 +95,7 @@ export default function ModelConfig() {
     { key: 'name', label: '配置名称', width: '180px' },
     { key: 'provider', label: '提供商', width: '120px' },
     { key: 'model', label: '模型', width: '150px' },
+    { key: 'vision', label: '图片理解', width: '110px' },
     { key: 'status', label: '状态', width: '100px' },
     { key: 'actions', label: '操作', width: '140px' },
   ];
@@ -118,7 +120,7 @@ export default function ModelConfig() {
               setShowForm(!showForm);
               setEditingId(null);
               if (showForm) {
-                setForm({ configName: '', provider: '', modelName: '', endpoint: '', apiKey: '' });
+                setForm({ configName: '', provider: '', modelName: '', endpoint: '', apiKey: '', visionEnabled: null });
               }
             }}
             className="min-h-10 shrink-0 rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-slate-800"
@@ -152,6 +154,15 @@ export default function ModelConfig() {
             <div>
               <label className="block text-xs font-medium text-gray-500 mb-1">API Key</label>
               <input type="password" autoComplete="new-password" value={form.apiKey} onChange={e => setForm({ ...form, apiKey: e.target.value })} className="w-full h-9 px-3 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:border-gray-400 outline-none" />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1">图片理解能力</label>
+              <select value={form.visionEnabled === null ? 'AUTO' : form.visionEnabled ? 'ENABLED' : 'DISABLED'} onChange={e => setForm({ ...form, visionEnabled: e.target.value === 'AUTO' ? null : e.target.value === 'ENABLED' })} className="w-full h-9 px-3 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:border-gray-400 outline-none">
+                <option value="AUTO">自动识别（推荐）</option>
+                <option value="ENABLED">支持图片理解</option>
+                <option value="DISABLED">不支持图片理解</option>
+              </select>
+              <p className="mt-1 text-[11px] text-gray-400">仅当 endpoint 兼容 OpenAI 的 image_url 请求时启用。</p>
             </div>
           </div>
           <div className="flex flex-wrap justify-end gap-2">
@@ -192,6 +203,15 @@ export default function ModelConfig() {
             <div>
               <label className="block text-xs font-medium text-gray-500 mb-1">API Key</label>
               <input type="password" autoComplete="new-password" value={form.apiKey} onChange={e => setForm({ ...form, apiKey: e.target.value })} placeholder="留空表示保持原值" className="w-full h-9 px-3 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:border-gray-400 outline-none" />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1">图片理解能力</label>
+              <select value={form.visionEnabled === null ? 'AUTO' : form.visionEnabled ? 'ENABLED' : 'DISABLED'} onChange={e => setForm({ ...form, visionEnabled: e.target.value === 'AUTO' ? null : e.target.value === 'ENABLED' })} className="w-full h-9 px-3 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:border-gray-400 outline-none">
+                <option value="AUTO">自动识别（推荐）</option>
+                <option value="ENABLED">支持图片理解</option>
+                <option value="DISABLED">不支持图片理解</option>
+              </select>
+              <p className="mt-1 text-[11px] text-gray-400">开启前请确认该模型 endpoint 兼容 OpenAI 图片消息格式。</p>
             </div>
           </div>
           <div className="flex flex-wrap justify-end gap-2">
@@ -252,6 +272,11 @@ export default function ModelConfig() {
             </div>
             <div className="text-sm text-gray-600" style={{ width: '120px' }}>{c.provider}</div>
             <div className="font-mono text-sm text-gray-600" style={{ width: '150px' }}>{c.modelName}</div>
+            <div style={{ width: '110px' }}>
+              <span className={`text-[11px] font-medium px-2 py-0.5 rounded ${c.visionEnabled === true ? 'bg-sky-50 text-sky-700' : c.visionEnabled === false ? 'bg-gray-100 text-gray-600' : 'bg-amber-50 text-amber-700'}`}>
+                {c.visionEnabled === true ? '已启用' : c.visionEnabled === false ? '未启用' : '自动识别'}
+              </span>
+            </div>
             <div style={{ width: '100px' }}>
               <span className={`text-[11px] font-medium px-2 py-0.5 rounded ${c.status === 'ACTIVE' ? 'bg-green-50 text-green-700' : 'bg-gray-100 text-gray-600'}`}>
                 {statusLabel(c.status)}

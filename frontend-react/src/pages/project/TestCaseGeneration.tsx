@@ -10,11 +10,12 @@ import {
   startSessionCaseGenerationTask, startSessionRequirementAnalysisTask, startSessionIncrementalGenerationTask, getAsyncGenerationTask, retryAsyncGenerationTask, cancelAsyncGenerationTask,
   confirmGenerationRequirementScope, confirmGenerationTestPointScope,
   type GenerationSession, type GenerationMessage, type ModelConfigRecord, type CaseDraft, type PromptTemplateRecord, type RequirementAnalysis,
-  type AsyncGenerationTask, type AsyncGenerationTaskStage, type RequirementScopeDecision, type TestPointScopeDecision
+  type AsyncGenerationTask, type AsyncGenerationTaskStage, type RequirementScopeDecision, type TestPointScopeDecision, type TestPointContentEdit
 } from '../../services/api';
 import { statusLabel as uiStatusLabel } from '../../utils/displayLabels';
 import {
   listAttachments as listGenerationAttachments,
+  reparseAttachment as reparseGenerationAttachment,
   uploadAttachment as uploadGenerationAttachment,
   type GenerationAttachment,
 } from '../../services/generationApi';
@@ -782,6 +783,9 @@ export function AnalysisMessageContent({ analysis }: { analysis: RequirementAnal
 
 type TestPointDisposition = TestPointScopeDecision['disposition'];
 
+const EDITABLE_POINT_TYPES = ['MAIN_FLOW', 'BRANCH', 'BOUNDARY', 'EXCEPTION', 'STATE', 'DATA', 'AUTH', 'CONCURRENCY', 'IDEMPOTENT'] as const;
+const EDITABLE_PRIORITY_HINTS = ['CORE', 'EXTENDED', 'RISK'] as const;
+
 function defaultTestPointDisposition(point: any): TestPointDisposition {
   if (point?.scope_decision_source === 'USER'
       && ['GENERATE', 'REFERENCE_ONLY', 'EXCLUDED'].includes(point?.generation_scope)) {
@@ -810,6 +814,8 @@ export function AnalysisPanel({
   const [scopeDrafts, setScopeDrafts] = useState<Record<number, Record<string, TestPointDisposition>>>({});
   const [requirementScopeDrafts, setRequirementScopeDrafts] = useState<Record<number, Record<string, TestPointDisposition>>>({});
   const [scopeReasonDrafts, setScopeReasonDrafts] = useState<Record<number, Record<string, string>>>({});
+  const [testPointEdits, setTestPointEdits] = useState<Record<number, Record<string, TestPointContentEdit>>>({});
+  const [editingTestPoints, setEditingTestPoints] = useState<Record<number, Set<string>>>({});
   const [requirementScopeReasonDrafts, setRequirementScopeReasonDrafts] = useState<Record<number, Record<string, string>>>({});
   const [scopeKeywords, setScopeKeywords] = useState<Record<number, string>>({});
   const [scopePages, setScopePages] = useState<Record<number, number>>({});
@@ -821,6 +827,8 @@ export function AnalysisPanel({
       next[String(point.id || `TP${index + 1}`)] = defaultTestPointDisposition(point);
     });
     setScopeDrafts(current => ({ ...current, [latestAnalysis.id]: next }));
+    setTestPointEdits(current => ({ ...current, [latestAnalysis.id]: {} }));
+    setEditingTestPoints(current => ({ ...current, [latestAnalysis.id]: new Set() }));
   }, [latestAnalysis.id, latestAnalysis.version, latestAnalysis.updatedAt, latestAnalysis.testPoints]);
 
   useEffect(() => {
@@ -901,9 +909,14 @@ export function AnalysisPanel({
       test_points?: {
         title?: string;
         description?: string;
+        point_kind?: string;
         point_type?: string;
         skill_layer?: string;
         design_method?: string;
+        design_methods?: string[];
+        coverage_dimensions?: string[];
+        coverage_requirements?: string[];
+        coverage_items?: { dimension?: string; items?: string[] }[];
         priority_hint?: string;
         test_dimension?: string;
       }[];
@@ -968,6 +981,50 @@ export function AnalysisPanel({
     const scopePageCount = Math.max(1, Math.ceil(filteredTestPoints.length / scopePageSize));
     const scopePage = Math.min(scopePages[a.id] || 1, scopePageCount);
     const visibleTestPoints = filteredTestPoints.slice((scopePage - 1) * scopePageSize, scopePage * scopePageSize);
+    const editingPointIds = editingTestPoints[a.id] || new Set<string>();
+    const pointEditDrafts = testPointEdits[a.id] || {};
+
+    const pointEditFor = (point: any, pointId: string): TestPointContentEdit => (
+      pointEditDrafts[pointId] || {
+        title: displayText(point.title),
+        description: displayText(point.description),
+        relatedModule: displayText(point.related_module),
+        relatedPage: displayText(point.related_page),
+        relatedFlow: displayText(point.related_flow),
+        pointType: displayText(point.point_type || 'MAIN_FLOW').toUpperCase(),
+        priorityHint: displayText(point.priority_hint || 'EXTENDED').toUpperCase(),
+      }
+    );
+
+    const updatePointEdit = (pointId: string, point: any, patch: Partial<TestPointContentEdit>) => {
+      setTestPointEdits(current => ({
+        ...current,
+        [a.id]: { ...(current[a.id] || {}), [pointId]: { ...pointEditFor(point, pointId), ...patch } },
+      }));
+    };
+
+    const togglePointEdit = (pointId: string) => {
+      setEditingTestPoints(current => {
+        const next = new Set(current[a.id] || []);
+        if (next.has(pointId)) next.delete(pointId);
+        else next.add(pointId);
+        return { ...current, [a.id]: next };
+      });
+    };
+
+    const submittedPointEdit = (point: any, pointId: string): TestPointContentEdit | undefined => {
+      const draft = pointEditDrafts[pointId];
+      if (!draft) return undefined;
+      const original: TestPointContentEdit = {
+        title: displayText(point.title), description: displayText(point.description),
+        relatedModule: displayText(point.related_module), relatedPage: displayText(point.related_page),
+        relatedFlow: displayText(point.related_flow), pointType: displayText(point.point_type || 'MAIN_FLOW').toUpperCase(),
+        priorityHint: displayText(point.priority_hint || 'EXTENDED').toUpperCase(),
+      };
+      return Object.keys(draft).some(key => draft[key as keyof TestPointContentEdit] !== original[key as keyof TestPointContentEdit])
+        ? draft
+        : undefined;
+    };
 
     const setAllScope = (disposition: TestPointDisposition) => {
       const next: Record<string, TestPointDisposition> = {};
@@ -1012,6 +1069,7 @@ export function AnalysisPanel({
           testPointId,
           disposition: versionScopeDraft[testPointId] || defaultTestPointDisposition(point),
           reason: scopeReasonDraft[testPointId] || '',
+          edit: submittedPointEdit(point, testPointId),
         } as TestPointScopeDecision;
       });
       await onConfirmTestPointScope(a.version, decisions);
@@ -1265,13 +1323,13 @@ export function AnalysisPanel({
                 )}
               </div>
             </div>
-            <div className="text-[11px] font-medium text-gray-500 mb-1">测试点 ({testPoints.length})</div>
+              <div className="text-[11px] font-medium text-gray-500 mb-1">业务测试点 ({testPoints.length})</div>
             <div className="mb-2 text-[10px] leading-4 text-gray-400">
               生成链路：需求原子 → 覆盖矩阵
               {displayList(evidenceSummary?.tom_node_refs).length > 0
                 ? `（本轮已向覆盖矩阵提供 ${displayList(evidenceSummary?.tom_node_refs).length} 个 TOM 节点作为上下文）`
                 : '（本轮未命中 TOM 节点）'}
-              → 结构化测试点
+              → 业务测试点 → 用例设计场景。当前只确认业务目标；边界、异常、权限等会作为其覆盖义务在后续用例设计中展开。
             </div>
             <div className="mb-2 flex flex-wrap items-center gap-2">
               <input
@@ -1296,6 +1354,15 @@ export function AnalysisPanel({
                 <div key={testPointId} className="text-xs text-gray-700 rounded-lg border border-gray-100 p-2">
                   <div className="flex flex-wrap items-center gap-1.5">
                     <span className="break-words font-medium">{displayText(tp.title) || `测试点 ${idx + 1}`}</span>
+                    {canEditScope && (
+                      <button
+                        type="button"
+                        onClick={() => togglePointEdit(testPointId)}
+                        className="rounded border border-gray-200 bg-white px-1.5 py-0.5 text-[10px] text-gray-600 hover:border-indigo-300 hover:text-indigo-700"
+                      >
+                        {editingPointIds.has(testPointId) ? '收起编辑' : '编辑测试点'}
+                      </button>
+                    )}
                     {tp.point_type && (
                       <span className="text-[9px] px-1 py-0.5 rounded bg-violet-50 text-violet-600">{testPointLabel(tp.point_type)}</span>
                     )}
@@ -1316,6 +1383,86 @@ export function AnalysisPanel({
                   {tp.description && (
                     <div className="mt-0.5 break-words text-gray-500 line-clamp-2">{displayText(tp.description)}</div>
                   )}
+                  {displayList(tp.coverage_dimensions).length > 0 && (
+                    <div className="mt-2 rounded border border-sky-100 bg-sky-50/50 p-2">
+                      <div className="text-[10px] font-medium text-sky-800">后续将覆盖</div>
+                      <div className="mt-1 flex flex-wrap gap-1">
+                        {displayList(tp.coverage_dimensions).map(dimension => (
+                          <span key={dimension} className="rounded bg-white px-1.5 py-0.5 text-[9px] text-sky-700">
+                            {testPointLabel(dimension)}
+                          </span>
+                        ))}
+                      </div>
+                      {displayList(tp.coverage_requirements).length > 0 && (
+                        <div className="mt-1 text-[10px] leading-4 text-sky-700">
+                          覆盖义务：{displayList(tp.coverage_requirements).map(item => testPointLabel(item)).join('、')}
+                        </div>
+                      )}
+                      {Array.isArray(tp.coverage_items) && tp.coverage_items.length > 0 && (
+                        <details className="mt-1.5 text-[10px] text-sky-700">
+                          <summary className="cursor-pointer select-none">查看场景预览（不作为独立测试点确认）</summary>
+                          <div className="mt-1 space-y-1 border-l border-sky-200 pl-2">
+                            {tp.coverage_items.flatMap((group: { dimension?: string; items?: string[] }) => (group.items || []).slice(0, 3).map((item: string) => (
+                              <div key={`${group.dimension}-${item}`}>{testPointLabel(group.dimension || '')}：{displayText(item)}</div>
+                            )))}
+                          </div>
+                        </details>
+                      )}
+                    </div>
+                  )}
+                  {canEditScope && editingPointIds.has(testPointId) && (() => {
+                    const edit = pointEditFor(tp, testPointId);
+                    return (
+                      <div className="mt-2 space-y-2 rounded border border-indigo-100 bg-indigo-50/40 p-2">
+                        <div className="text-[10px] font-medium text-indigo-800">人工修订测试点</div>
+                        <input
+                          aria-label={`测试点标题-${testPointId}`}
+                          value={edit.title || ''}
+                          onChange={event => updatePointEdit(testPointId, tp, { title: event.target.value })}
+                          placeholder="测试点标题"
+                          className="h-8 w-full rounded border border-gray-200 bg-white px-2 text-[11px] outline-none focus:border-indigo-300"
+                        />
+                        <textarea
+                          aria-label={`测试点说明-${testPointId}`}
+                          value={edit.description || ''}
+                          onChange={event => updatePointEdit(testPointId, tp, { description: event.target.value })}
+                          placeholder="预期现象、规则或验证说明"
+                          rows={3}
+                          className="w-full resize-y rounded border border-gray-200 bg-white px-2 py-1.5 text-[11px] leading-5 outline-none focus:border-indigo-300"
+                        />
+                        <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                          <input aria-label={`测试点模块-${testPointId}`} value={edit.relatedModule || ''}
+                            onChange={event => updatePointEdit(testPointId, tp, { relatedModule: event.target.value })}
+                            placeholder="关联模块" className="h-8 min-w-0 rounded border border-gray-200 bg-white px-2 text-[11px] outline-none focus:border-indigo-300" />
+                          <input aria-label={`测试点页面-${testPointId}`} value={edit.relatedPage || ''}
+                            onChange={event => updatePointEdit(testPointId, tp, { relatedPage: event.target.value })}
+                            placeholder="关联页面" className="h-8 min-w-0 rounded border border-gray-200 bg-white px-2 text-[11px] outline-none focus:border-indigo-300" />
+                          <input aria-label={`测试点流程-${testPointId}`} value={edit.relatedFlow || ''}
+                            onChange={event => updatePointEdit(testPointId, tp, { relatedFlow: event.target.value })}
+                            placeholder="关联流程" className="h-8 min-w-0 rounded border border-gray-200 bg-white px-2 text-[11px] outline-none focus:border-indigo-300" />
+                        </div>
+                        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                          <label className="text-[10px] text-gray-500">
+                            测试维度
+                            <select aria-label={`测试点维度-${testPointId}`} value={edit.pointType || 'MAIN_FLOW'}
+                              onChange={event => updatePointEdit(testPointId, tp, { pointType: event.target.value })}
+                              className="mt-1 h-8 w-full rounded border border-gray-200 bg-white px-2 text-[11px] text-gray-700 outline-none focus:border-indigo-300">
+                              {EDITABLE_POINT_TYPES.map(type => <option key={type} value={type}>{testPointLabel(type)}</option>)}
+                            </select>
+                          </label>
+                          <label className="text-[10px] text-gray-500">
+                            优先级
+                            <select aria-label={`测试点优先级-${testPointId}`} value={edit.priorityHint || 'EXTENDED'}
+                              onChange={event => updatePointEdit(testPointId, tp, { priorityHint: event.target.value })}
+                              className="mt-1 h-8 w-full rounded border border-gray-200 bg-white px-2 text-[11px] text-gray-700 outline-none focus:border-indigo-300">
+                              {EDITABLE_PRIORITY_HINTS.map(priority => <option key={priority} value={priority}>{testPointLabel(priority)}</option>)}
+                            </select>
+                          </label>
+                        </div>
+                        <div className="text-[10px] leading-4 text-indigo-700">保存范围时会保留原 AI 内容、记录人工修订，并按当前测试维度重新匹配测试方法。</div>
+                      </div>
+                    );
+                  })()}
                   <div className="mt-2 flex flex-wrap items-center gap-2">
                     {canEditScope ? (
                       <select
@@ -2119,6 +2266,21 @@ export default function TestCaseGeneration() {
     }
   };
 
+  const handleReparseAttachment = async (attachmentId: number) => {
+    if (!projectId || !activeSession) return;
+    try {
+      const updated = await reparseGenerationAttachment(Number(projectId), activeSession.id, attachmentId);
+      setAttachments(prev => prev.map(item => item.id === updated.id ? updated : item));
+      showToast('附件已重新加入解析队列');
+      setActionNotice({
+        title: '附件正在重新解析',
+        body: '图片会使用当前会话所选模型的图片理解能力解析。完成后重新分析需求，即可引用新的图片理解结果。',
+      });
+    } catch (error: any) {
+      showToast(error.message || '重新解析失败', 'error');
+    }
+  };
+
   const handleRetryAsyncTask = async () => {
     if (!projectId || !activeAsyncTask) return;
     setAsyncTaskBusy(true);
@@ -2687,6 +2849,15 @@ export default function TestCaseGeneration() {
                       </div>
                       {att.parseError && (
                         <div className="mt-1 break-words text-[10px] text-red-500">{att.parseError}</div>
+                      )}
+                      {['png', 'jpg', 'jpeg', 'webp'].includes(att.fileType.toLowerCase()) && (
+                        <button
+                          type="button"
+                          onClick={() => handleReparseAttachment(att.id)}
+                          className="mt-1 text-[10px] font-medium text-blue-600 hover:text-blue-700"
+                        >
+                          使用当前模型重新解析
+                        </button>
                       )}
                     </div>
                   ))}

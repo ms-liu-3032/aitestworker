@@ -54,4 +54,25 @@ class CaseExportControllerTest {
         order.verify(accessService).ensureCanAccess(9L, user);
         order.verify(exportService).exportFormalCasesToXmind(9L, List.of(21L));
     }
+
+    @Test
+    void excelExportsKeepAccessChecksAndTemplateFileNames() {
+        byte[] expected = {7, 8, 9};
+        when(exportService.exportLocalCasesToExcel(9L, List.of(8L, -11L), user)).thenReturn(expected);
+        when(exportService.exportFormalCasesToExcel(9L, List.of(21L))).thenReturn(expected);
+
+        var local = controller.exportLocalCasesToExcel(9L, List.of(8L, -11L), authentication);
+        var formal = controller.exportFormalCasesToExcel(9L, List.of(21L), authentication);
+
+        assertArrayEquals(expected, local.getBody());
+        assertEquals("attachment; filename=\"local-cases.xlsx\"",
+                local.getHeaders().getFirst(HttpHeaders.CONTENT_DISPOSITION));
+        assertEquals("attachment; filename=\"formal-cases.xlsx\"",
+                formal.getHeaders().getFirst(HttpHeaders.CONTENT_DISPOSITION));
+        InOrder order = inOrder(accessService, exportService);
+        order.verify(accessService).ensureCanAccess(9L, user);
+        order.verify(exportService).exportLocalCasesToExcel(9L, List.of(8L, -11L), user);
+        order.verify(accessService).ensureCanAccess(9L, user);
+        order.verify(exportService).exportFormalCasesToExcel(9L, List.of(21L));
+    }
 }

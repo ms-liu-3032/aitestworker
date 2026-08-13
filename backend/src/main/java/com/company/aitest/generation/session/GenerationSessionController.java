@@ -190,6 +190,16 @@ public class GenerationSessionController {
         return ApiResponse.ok(attachmentService.listBySession(sessionId));
     }
 
+    @PostMapping("/{sessionId}/attachments/{attachmentId}/reparse")
+    public ApiResponse<GenerationAttachmentRecord> reparseAttachment(@PathVariable Long projectId,
+                                                                      @PathVariable Long sessionId,
+                                                                      @PathVariable Long attachmentId,
+                                                                      Authentication auth) {
+        CurrentUser user = (CurrentUser) auth.getPrincipal();
+        ensureSessionAccess(projectId, sessionId, user);
+        return ApiResponse.ok(attachmentService.requestReparse(sessionId, attachmentId));
+    }
+
     // ---- Analysis (kept for direct access, but main flow uses orchestrator) ----
 
     @GetMapping("/{sessionId}/analysis")

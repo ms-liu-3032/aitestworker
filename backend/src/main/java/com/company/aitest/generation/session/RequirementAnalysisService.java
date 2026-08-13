@@ -151,10 +151,10 @@ public class RequirementAnalysisService {
         // 2. Include parsed attachment content
         var attachments = attachmentService.listBySessionForAnalysis(sessionId);
         for (var att : attachments) {
-            if ("PARSED".equals(att.parseStatus()) && att.parsedContent() != null) {
+            if ("PARSED".equals(att.parseStatus()) && att.parsedContent() != null && !att.parsedContent().isBlank()) {
                 reqText.append("\n[附件: ").append(att.fileName()).append("]\n").append(att.parsedContent());
             }
-            if (att.visionResult() != null) {
+            if ("PARSED".equals(att.parseStatus()) && att.visionResult() != null && !att.visionResult().isBlank()) {
                 reqText.append("\n[图片理解: ").append(att.fileName()).append("]\n").append(att.visionResult());
             }
         }
@@ -321,8 +321,12 @@ public class RequirementAnalysisService {
                         previousAnalysis.requirementText(), tomSnapshot, semanticContext,
                         supplementContent, previousContext, sessionId,
                         GenerationDepth.DEEP);
-        String clarificationQuestions = staged.clarificationQuestions();
-        String analysisResult = staged.analysisResult();
+        // A supplement is saved on the previous analysis before this round starts.  Keep
+        // that answer history and suppress questions the model merely rephrases.
+        String clarificationQuestions = filterResolvedClarificationQuestions(
+                staged.clarificationQuestions(), previousAnalysis.clarificationQuestions(),
+                previousAnalysis.clarificationAnswers());
+        String analysisResult = replaceClarificationQuestions(staged.analysisResult(), clarificationQuestions);
         String testPoints = staged.testPoints();
         String assumptions = staged.assumptions();
 
@@ -333,11 +337,12 @@ public class RequirementAnalysisService {
         // 8. Save with sub_version
         LocalDateTime now = timeProvider.now();
         jdbcTemplate.update("""
-                INSERT INTO requirement_analysis(session_id, version, sub_version, requirement_text, analysis_result, tom_scope_snapshot, clarification_questions, assumptions, test_points, affected_cases, change_scope, new_cases_needed, status, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'NEED_CONFIRMATION', ?, ?)
+                INSERT INTO requirement_analysis(session_id, version, sub_version, requirement_text, analysis_result, tom_scope_snapshot, clarification_questions, clarification_answers, assumptions, test_points, affected_cases, change_scope, new_cases_needed, status, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'NEED_CONFIRMATION', ?, ?)
                 """, sessionId, previousAnalysis.version(), newSubVersion,
                 previousAnalysis.requirementText(), analysisResult, tomSnapshot,
-                clarificationQuestions, assumptions, testPoints, affectedCases, changeScope, newCasesNeeded, now, now);
+                clarificationQuestions, previousAnalysis.clarificationAnswers(), assumptions, testPoints,
+                affectedCases, changeScope, newCasesNeeded, now, now);
         if (scopeOnly) {
             jdbcTemplate.update("UPDATE requirement_analysis SET status = 'NEED_SCOPE_CONFIRMATION', updated_at = ? WHERE session_id = ? AND version = ? AND sub_version = ?",
                     now, sessionId, previousAnalysis.version(), newSubVersion);
@@ -535,7 +540,22 @@ public class RequirementAnalysisService {
                 timeProvider.now(), sessionId, version);
     }
 
-    public record TestPointScopeDecision(String testPointId, String disposition, String reason) {
+    public record TestPointContentEdit(String title,
+                                       String description,
+                                       String relatedModule,
+                                       String relatedPage,
+                                       String relatedFlow,
+                                       String pointType,
+                                       String priorityHint) {
+    }
+
+    public record TestPointScopeDecision(String testPointId,
+                                         String disposition,
+                                         String reason,
+                                         TestPointContentEdit edit) {
+        public TestPointScopeDecision(String testPointId, String disposition, String reason) {
+            this(testPointId, disposition, reason, null);
+        }
     }
 
     public record RequirementScopeDecision(String requirementAtomId, String disposition, String reason) {
@@ -754,6 +774,7 @@ public class RequirementAnalysisService {
         for (Map<String, Object> point : points) {
             String id = String.valueOf(point.get("id"));
             TestPointScopeDecision decision = byId.get(id);
+            applyTestPointContentEdit(point, decision.edit(), user.id(), timeProvider.now());
             String previousDisposition = scopeOf(point);
             String disposition = normalizeScopeDisposition(decision.disposition());
             point.put("generation_scope", disposition);
@@ -787,7 +808,8 @@ public class RequirementAnalysisService {
                     testPointsJson, user);
         }
         messageService.appendSystemMessage(sessionId,
-                "测试点范围已确认：生成 " + generateCount + " 项，仅参考 " + referenceCount + " 项，排除 " + excludedCount + " 项。");
+                "测试点范围已确认：生成 " + generateCount + " 项，仅参考 " + referenceCount + " 项，排除 " + excludedCount
+                        + " 项。人工修订的测试点将按修订内容进入后续编排。");
         return getAnalysis(sessionId, version);
     }
 
@@ -979,6 +1001,16 @@ public class RequirementAnalysisService {
     /** 完整性检查优先使用稳定 TP 编号；标题只兼容没有编号的历史草稿。 */
     private void supplementMissingCases(Long sessionId, RequirementAnalysisRecord analysis, CurrentUser user) {
         if (analysis.testPoints() == null || analysis.testPoints().isBlank()) return;
+
+        // 结构化编排链路由 DirectCaseGenerationService 按 CP/CD/TP 及设计义务逐批校验。
+        // 这里的历史 TP 标题补齐逻辑既不知道本次生成强度，也无法识别已完成的设计义务；
+        // 若继续二次判定，会把已完成的结构化任务误标失败并在重试时重复追加草稿。
+        if (!parseObjectList(filterCasePlanByScope(
+                extractEmbeddedCasePlan(analysis.analysisResult()), analysis.testPoints())).isEmpty()) {
+            log.debug("Structured case plan detected for analysisId={}; skip legacy TP completion gate", analysis.id());
+            return;
+        }
+
         List<String> draftSourceRefs = jdbc.sql(
                 "SELECT source_refs_json, case_status FROM test_case_draft WHERE session_id = :sid AND analysis_version = :aver")
                 .param("sid", sessionId)
@@ -994,14 +1026,6 @@ public class RequirementAnalysisService {
                 filterTestPointsByScope(analysis.testPoints(), Set.of(SCOPE_GENERATE)), draftSourceRefs);
 
         if (uncovered.isEmpty()) return;
-
-        if (!parseObjectList(filterCasePlanByScope(extractEmbeddedCasePlan(analysis.analysisResult()), analysis.testPoints())).isEmpty()) {
-            String preview = uncovered.stream().limit(8).collect(Collectors.joining("、"));
-            String suffix = uncovered.size() > 8 ? " 等 " + uncovered.size() + " 个测试点" : "";
-            throw new LlmRuntimeException(LlmErrorCode.OUTPUT_PARSE_ERROR,
-                    "用例编排仍有未完成覆盖：" + preview + suffix
-                            + "。请从失败节点继续；系统只会重跑缺少 TP/CD 覆盖的编排节点。" );
-        }
 
         log.info("历史分析记录发现 {} 个未覆盖的测试点，使用兼容补齐路径", uncovered.size());
 
@@ -1824,6 +1848,9 @@ public class RequirementAnalysisService {
                 copyIfPresent(generatorRefs, mergedRefs, "sourceCaseDesign");
                 copyIfPresent(generatorRefs, mergedRefs, "sourceTestPoint");
                 copyIfPresent(generatorRefs, mergedRefs, "sourceTestPointRefs");
+                copyIfPresent(generatorRefs, mergedRefs, "scenarioType");
+                copyIfPresent(generatorRefs, mergedRefs, "designMethods");
+                copyIfPresent(generatorRefs, mergedRefs, "designCoverage");
                 copyIfPresent(generatorRefs, mergedRefs, "sourceBasis");
                 copyIfPresent(generatorRefs, mergedRefs, "unsupportedItems");
                 copyIfPresent(generatorRefs, mergedRefs, "confidence");
@@ -2746,20 +2773,20 @@ public class RequirementAnalysisService {
         }
         Map<String, Map<String, Object>> atomsById = atoms.stream().collect(Collectors.toMap(
                 atom -> String.valueOf(atom.get("id")), atom -> atom, (left, right) -> left, LinkedHashMap::new));
-        List<Map<String, Object>> points = new ArrayList<>();
+        Map<String, List<Map<String, Object>>> rowsByUnit = new LinkedHashMap<>();
         for (Map<String, Object> row : matrixRows) {
             String unitId = String.valueOf(row.get("test_unit_ref"));
-            if (unitId.isBlank() || "null".equals(unitId)) continue;
-            List<String> requirementRefs = toStringList(row.get("requirement_refs"));
-            for (String dimension : COVERAGE_DIMENSIONS) {
-                if (!generationDepth.enables(dimension)) continue;
-                Object rawDimension = row.get(dimension);
-                if (!(rawDimension instanceof Map<?, ?> detail) || numberValue(detail.get("count")) <= 0) continue;
-                List<String> items = toStringList(detail.get("items"));
-                for (String item : items) {
-                    points.add(structuralTestPoint(item, dimension, unitId, requirementRefs, row, atomsById));
-                }
+            if (!unitId.isBlank() && !"null".equals(unitId)) {
+                rowsByUnit.computeIfAbsent(unitId, ignored -> new ArrayList<>()).add(row);
             }
+        }
+        Map<String, Map<String, Object>> unitsById = units.stream().collect(Collectors.toMap(
+                unit -> String.valueOf(unit.get("id")), unit -> unit, (left, right) -> left, LinkedHashMap::new));
+        List<Map<String, Object>> points = new ArrayList<>();
+        for (Map.Entry<String, List<Map<String, Object>>> entry : rowsByUnit.entrySet()) {
+            Map<String, Object> point = structuralBusinessTestPoint(entry.getKey(), unitsById.get(entry.getKey()),
+                    entry.getValue(), atomsById, generationDepth);
+            if (point != null) points.add(point);
         }
         if (points.isEmpty()) {
             throw new LlmRuntimeException(LlmErrorCode.OUTPUT_PARSE_ERROR,
@@ -2868,28 +2895,66 @@ public class RequirementAnalysisService {
         return new TestPointStageResult(toJson(rawStages), merged, buildRequirementAtomSelfCheck(atoms, merged));
     }
 
-    private Map<String, Object> structuralTestPoint(String item,
-                                                     String dimension,
-                                                     String unitId,
-                                                     List<String> requirementRefs,
-                                                     Map<String, Object> matrixRow,
-                                                     Map<String, Map<String, Object>> atomsById) {
-        String pointType = pointTypeForDimension(dimension);
+    /**
+     * A confirmable test point is a business verification objective, never one matrix item.
+     * Matrix items remain below it as coverage obligations and only become concrete scenarios
+     * during case composition/generation.
+     */
+    private Map<String, Object> structuralBusinessTestPoint(String unitId,
+                                                             Map<String, Object> unit,
+                                                             List<Map<String, Object>> matrixRows,
+                                                             Map<String, Map<String, Object>> atomsById,
+                                                             GenerationDepth generationDepth) {
+        LinkedHashSet<String> requirementRefSet = new LinkedHashSet<>();
+        LinkedHashMap<String, List<String>> coverageItems = new LinkedHashMap<>();
+        LinkedHashSet<String> activeDimensions = new LinkedHashSet<>();
+        String module = "未命名模块";
+        for (Map<String, Object> row : matrixRows) {
+            requirementRefSet.addAll(toStringList(row.get("requirement_refs")));
+            module = firstNonBlank(String.valueOf(row.getOrDefault("module", "")), module);
+            for (String dimension : COVERAGE_DIMENSIONS) {
+                if (!generationDepth.enables(dimension)) continue;
+                if (!(row.get(dimension) instanceof Map<?, ?> detail) || numberValue(detail.get("count")) <= 0) continue;
+                List<String> items = toStringList(detail.get("items"));
+                if (items.isEmpty()) continue;
+                activeDimensions.add(dimension);
+                coverageItems.computeIfAbsent(dimension, ignored -> new ArrayList<>()).addAll(items);
+            }
+        }
+        if (activeDimensions.isEmpty()) return null;
+        List<String> requirementRefs = new ArrayList<>(requirementRefSet);
+        String primaryDimension = preferredCoverageDimension(activeDimensions);
+        String pointType = pointTypeForDimension(primaryDimension);
         boolean needsConfirmation = requirementRefs.stream()
                 .map(atomsById::get).filter(Objects::nonNull)
                 .anyMatch(atom -> Boolean.TRUE.equals(atom.get("needs_clarification")));
         List<String> sourceBasis = requirementRefs.stream().map(atomsById::get).filter(Objects::nonNull)
                 .map(atom -> String.valueOf(atom.getOrDefault("source_basis", atom.getOrDefault("requirement", "需求描述"))))
                 .filter(text -> !text.isBlank() && !"null".equals(text)).distinct().toList();
+        List<String> methods = activeDimensions.stream()
+                .flatMap(dimension -> FunctionalTestDesignPolicy.designMethods(pointTypeForDimension(dimension), "").stream())
+                .distinct().toList();
+        List<String> coverageRequirements = activeDimensions.stream()
+                .flatMap(dimension -> FunctionalTestDesignPolicy.coverageRequirements(pointTypeForDimension(dimension)).stream())
+                .distinct().toList();
         Map<String, Object> point = new LinkedHashMap<>();
-        point.put("title", item);
-        point.put("description", item);
-        point.put("test_dimension", dimension);
+        String unitName = unit == null ? "业务验证目标" : firstNonBlank(String.valueOf(unit.getOrDefault("name", "")), "业务验证目标");
+        String unitSummary = unit == null ? "" : String.valueOf(unit.getOrDefault("summary", ""));
+        point.put("title", unitName);
+        point.put("description", firstNonBlank(unitSummary,
+                "围绕该业务目标覆盖" + activeDimensions.stream().map(this::coverageDimensionDisplayName).collect(Collectors.joining("、"))));
+        point.put("point_kind", "BUSINESS_OBJECTIVE");
+        point.put("test_dimension", primaryDimension);
         point.put("point_type", pointType);
         point.put("skill_layer", skillLayerForPointType(pointType));
-        point.put("design_method", designMethodForPointType(pointType));
+        point.put("design_method", String.join(" + ", methods));
+        point.put("design_methods", methods);
+        point.put("coverage_dimensions", new ArrayList<>(activeDimensions));
+        point.put("coverage_requirements", coverageRequirements);
+        point.put("coverage_items", coverageItems.entrySet().stream().map(item -> Map.of(
+                "dimension", item.getKey(), "items", item.getValue().stream().distinct().toList())).toList());
         point.put("priority_hint", "MAIN_FLOW".equals(pointType) ? "CORE" : "EXTENDED");
-        point.put("related_module", String.valueOf(matrixRow.getOrDefault("module", "未命名模块")));
+        point.put("related_module", module);
         point.put("related_page", "");
         point.put("related_flow", "");
         point.put("test_unit_ref", unitId);
@@ -2905,6 +2970,17 @@ public class RequirementAnalysisService {
         point.put("confidence", needsConfirmation ? 0.6 : 0.85);
         point.put("needs_confirmation", needsConfirmation);
         return point;
+    }
+
+    private String preferredCoverageDimension(Set<String> dimensions) {
+        for (String dimension : COVERAGE_DIMENSIONS) {
+            if (dimensions.contains(dimension)) return dimension;
+        }
+        return "main_flow";
+    }
+
+    private String coverageDimensionDisplayName(String dimension) {
+        return pointTypeDisplayName(pointTypeForDimension(dimension));
     }
 
     private String initializeTestPointScopes(String testPointsJson, String coreJson) {
@@ -3018,7 +3094,88 @@ public class RequirementAnalysisService {
         };
     }
 
-    private String skillLayerForPointType(String pointType) {
+    static void applyTestPointContentEdit(Map<String, Object> point,
+                                          TestPointContentEdit edit,
+                                          Long userId,
+                                          LocalDateTime editedAt) {
+        if (edit == null) return;
+        Map<String, Object> original = Map.of(
+                "title", String.valueOf(point.getOrDefault("title", "")),
+                "description", String.valueOf(point.getOrDefault("description", "")),
+                "related_module", String.valueOf(point.getOrDefault("related_module", "")),
+                "related_page", String.valueOf(point.getOrDefault("related_page", "")),
+                "related_flow", String.valueOf(point.getOrDefault("related_flow", "")),
+                "point_type", String.valueOf(point.getOrDefault("point_type", "")),
+                "priority_hint", String.valueOf(point.getOrDefault("priority_hint", "")));
+        Map<String, Object> changed = new LinkedHashMap<>();
+        applyEditableText(point, changed, "title", edit.title(), 300, true, "测试点标题");
+        applyEditableText(point, changed, "description", edit.description(), 4_000, false, "测试点说明");
+        applyEditableText(point, changed, "related_module", edit.relatedModule(), 300, false, "关联模块");
+        applyEditableText(point, changed, "related_page", edit.relatedPage(), 300, false, "关联页面");
+        applyEditableText(point, changed, "related_flow", edit.relatedFlow(), 300, false, "关联流程");
+
+        String pointType = normalizedOptionalEnum(edit.pointType(), Set.of(
+                "MAIN_FLOW", "BRANCH", "BOUNDARY", "EXCEPTION", "STATE", "DATA", "AUTH", "CONCURRENCY", "IDEMPOTENT"),
+                "测试维度");
+        if (pointType != null && !pointType.equals(String.valueOf(point.getOrDefault("point_type", "")))) {
+            changed.put("point_type", Map.of("before", String.valueOf(point.getOrDefault("point_type", "")), "after", pointType));
+            point.put("point_type", pointType);
+            point.put("test_dimension", testDimensionForPointType(pointType));
+            point.put("skill_layer", skillLayerForPointType(pointType));
+            point.put("design_method", designMethodForPointType(pointType));
+        }
+        String priorityHint = normalizedOptionalEnum(edit.priorityHint(), Set.of("CORE", "EXTENDED", "RISK"), "优先级");
+        if (priorityHint != null && !priorityHint.equals(String.valueOf(point.getOrDefault("priority_hint", "")))) {
+            changed.put("priority_hint", Map.of("before", String.valueOf(point.getOrDefault("priority_hint", "")), "after", priorityHint));
+            point.put("priority_hint", priorityHint);
+        }
+        if (changed.isEmpty()) return;
+
+        point.putIfAbsent("ai_original_content", original);
+        point.put("content_decision_source", "USER_EDITED");
+        point.put("content_edit_audit", Map.of("changed_fields", changed, "edited_by", userId, "edited_at", editedAt.toString()));
+    }
+
+    private static void applyEditableText(Map<String, Object> point,
+                                          Map<String, Object> changed,
+                                          String key,
+                                          String submitted,
+                                          int maxLength,
+                                          boolean required,
+                                          String fieldLabel) {
+        if (submitted == null) return;
+        String value = submitted.trim();
+        if (required && value.isBlank()) throw new BusinessException(fieldLabel + "不能为空");
+        if (value.length() > maxLength) throw new BusinessException(fieldLabel + "不能超过 " + maxLength + " 个字符");
+        String before = String.valueOf(point.getOrDefault(key, ""));
+        if (!before.equals(value)) {
+            changed.put(key, Map.of("before", before, "after", value));
+            point.put(key, value);
+        }
+    }
+
+    private static String normalizedOptionalEnum(String value, Set<String> allowed, String fieldLabel) {
+        if (value == null || value.isBlank()) return null;
+        String normalized = value.trim().toUpperCase(Locale.ROOT);
+        if (!allowed.contains(normalized)) throw new BusinessException(fieldLabel + "不支持该取值");
+        return normalized;
+    }
+
+    private static String testDimensionForPointType(String pointType) {
+        return switch (pointType) {
+            case "MAIN_FLOW" -> "main_flow";
+            case "BRANCH" -> "branch";
+            case "BOUNDARY" -> "boundary";
+            case "EXCEPTION" -> "exception";
+            case "STATE" -> "state";
+            case "DATA" -> "data";
+            case "AUTH" -> "auth";
+            case "CONCURRENCY" -> "concurrency";
+            default -> "idempotent";
+        };
+    }
+
+    private static String skillLayerForPointType(String pointType) {
         return switch (pointType) {
             case "MAIN_FLOW", "BRANCH" -> "FUNCTIONAL";
             case "EXCEPTION", "STATE", "AUTH" -> "EXCEPTION";
@@ -3026,7 +3183,7 @@ public class RequirementAnalysisService {
         };
     }
 
-    private String designMethodForPointType(String pointType) {
+    private static String designMethodForPointType(String pointType) {
         return switch (pointType) {
             case "MAIN_FLOW" -> "场景法";
             case "BRANCH", "AUTH" -> "判定表";
@@ -3316,20 +3473,7 @@ public class RequirementAnalysisService {
             List<String> preconditions = upstreamFlowPointRefs(unit, pointsByUnit);
             List<String> pointIds = objectivePoints.stream().map(point -> String.valueOf(point.get("id"))).toList();
             String title = buildVerificationObjectiveTitle(unit, objectivePoints);
-            String pointType = String.valueOf(firstPoint.getOrDefault("point_type", "MAIN_FLOW"));
-            List<String> methods = FunctionalTestDesignPolicy.designMethods(
-                    pointType, String.valueOf(firstPoint.getOrDefault("design_method", "场景法")));
-            Map<String, Object> design = new LinkedHashMap<>();
-            design.put("id", "CD");
-            design.put("title", title);
-            design.put("scenario", buildVerificationObjectiveScenario(objectivePoints, title));
-            design.put("scenario_type", FunctionalTestDesignPolicy.scenarioType(pointType));
-            design.put("design_method", String.join(" + ", methods));
-            design.put("design_methods", methods);
-            design.put("coverage_requirements", FunctionalTestDesignPolicy.coverageRequirements(pointType));
-            design.put("source_test_point_refs", pointIds);
-            design.put("priority_hint", highestPriorityHint(objectivePoints));
-            List<Map<String, Object>> designs = List.of(design);
+            List<Map<String, Object>> designs = buildCaseDesignsForObjective(objectivePoints, title, pointIds);
 
             Map<String, Object> plan = new LinkedHashMap<>();
             plan.put("id", "CP");
@@ -3350,6 +3494,68 @@ public class RequirementAnalysisService {
             plans.add(plan);
         }
         return plans;
+    }
+
+    /**
+     * A business test point can own several design scenarios. This is where its coverage
+     * dimensions become executable work; they must not be promoted into separate confirmable
+     * test points merely because they need different test-design methods.
+     */
+    private List<Map<String, Object>> buildCaseDesignsForObjective(List<Map<String, Object>> objectivePoints,
+                                                                    String title,
+                                                                    List<String> pointIds) {
+        Map<String, List<String>> scenariosByDimension = new LinkedHashMap<>();
+        for (Map<String, Object> point : objectivePoints) {
+            List<Map<String, Object>> coverageItems = readJsonObjectList(toJson(point.get("coverage_items")));
+            if (coverageItems != null) {
+                for (Map<String, Object> item : coverageItems) {
+                    String dimension = String.valueOf(item.getOrDefault("dimension", ""));
+                    if (!dimension.isBlank()) {
+                        scenariosByDimension.computeIfAbsent(dimension, ignored -> new ArrayList<>())
+                                .addAll(toStringList(item.get("items")));
+                    }
+                }
+            }
+            if (coverageItems == null || coverageItems.isEmpty()) {
+                String dimension = firstNonBlank(String.valueOf(point.getOrDefault("test_dimension", "")),
+                        testDimensionForPointType(String.valueOf(point.getOrDefault("point_type", "MAIN_FLOW"))));
+                scenariosByDimension.computeIfAbsent(dimension, ignored -> new ArrayList<>())
+                        .add(String.valueOf(point.getOrDefault("description", point.getOrDefault("title", title))));
+            }
+        }
+        List<Map<String, Object>> designs = new ArrayList<>();
+        for (Map.Entry<String, List<String>> entry : scenariosByDimension.entrySet()) {
+            String pointType = pointTypeForDimension(entry.getKey());
+            List<String> methods = FunctionalTestDesignPolicy.designMethods(pointType, "");
+            Map<String, Object> design = new LinkedHashMap<>();
+            design.put("id", "CD");
+            design.put("title", title + " - " + pointTypeDisplayName(pointType));
+            design.put("scenario", entry.getValue().stream().filter(value -> !value.isBlank() && !"null".equals(value))
+                    .distinct().collect(Collectors.joining("；")));
+            design.put("scenario_type", FunctionalTestDesignPolicy.scenarioType(pointType));
+            design.put("design_method", String.join(" + ", methods));
+            design.put("design_methods", methods);
+            design.put("coverage_requirements", FunctionalTestDesignPolicy.coverageRequirements(pointType));
+            design.put("source_test_point_refs", pointIds);
+            design.put("priority_hint", highestPriorityHint(objectivePoints));
+            designs.add(design);
+        }
+        if (designs.isEmpty()) {
+            String pointType = String.valueOf(objectivePoints.get(0).getOrDefault("point_type", "MAIN_FLOW"));
+            List<String> methods = FunctionalTestDesignPolicy.designMethods(pointType, "");
+            Map<String, Object> design = new LinkedHashMap<>();
+            design.put("id", "CD");
+            design.put("title", title);
+            design.put("scenario", buildVerificationObjectiveScenario(objectivePoints, title));
+            design.put("scenario_type", FunctionalTestDesignPolicy.scenarioType(pointType));
+            design.put("design_method", String.join(" + ", methods));
+            design.put("design_methods", methods);
+            design.put("coverage_requirements", FunctionalTestDesignPolicy.coverageRequirements(pointType));
+            design.put("source_test_point_refs", pointIds);
+            design.put("priority_hint", highestPriorityHint(objectivePoints));
+            designs.add(design);
+        }
+        return designs;
     }
 
     /**
@@ -3757,6 +3963,106 @@ public class RequirementAnalysisService {
         return toJson(questions);
     }
 
+    /**
+     * A clarification round must converge.  The model receives prior questions and answers,
+     * but it can still ask the same decision again with different wording.  Suppress a new
+     * question when it has the same semantic anchors as a previously answered question.
+     */
+    private String filterResolvedClarificationQuestions(String candidateJson,
+                                                        String previousQuestionsJson,
+                                                        String previousAnswersJson) {
+        List<Map<String, Object>> candidates = readJsonObjectList(candidateJson);
+        if (candidates == null || candidates.isEmpty()) {
+            return "[]";
+        }
+        List<Map<String, Object>> previousQuestions = readJsonObjectList(previousQuestionsJson);
+        List<Map<String, Object>> previousAnswers = readJsonObjectList(previousAnswersJson);
+        if (previousQuestions == null || previousQuestions.isEmpty()
+                || previousAnswers == null || previousAnswers.isEmpty()) {
+            return toJson(candidates);
+        }
+
+        Set<Integer> answeredIndexes = previousAnswers.stream()
+                .map(answer -> asQuestionIndex(answer.get("index")))
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
+        // The conversational input box stores an unbound supplement as index=-1.  In a
+        // clarification stage that is an answer to the currently displayed question set,
+        // even when the user answers several questions in one paragraph.
+        if (answeredIndexes.contains(-1)) {
+            for (int index = 0; index < previousQuestions.size(); index++) {
+                answeredIndexes.add(index);
+            }
+        }
+        if (answeredIndexes.isEmpty()) {
+            return toJson(candidates);
+        }
+
+        Set<String> answeredAnchors = new LinkedHashSet<>();
+        for (Integer index : answeredIndexes) {
+            if (index < 0 || index >= previousQuestions.size()) continue;
+            Map<String, Object> question = previousQuestions.get(index);
+            answeredAnchors.addAll(questionAnchors(question));
+            Object requirementRef = question.get("source_requirement_ref");
+            if (requirementRef != null && !String.valueOf(requirementRef).isBlank()) {
+                answeredAnchors.add("ref:" + String.valueOf(requirementRef).trim().toLowerCase(Locale.ROOT));
+            }
+        }
+        if (answeredAnchors.isEmpty()) {
+            return toJson(candidates);
+        }
+
+        List<Map<String, Object>> unresolved = new ArrayList<>();
+        for (Map<String, Object> candidate : candidates) {
+            Set<String> anchors = questionAnchors(candidate);
+            Object requirementRef = candidate.get("source_requirement_ref");
+            if (requirementRef != null && !String.valueOf(requirementRef).isBlank()) {
+                anchors.add("ref:" + String.valueOf(requirementRef).trim().toLowerCase(Locale.ROOT));
+            }
+            long overlap = anchors.stream().filter(answeredAnchors::contains).count();
+            boolean sameQuestion = overlap >= 2
+                    || anchors.stream().anyMatch(anchor -> anchor.startsWith("ref:") && answeredAnchors.contains(anchor));
+            if (sameQuestion) {
+                log.info("Suppressing repeated clarification question after user answer: {}",
+                        firstNonBlank(String.valueOf(candidate.get("question")), "未命名问题"));
+                continue;
+            }
+            unresolved.add(candidate);
+        }
+        return toJson(unresolved);
+    }
+
+    private Integer asQuestionIndex(Object raw) {
+        if (raw instanceof Number number) return number.intValue();
+        try {
+            return raw == null ? null : Integer.valueOf(String.valueOf(raw));
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
+    }
+
+    private Set<String> questionAnchors(Map<String, Object> question) {
+        String text = firstNonBlank(String.valueOf(question.getOrDefault("question", "")), "");
+        if (text.isBlank()) return new LinkedHashSet<>();
+        Set<String> anchors = new LinkedHashSet<>();
+        for (String keyword : List.of("短信", "模板", "变量", "触发", "发送", "失败", "重试", "通知", "打印", "标签",
+                "答题", "wifi", "大屏", "签出", "审批", "权限", "格式", "内容", "时间", "语言", "联系方式")) {
+            if (text.contains(keyword)) anchors.add(keyword);
+        }
+        String compact = text.replaceAll("[\\s，。！？、：；（）()【】\\[\\]{}<>《》'\"`]+", "");
+        if (!compact.isBlank()) {
+            anchors.add("text:" + compact.substring(0, Math.min(compact.length(), 24)).toLowerCase(Locale.ROOT));
+        }
+        return anchors;
+    }
+
+    private String replaceClarificationQuestions(String analysisJson, String clarificationQuestions) {
+        Map<String, Object> root = readJsonObject(analysisJson);
+        if (root == null) return analysisJson;
+        root.put("clarification_questions", readJsonObjectList(clarificationQuestions));
+        return toJson(root);
+    }
+
     @SuppressWarnings("unchecked")
     private List<Map<String, Object>> reviewRiskQuestions(String coreJson) {
         Map<String, Object> root = readJsonObject(coreJson);
@@ -4103,6 +4409,7 @@ public class RequirementAnalysisService {
                 规则：
                 1. clarification_questions 只放阻断准确分析、需要用户回答的问题。
                 2. review_risk_questions 是评审风险问题，不能替代 clarification_questions。
+                2.1 增量分析时，“上一版澄清问题”中已附有用户回答的事项视为已解决：不得因同义改写、变量名不同或补充不同示例而重复追问。只有用户补充明确引入了新的独立业务决策，才允许新增 clarification_questions；无法确认是否新增时放入 uncertain_items，不要继续反问。
                 3. 没有证据支持的内容必须放入 uncertain_items 或标记待确认，不得伪装成事实。
                 4. 后续阶段会以本阶段 analysis 为唯一业务理解锚点，所以本阶段必须稳定、简洁、明确。
                 5. 如果是增量分析，必须继承上一版已确认内容，只修改用户明确补充或修正的部分。

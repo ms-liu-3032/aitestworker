@@ -829,23 +829,28 @@ public class DirectCaseGenerationService {
         for (String ref : refs) {
             try {
                 var node = objectMapper.readTree(ref);
-                String plan = node.path("sourceCasePlan").asText("");
+                // RequirementAnalysisService 在关联分析证据时会保留原始生成来源于
+                // generatorRefs。兼容旧草稿，避免重试丢失 CP/CD 完成检查点而重复生成。
+                var generatorRefs = node.path("generatorRefs");
+                String plan = firstNonBlank(node.path("sourceCasePlan").asText(""),
+                        generatorRefs.path("sourceCasePlan").asText(""));
                 if (plan.isBlank()) continue;
                 var pointRefs = coveredPointsByPlan.computeIfAbsent(plan, ignored -> new java.util.LinkedHashSet<>());
-                var sourcePointRefs = node.path("sourceTestPointRefs");
+                var sourcePointRefs = preferredArray(node, generatorRefs, "sourceTestPointRefs");
                 if (sourcePointRefs.isArray()) {
                     sourcePointRefs.forEach(item -> {
                         String pointId = item.asText("");
                         if (!pointId.isBlank()) pointRefs.add(pointId);
                     });
                 }
-                String design = node.path("sourceCaseDesign").asText("");
+                String design = firstNonBlank(node.path("sourceCaseDesign").asText(""),
+                        generatorRefs.path("sourceCaseDesign").asText(""));
                 if (!design.isBlank()) {
                     coveredDesignsByPlan.computeIfAbsent(plan, ignored -> new java.util.LinkedHashSet<>()).add(design);
                     String key = plan + "|" + design;
-                    addJsonArrayValues(node.path("designMethods"), coveredMethodsByDesign
+                    addJsonArrayValues(preferredArray(node, generatorRefs, "designMethods"), coveredMethodsByDesign
                             .computeIfAbsent(key, ignored -> new java.util.LinkedHashSet<>()));
-                    addJsonArrayValues(node.path("designCoverage"), coveredRequirementsByDesign
+                    addJsonArrayValues(preferredArray(node, generatorRefs, "designCoverage"), coveredRequirementsByDesign
                             .computeIfAbsent(key, ignored -> new java.util.LinkedHashSet<>()));
                 }
             } catch (Exception ignored) {
@@ -878,6 +883,17 @@ public class DirectCaseGenerationService {
             }
         }
         return completed;
+    }
+
+    private com.fasterxml.jackson.databind.JsonNode preferredArray(com.fasterxml.jackson.databind.JsonNode primary,
+                                                                    com.fasterxml.jackson.databind.JsonNode fallback,
+                                                                    String field) {
+        var direct = primary.path(field);
+        return direct.isArray() && !direct.isEmpty() ? direct : fallback.path(field);
+    }
+
+    private String firstNonBlank(String primary, String fallback) {
+        return primary != null && !primary.isBlank() ? primary : (fallback == null ? "" : fallback);
     }
 
     private void addJsonArrayValues(com.fasterxml.jackson.databind.JsonNode node, java.util.Set<String> target) {

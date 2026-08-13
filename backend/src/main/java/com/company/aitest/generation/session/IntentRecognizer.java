@@ -56,8 +56,7 @@ public class IntentRecognizer {
         // 1. Stage-specific checks first (highest priority)
 
         if ("ASK_TOM_MODE".equals(currentStage)) {
-            if (matchesAny(lower, GENERATE_KEYWORDS)) return UserIntent.UNKNOWN;
-            if (len <= 4 && matchesAny(lower, GENERATE_SHORT)) return UserIntent.UNKNOWN;
+            if (isExplicitGenerationCommand(lower)) return UserIntent.UNKNOWN;
             return UserIntent.CHOOSE_TOM_MODE;
         }
 
@@ -70,8 +69,7 @@ public class IntentRecognizer {
         if ("REQUIREMENT_INPUT".equals(currentStage) || currentStage == null) {
             if (len > 15) return UserIntent.SUBMIT_REQUIREMENT;
             // Short messages might be commands
-            if (matchesAny(lower, GENERATE_KEYWORDS)) return UserIntent.GENERATE_CASES;
-            if (len <= 4 && matchesAny(lower, GENERATE_SHORT)) return UserIntent.GENERATE_CASES;
+            if (isExplicitGenerationCommand(lower)) return UserIntent.GENERATE_CASES;
             return UserIntent.SUBMIT_REQUIREMENT;
         }
 
@@ -80,10 +78,9 @@ public class IntentRecognizer {
                 || "WAITING_USER_CONFIRMATION".equals(currentStage)
                 || "ANALYSIS_READY".equals(currentStage)) {
             // Generate cases
-            if (matchesAny(lower, GENERATE_KEYWORDS)) return UserIntent.GENERATE_CASES;
-            if (len <= 4 && matchesAny(lower, GENERATE_SHORT)) return UserIntent.GENERATE_CASES;
+            if (isExplicitGenerationCommand(lower)) return UserIntent.GENERATE_CASES;
             // Skip
-            if (matchesAny(lower, SKIP_KEYWORDS)) return UserIntent.SKIP_CONFIRMATION;
+            if (isExplicitSkipCommand(lower)) return UserIntent.SKIP_CONFIRMATION;
             // Explicit re-analysis command
             if (isReanalyzeCommand(lower, len)) return UserIntent.REANALYZE_REQUIREMENT;
             // Long or arbitrary text in confirmation stage is more likely a clarification answer.
@@ -102,9 +99,8 @@ public class IntentRecognizer {
         }
 
         // Other stages: check all keywords, fallback to supplement
-        if (matchesAny(lower, GENERATE_KEYWORDS)) return UserIntent.GENERATE_CASES;
-        if (len <= 4 && matchesAny(lower, GENERATE_SHORT)) return UserIntent.GENERATE_CASES;
-        if (matchesAny(lower, SKIP_KEYWORDS)) return UserIntent.SKIP_CONFIRMATION;
+        if (isExplicitGenerationCommand(lower)) return UserIntent.GENERATE_CASES;
+        if (isExplicitSkipCommand(lower)) return UserIntent.SKIP_CONFIRMATION;
         if (isReanalyzeCommand(lower, len)) return UserIntent.REANALYZE_REQUIREMENT;
         if (isConfirmCommand(lower, len)) return UserIntent.CONFIRM_ANALYSIS;
         if (len <= 4 && matchesAny(lower, CONFIRM_SHORT)) return UserIntent.CONFIRM_ANALYSIS;
@@ -145,6 +141,18 @@ public class IntentRecognizer {
     private boolean isReanalyzeCommand(String text, int rawLength) {
         return REANALYZE_KEYWORDS.contains(text)
                 || (rawLength <= 12 && matchesAny(text, REANALYZE_KEYWORDS));
+    }
+
+    /**
+     * Commands must occupy the entire message. A clarification often contains natural language such as
+     * “该通知方式是否跳过”, which must never be treated as the workflow command “跳过确认”.
+     */
+    private boolean isExplicitGenerationCommand(String text) {
+        return GENERATE_KEYWORDS.contains(text) || GENERATE_SHORT.contains(text);
+    }
+
+    private boolean isExplicitSkipCommand(String text) {
+        return SKIP_KEYWORDS.contains(text);
     }
 
     private boolean isConfirmCommand(String text, int rawLength) {

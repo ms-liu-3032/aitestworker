@@ -40,7 +40,7 @@ public class ModelConfigController {
     public ApiResponse<ModelConfigRecord> create(@Valid @RequestBody CreateRequest request, Authentication authentication) {
         CurrentUser user = (CurrentUser) authentication.getPrincipal();
         var command = new ModelConfigService.CreateModelConfigCommand(
-                request.configName(), request.provider(), request.modelName(), request.endpoint(), request.apiKey());
+                request.configName(), request.provider(), request.modelName(), request.endpoint(), request.apiKey(), request.visionEnabled());
         ModelConfigRecord created = service.create(command, user);
         operationLogService.recordQuietly(user.id(), "MODEL_CONFIG_CREATE", "MODEL_CONFIG", created.id(),
                 detail(request.provider(), request.modelName()));
@@ -48,7 +48,7 @@ public class ModelConfigController {
     }
 
     public record CreateRequest(@NotBlank String configName, @NotBlank String provider, @NotBlank String modelName,
-                                String endpoint, String apiKey) {
+                                String endpoint, String apiKey, Boolean visionEnabled) {
     }
 
     @PutMapping("/{id}")
@@ -57,7 +57,7 @@ public class ModelConfigController {
                                                  Authentication authentication) {
         CurrentUser user = (CurrentUser) authentication.getPrincipal();
         var command = new ModelConfigService.UpdateModelConfigCommand(
-                request.configName(), request.provider(), request.modelName(), request.endpoint(), request.apiKey());
+                request.configName(), request.provider(), request.modelName(), request.endpoint(), request.apiKey(), request.visionEnabled());
         ModelConfigRecord updated = service.update(id, command);
         operationLogService.recordQuietly(user.id(), "MODEL_CONFIG_UPDATE", "MODEL_CONFIG", id,
                 detail(request.provider(), request.modelName()));
@@ -74,7 +74,7 @@ public class ModelConfigController {
     }
 
     public record UpdateRequest(@NotBlank String configName, @NotBlank String provider, @NotBlank String modelName,
-                                String endpoint, String apiKey) {
+                                String endpoint, String apiKey, Boolean visionEnabled) {
     }
 
     private String detail(String provider, String modelName) {

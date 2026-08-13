@@ -63,4 +63,35 @@ class AttachmentParseWorkerTest {
         verify(template).update(contains("knowledge_deposition_status = 'FAILED'"), any(Object[].class));
         verify(template, never()).update(contains("parse_status = 'FAILED'"), any(Object[].class));
     }
+
+    @Test
+    void marksImageFailedWhenSelectedModelCannotUnderstandImages() throws Exception {
+        JdbcClient jdbc = mock(JdbcClient.class);
+        JdbcTemplate template = mock(JdbcTemplate.class);
+        FileStorageService storage = mock(FileStorageService.class);
+        DocumentParseService parser = mock(DocumentParseService.class);
+        ImageUnderstandingService vision = mock(ImageUnderstandingService.class);
+        TimeProvider time = mock(TimeProvider.class);
+        when(storage.resolve("screen.png")).thenReturn(Path.of("/tmp/screen.png"));
+        when(vision.supportsVision(11L)).thenReturn(false);
+        when(template.update(anyString(), any(Object[].class))).thenReturn(1);
+
+        JdbcClient.StatementSpec parseSpec = mock(JdbcClient.StatementSpec.class);
+        JdbcClient.MappedQuerySpec parseQuery = mock(JdbcClient.MappedQuerySpec.class);
+        when(parseSpec.query(any(RowMapper.class))).thenReturn(parseQuery);
+        when(parseQuery.list()).thenReturn(List.of(java.util.Map.of(
+                "id", 8L, "session_id", 3L, "file_name", "screen.png", "file_type", "png",
+                "storage_path", "screen.png", "created_by", 7L, "project_id", 2L, "model_config_id", 11L)));
+        JdbcClient.StatementSpec depositionSpec = mock(JdbcClient.StatementSpec.class);
+        JdbcClient.MappedQuerySpec depositionQuery = mock(JdbcClient.MappedQuerySpec.class);
+        when(depositionSpec.query(any(RowMapper.class))).thenReturn(depositionQuery);
+        when(depositionQuery.list()).thenReturn(List.of());
+        when(jdbc.sql(anyString())).thenAnswer(invocation -> invocation.getArgument(0, String.class)
+                .contains("knowledge_deposition_status") ? depositionSpec : parseSpec);
+
+        new AttachmentParseWorker(jdbc, template, storage, parser, vision, time).processPending();
+
+        verify(template).update(contains("parse_status = 'FAILED'"), any(Object[].class));
+        verify(vision, never()).analyzeImage(any(), any(), any(), any());
+    }
 }

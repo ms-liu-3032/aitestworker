@@ -21,7 +21,7 @@ class DirectCaseGenerationServiceTest {
         strip.setAccessible(true);
         String requirement = """
                 ## 原始需求
-                审批申请需要审批。
+                业务对象预约需要审批。
 
                 ## 测试点
                 [{"title":"预约提交","requirement_refs":["R1"]},{"title":"审批处理","requirement_refs":["R2"]}]
@@ -71,7 +71,7 @@ class DirectCaseGenerationServiceTest {
                 "summarizePreconditionPoints", List.class, Map.class);
         summarize.setAccessible(true);
         Map<String, Map<String, Object>> points = Map.of(
-                "TP1", Map.of("id", "TP1", "title", "预约已提交", "description", "申请已提交并进入待审批状态",
+                "TP1", Map.of("id", "TP1", "title", "预约已提交", "description", "业务对象已提交预约并进入待审批状态",
                         "requirement_refs", List.of("R1"), "source_basis", List.of("需求")),
                 "TP2", Map.of("id", "TP2", "title", "审批处理", "description", "审批人处理待审批预约")
         );
@@ -82,7 +82,7 @@ class DirectCaseGenerationServiceTest {
         assertEquals(1, material.size());
         assertEquals("TP1", material.get(0).get("trace_ref"));
         assertEquals("预约已提交", material.get(0).get("title"));
-        assertEquals("申请已提交并进入待审批状态", material.get(0).get("description"));
+        assertEquals("业务对象已提交预约并进入待审批状态", material.get(0).get("description"));
         assertFalse(material.get(0).containsKey("id"));
     }
 
@@ -147,6 +147,28 @@ class DirectCaseGenerationServiceTest {
                 "{\"sourceCasePlan\":\"CP1\",\"sourceCaseDesign\":\"CD2\",\"sourceTestPointRefs\":[\"TP2\"]}",
                 "{\"sourceCasePlan\":\"CP2\",\"sourceCaseDesign\":\"CD3\",\"sourceTestPointRefs\":[]}"
         );
+
+        java.util.Set<String> result = (java.util.Set<String>) completed.invoke(service, refs, plans);
+
+        assertEquals(java.util.Set.of("CP1"), result);
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    void resumeUsesGeneratorRefsWhenAnalysisEvidenceHasWrappedOriginalGenerationRefs() throws Exception {
+        var service = new DirectCaseGenerationService(null, null, null, null, null, null, null, null);
+        Method completed = DirectCaseGenerationService.class.getDeclaredMethod(
+                "completedSourceCasePlansFromRefs", List.class, List.class);
+        completed.setAccessible(true);
+        List<Map<String, Object>> plans = List.of(Map.of(
+                "id", "CP1", "source_test_point_refs", List.of("TP1"),
+                "case_designs", List.of(Map.of("id", "CD1",
+                        "design_methods", List.of("场景法"),
+                        "coverage_requirements", List.of("VALID_FLOW")))));
+        List<String> refs = List.of("""
+                {"sourceCasePlan":"CP1","sourceCaseDesign":"CD1","sourceTestPointRefs":["TP1"],
+                 "generatorRefs":{"designMethods":["场景法"],"designCoverage":["VALID_FLOW"]}}
+                """);
 
         java.util.Set<String> result = (java.util.Set<String>) completed.invoke(service, refs, plans);
 

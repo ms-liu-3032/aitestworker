@@ -279,18 +279,14 @@ public class ConversationOrchestrator {
                     null, "OPERATION_HINT", latest.version());
             return new ConversationReply(List.of(msg), latest);
         }
-        if (hasClarificationQuestions(latest)) {
-            var msg = messageService.appendAssistantMessage(sessionId,
-                    "当前分析仍有【需要澄清】的问题。请先在输入框补充答案，系统会重新分析；澄清完成、范围和测试点确认后，再输入「生成用例」。",
-                    null, "CLARIFICATION_QUESTION", latest.version());
-            return new ConversationReply(List.of(msg), latest);
-        }
-
         analysisService.confirmAnalysis(sessionId, latest.version());
         sessionService.updateStage(sessionId, "ANALYSIS_READY");
 
         var sysMsg = messageService.appendAssistantMessage(sessionId,
-                "分析已确认。你可以回复「生成用例」来生成测试用例草稿，或继续补充需求。", null, "OPERATION_HINT", latest.version());
+                hasClarificationQuestions(latest)
+                        ? "分析已确认。上方未回答的【需要澄清】将以不确定项和低证据假设保留，不会阻断生成。你可以继续补充，或回复「生成用例」。"
+                        : "分析已确认。你可以回复「生成用例」来生成测试用例草稿，或继续补充需求。",
+                null, "OPERATION_HINT", latest.version());
         return new ConversationReply(List.of(sysMsg), latest);
     }
 
@@ -315,15 +311,9 @@ public class ConversationOrchestrator {
                     null, "OPERATION_HINT", latest.version());
             return new ConversationReply(List.of(msg), latest);
         }
-        if (hasClarificationQuestions(latest)) {
-            var msg = messageService.appendAssistantMessage(sessionId,
-                    "当前分析仍有【需要澄清】的问题，不能直接进入用例生成。请先补充答案；系统重新分析后，再确认本期范围和测试点范围。",
-                    null, "CLARIFICATION_QUESTION", latest.version());
-            return new ConversationReply(List.of(msg), latest);
-        }
         if (!"CONFIRMED".equals(latest.status()) && !"GENERATED".equals(latest.status())) {
             var msg = messageService.appendAssistantMessage(sessionId,
-                    "当前分析还未完成确认，不能直接选择生成强度。请先完成需求澄清、范围确认和测试点范围确认。",
+                    "当前分析还未完成确认，不能直接选择生成强度。请先完成需求范围和测试点范围确认；澄清问题可按需补充。",
                     null, "OPERATION_HINT", latest.version());
             return new ConversationReply(List.of(msg), latest);
         }
@@ -579,7 +569,7 @@ public class ConversationOrchestrator {
 
     private String buildConfirmPrompt(RequirementAnalysisRecord analysis) {
         if (hasClarificationQuestions(analysis)) {
-            return "\n\n上方【需要澄清】会影响测试范围和用例设计，请直接输入补充说明；系统会基于你的补充重新分析。澄清完成、范围和测试点确认后，再输入「生成用例」。";
+            return "\n\n上方【需要澄清】可直接输入补充说明，系统会基于补充重新分析。也可以暂不澄清：未回答项会以不确定项和低证据假设保留；完成范围和测试点确认后仍可输入「生成用例」。";
         }
         return "\n\n请确认以上分析是否正确。有什么需要补充或修改的内容可以直接输入。\n如果无误，可以回复「生成用例」。";
     }
@@ -587,8 +577,8 @@ public class ConversationOrchestrator {
     private String buildNextStepPrompt(RequirementAnalysisRecord analysis) {
         if (analysis != null && "NEED_SCOPE_CONFIRMATION".equals(analysis.status())) {
             if (hasClarificationQuestions(analysis)) {
-                return "\n\n上方【需要澄清】会影响本期范围和后续测试点。请先在输入框补充答案，"
-                        + "系统只会重新执行需求理解与范围识别，不会重复生成测试点；澄清完成后再确认右侧本期范围。";
+                return "\n\n上方【需要澄清】可在输入框补充，系统只会重新执行需求理解与范围识别，不会重复生成测试点。"
+                        + "也可以先在右侧确认本期范围；未回答项会以不确定项和低证据假设进入后续测试设计。";
             }
             return "\n\n请先在右侧【本期需求范围】中确认哪些需求需要生成测试点、哪些仅作参考或排除。"
                     + "确认后系统会继续生成覆盖矩阵和测试点；范围确认前不会展开后续模型节点。";

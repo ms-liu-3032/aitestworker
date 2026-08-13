@@ -73,7 +73,7 @@ class ConversationOrchestratorTest {
     }
 
     @Test
-    void generateCommandCannotBypassClarificationQuestions() throws Exception {
+    void generateCommandAllowsOptionalClarificationAfterScopeAndTestPointConfirmation() throws Exception {
         var sessionService = mock(GenerationSessionService.class);
         var messageService = mock(GenerationMessageService.class);
         var analysisService = mock(RequirementAnalysisService.class);
@@ -86,23 +86,51 @@ class ConversationOrchestratorTest {
                 """, null,
                 """
                 [{"question":"入口在哪里？","reason":"影响步骤","impact":"影响覆盖"}]
-                """, null, "[]", "[]", null, null, null, "NEED_CONFIRMATION", now, now);
+                """, null, "[]", "[]", null, null, null, "CONFIRMED", now, now);
         var user = new CurrentUser(7L, "tester", "USER");
         when(analysisService.getLatestAnalysis(10L)).thenReturn(analysis);
         when(messageService.appendAssistantMessage(any(), any(), nullable(String.class), any(), any(Integer.class)))
                 .thenReturn(new GenerationMessageRecord(1L, 10L, "ASSISTANT", "提示", null, 1,
-                        "CLARIFICATION_QUESTION", now));
+                        "OPERATION_HINT", now));
 
         Method method = ConversationOrchestrator.class.getDeclaredMethod(
                 "handleSkipAndGenerate", GenerationSessionRecord.class, CurrentUser.class);
         method.setAccessible(true);
         method.invoke(orchestrator, session, user);
 
-        verify(messageService).appendAssistantMessage(eq(10L), contains("需要澄清"),
-                eq(null), eq("CLARIFICATION_QUESTION"), eq(1));
-        verify(sessionService, never()).updateStage(eq(10L), eq("ASK_CASE_GENERATION_DEPTH"));
+        verify(sessionService).updateStage(eq(10L), eq("ASK_CASE_GENERATION_DEPTH"));
+        verify(messageService).appendAssistantMessage(eq(10L), contains("请选择本轮用例生成强度"),
+                eq(null), eq("OPERATION_HINT"), eq(0));
         verify(analysisService, never()).skipAnalysis(any(), any(Integer.class));
         verify(analysisService, never()).doGenerate(any(), any());
+    }
+
+    @Test
+    void confirmAnalysisAllowsOptionalClarificationAndPreservesItsWarning() throws Exception {
+        var sessionService = mock(GenerationSessionService.class);
+        var messageService = mock(GenerationMessageService.class);
+        var analysisService = mock(RequirementAnalysisService.class);
+        var orchestrator = new ConversationOrchestrator(null, sessionService, messageService, analysisService, null, null);
+        var now = LocalDateTime.of(2026, 8, 12, 10, 0);
+        var session = new GenerationSessionRecord(10L, 20L, "需求", "ACTIVE", "WAITING_USER_CONFIRMATION",
+                1L, 2L, "", true, "PROJECT_AND_SYSTEM_TOM", 1, null, 7L, now, now);
+        var analysis = new RequirementAnalysisRecord(1L, 10L, 1, 0, "需求", "{}", null,
+                "[{\"question\":\"入口在哪里？\"}]", null, "[]", "[]", null, null, null,
+                "NEED_CONFIRMATION", now, now);
+        when(analysisService.getLatestAnalysis(10L)).thenReturn(analysis);
+        when(messageService.appendAssistantMessage(any(), any(), nullable(String.class), any(), any(Integer.class)))
+                .thenReturn(new GenerationMessageRecord(1L, 10L, "ASSISTANT", "提示", null, 1,
+                        "OPERATION_HINT", now));
+
+        Method method = ConversationOrchestrator.class.getDeclaredMethod(
+                "handleConfirmAnalysis", GenerationSessionRecord.class, CurrentUser.class);
+        method.setAccessible(true);
+        method.invoke(orchestrator, session, new CurrentUser(7L, "tester", "USER"));
+
+        verify(analysisService).confirmAnalysis(10L, 1);
+        verify(sessionService).updateStage(10L, "ANALYSIS_READY");
+        verify(messageService).appendAssistantMessage(eq(10L), contains("低证据假设"),
+                eq(null), eq("OPERATION_HINT"), eq(1));
     }
 
     @Test
@@ -280,8 +308,9 @@ class ConversationOrchestratorTest {
         prompt.setAccessible(true);
         String confirmPrompt = (String) prompt.invoke(orchestrator, analysis);
 
-        assertTrue(confirmPrompt.contains("请直接输入补充说明"));
-        assertTrue(confirmPrompt.contains("重新分析"));
+        assertTrue(confirmPrompt.contains("可直接输入补充说明"));
+        assertTrue(confirmPrompt.contains("也可以暂不澄清"));
+        assertTrue(confirmPrompt.contains("低证据假设"));
     }
 
     @Test

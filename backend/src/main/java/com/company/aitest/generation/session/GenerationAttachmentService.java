@@ -71,6 +71,19 @@ public class GenerationAttachmentService {
         return jdbc.sql("SELECT * FROM generation_attachment WHERE id = :id").param("id", id).query(this::map).single();
     }
 
+    /** Re-queue an existing attachment after its parser or selected model changes. */
+    public GenerationAttachmentRecord requestReparse(Long sessionId, Long attachmentId) {
+        int updated = jdbcTemplate.update("""
+                UPDATE generation_attachment
+                SET parse_status = 'PENDING', parse_error = NULL, parsed_content = NULL, vision_result = NULL
+                WHERE id = ? AND session_id = ?
+                """, attachmentId, sessionId);
+        if (updated == 0) {
+            throw new IllegalArgumentException("附件不存在或不属于当前会话");
+        }
+        return getSafeById(attachmentId);
+    }
+
     private GenerationAttachmentRecord getSafeById(Long id) {
         return jdbc.sql("""
                 SELECT id, session_id, message_id, file_name, file_type, file_size,

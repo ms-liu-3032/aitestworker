@@ -4,7 +4,15 @@ import { useApp } from '../../context/AppContext';
 import RichList from '../../components/RichList';
 import MultiSelectFilter from '../../components/MultiSelectFilter';
 import { displayLabel } from '../../utils/displayLabels';
-import { deleteFormalCase, deleteFormalCases, getFormalCase, listFormalCasesPage, type FormalCase } from '../../services/api';
+import {
+  deleteFormalCase,
+  deleteFormalCases,
+  exportFormalCasesToExcel,
+  exportFormalCasesToXmind,
+  getFormalCase,
+  listFormalCasesPage,
+  type FormalCase,
+} from '../../services/api';
 
 const priorityConfig: Record<string, { bg: string; text: string }> = {
   P0: { bg: 'bg-red-50', text: 'text-red-600' },
@@ -53,7 +61,7 @@ export default function FormalCaseLibrary() {
   const loadRequestId = useRef(0);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [detailCase, setDetailCase] = useState<FormalCase | null>(null);
-  const [exporting, setExporting] = useState(false);
+  const [exportingFormat, setExportingFormat] = useState<'xmind' | 'excel' | null>(null);
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const [batchDeleting, setBatchDeleting] = useState(false);
 
@@ -159,32 +167,23 @@ export default function FormalCaseLibrary() {
     }
   };
 
-  const handleExport = async () => {
+  const handleExport = async (format: 'xmind' | 'excel') => {
     if (!projectId) return;
-    setExporting(true);
+    setExportingFormat(format);
     try {
       const ids = selectedIds.size > 0 ? Array.from(selectedIds) : undefined;
-      const response = await fetch(`/api/projects/${projectId}/export/formal-cases`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('aitest_token')}`,
-        },
-        body: JSON.stringify(ids),
-      });
-      if (!response.ok) throw new Error('导出失败');
-      const blob = await response.blob();
+      const blob = await (format === 'excel' ? exportFormalCasesToExcel : exportFormalCasesToXmind)(Number(projectId), ids);
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = '正式用例库.xmind';
+      a.download = `正式用例库.${format === 'excel' ? 'xlsx' : 'xmind'}`;
       a.click();
       URL.revokeObjectURL(url);
-      showToast(`已导出 ${ids ? ids.length : total} 条用例`);
+      showToast(`已导出 ${ids ? ids.length : total} 条${format === 'excel' ? ' Excel' : ' XMind'}用例`);
     } catch (error: any) {
       showToast(error.message || '导出失败', 'error');
     } finally {
-      setExporting(false);
+      setExportingFormat(null);
     }
   };
 
@@ -208,11 +207,18 @@ export default function FormalCaseLibrary() {
         </div>
         <div className="flex flex-wrap items-center gap-2 sm:justify-end">
           <button
-            onClick={handleExport}
-            disabled={exporting}
+            onClick={() => void handleExport('xmind')}
+            disabled={exportingFormat !== null}
             className="min-h-10 shrink-0 rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700 disabled:opacity-50"
           >
-            {exporting ? '导出中...' : selectedIds.size > 0 ? `导出 (${selectedIds.size})` : '导出全部'}
+            {exportingFormat === 'xmind' ? 'XMind 导出中...' : selectedIds.size > 0 ? `导出 XMind (${selectedIds.size})` : '导出 XMind'}
+          </button>
+          <button
+            onClick={() => void handleExport('excel')}
+            disabled={exportingFormat !== null}
+            className="min-h-10 shrink-0 rounded-lg border border-emerald-200 px-3 py-2 text-sm font-medium text-emerald-700 transition-colors hover:bg-emerald-50 disabled:opacity-50"
+          >
+            {exportingFormat === 'excel' ? 'Excel 导出中...' : selectedIds.size > 0 ? `导出 Excel (${selectedIds.size})` : '导出 Excel'}
           </button>
           {selectedIds.size > 0 && (
             <button

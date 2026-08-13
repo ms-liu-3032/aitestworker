@@ -13,6 +13,7 @@ import {
   batchSubmitLocalCases,
   deprecateLocalCase,
   duplicateLocalCase,
+  exportLocalCasesToExcel,
   exportLocalCasesToXmind,
   getLocalCase,
   listLocalCasesPage,
@@ -46,7 +47,7 @@ export default function LocalCaseLibrary() {
   const [duplicatingId, setDuplicatingId] = useState<number | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [batchingAction, setBatchingAction] = useState<'confirm' | 'deprecate' | 'submit' | null>(null);
-  const [exporting, setExporting] = useState(false);
+  const [exportingFormat, setExportingFormat] = useState<'xmind' | 'excel' | null>(null);
   const [keyword, setKeyword] = useState('');
   const [moduleFilter, setModuleFilter] = useState<string[]>([]);
   const [priorityFilter, setPriorityFilter] = useState<string[]>([]);
@@ -243,21 +244,21 @@ export default function LocalCaseLibrary() {
     .filter(item => ['CONFIRMED', 'SUBMITTED'].includes(normalizeStatus(item.caseStatus)))
     .map(item => item.id), [cases, selectedIds]);
 
-  const handleExport = async () => {
+  const handleExport = async (format: 'xmind' | 'excel') => {
     if (!projectId) return;
     const exportingSelection = selectedIds.size > 0;
     if (exportingSelection && selectedExportableIds.length === 0) {
       showToast('所选用例中没有已确认或已提交的用例', 'error');
       return;
     }
-    setExporting(true);
+    setExportingFormat(format);
     try {
-      const blob = await exportLocalCasesToXmind(
+      const blob = await (format === 'excel' ? exportLocalCasesToExcel : exportLocalCasesToXmind)(
         Number(projectId), exportingSelection ? selectedExportableIds : undefined);
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement('a');
       anchor.href = url;
-      anchor.download = '本地用例库.xmind';
+      anchor.download = `本地用例库.${format === 'excel' ? 'xlsx' : 'xmind'}`;
       document.body.appendChild(anchor);
       anchor.click();
       anchor.remove();
@@ -265,11 +266,11 @@ export default function LocalCaseLibrary() {
       const ignored = exportingSelection ? selectedIds.size - selectedExportableIds.length : 0;
       showToast(ignored > 0
         ? `导出完成，已忽略 ${ignored} 条未确认用例`
-        : '本地用例导出完成');
+        : `本地用例 ${format === 'excel' ? 'Excel' : 'XMind'} 导出完成`);
     } catch (error: any) {
       showToast(error.message || '导出失败', 'error');
     } finally {
-      setExporting(false);
+      setExportingFormat(null);
     }
   };
 
@@ -348,15 +349,26 @@ export default function LocalCaseLibrary() {
         </div>
         <div className="flex shrink-0 flex-wrap gap-2">
           <button
-            onClick={() => void handleExport()}
-            disabled={exporting || (selectedIds.size > 0 && selectedExportableIds.length === 0)}
+            onClick={() => void handleExport('xmind')}
+            disabled={exportingFormat !== null || (selectedIds.size > 0 && selectedExportableIds.length === 0)}
             className="min-h-10 rounded-lg border border-blue-200 px-3 py-2 text-sm font-medium text-blue-700 transition-colors hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            {exporting
-              ? '导出中...'
+            {exportingFormat === 'xmind'
+              ? 'XMind 导出中...'
               : selectedIds.size > 0
-                ? `导出已确认/已提交 (${selectedExportableIds.length})`
-                : '导出全部已确认/已提交'}
+                ? `导出 XMind (${selectedExportableIds.length})`
+                : '导出 XMind'}
+          </button>
+          <button
+            onClick={() => void handleExport('excel')}
+            disabled={exportingFormat !== null || (selectedIds.size > 0 && selectedExportableIds.length === 0)}
+            className="min-h-10 rounded-lg border border-emerald-200 px-3 py-2 text-sm font-medium text-emerald-700 transition-colors hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {exportingFormat === 'excel'
+              ? 'Excel 导出中...'
+              : selectedIds.size > 0
+                ? `导出 Excel (${selectedExportableIds.length})`
+                : '导出 Excel'}
           </button>
           <button
             onClick={() => void loadCases(page)}

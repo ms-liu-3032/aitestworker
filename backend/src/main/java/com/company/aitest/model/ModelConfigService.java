@@ -41,10 +41,10 @@ public class ModelConfigService {
     public ModelConfigRecord create(CreateModelConfigCommand command, CurrentUser user) {
         LocalDateTime now = timeProvider.now();
         jdbcTemplate.update("""
-                insert into model_config(config_name, provider, model_name, endpoint, api_key_encrypted, status, created_by, created_at, updated_at)
-                values (?, ?, ?, ?, ?, 'ACTIVE', ?, ?, ?)
+                insert into model_config(config_name, provider, model_name, endpoint, vision_enabled, api_key_encrypted, status, created_by, created_at, updated_at)
+                values (?, ?, ?, ?, ?, ?, 'ACTIVE', ?, ?, ?)
                 """, command.configName(), command.provider(), command.modelName(), command.endpoint(),
-                modelSecretService.protect(command.apiKey()), user.id(), now, now);
+                command.visionEnabled(), modelSecretService.protect(command.apiKey()), user.id(), now, now);
         Long id = jdbc.sql("select last_insert_id()").query(Long.class).single();
         return jdbc.sql("select * from model_config where id = :id").param("id", id).query(this::map).single();
     }
@@ -53,13 +53,13 @@ public class ModelConfigService {
         LocalDateTime now = timeProvider.now();
         if (command.apiKey() != null && !command.apiKey().isBlank()) {
             jdbcTemplate.update("""
-                    update model_config set config_name=?, provider=?, model_name=?, endpoint=?, api_key_encrypted=?, updated_at=? where id=?
+                    update model_config set config_name=?, provider=?, model_name=?, endpoint=?, vision_enabled=?, api_key_encrypted=?, updated_at=? where id=?
                     """, command.configName(), command.provider(), command.modelName(), command.endpoint(),
-                    modelSecretService.protect(command.apiKey()), now, id);
+                    command.visionEnabled(), modelSecretService.protect(command.apiKey()), now, id);
         } else {
             jdbcTemplate.update("""
-                    update model_config set config_name=?, provider=?, model_name=?, endpoint=?, updated_at=? where id=?
-                    """, command.configName(), command.provider(), command.modelName(), command.endpoint(), now, id);
+                    update model_config set config_name=?, provider=?, model_name=?, endpoint=?, vision_enabled=?, updated_at=? where id=?
+                    """, command.configName(), command.provider(), command.modelName(), command.endpoint(), command.visionEnabled(), now, id);
         }
         return jdbc.sql("select * from model_config where id = :id").param("id", id).query(this::map).single();
     }
@@ -73,7 +73,7 @@ public class ModelConfigService {
             return null;
         }
         return jdbc.sql("""
-                select id, provider, model_name, endpoint, api_key_encrypted, status
+                select id, provider, model_name, endpoint, api_key_encrypted, status, vision_enabled
                 from model_config
                 where id = :id
                 """)
@@ -84,7 +84,8 @@ public class ModelConfigService {
                         rs.getString("model_name"),
                         rs.getString("endpoint"),
                         modelSecretService.reveal(rs.getString("api_key_encrypted")),
-                        rs.getString("status")
+                        rs.getString("status"),
+                        rs.getObject("vision_enabled", Boolean.class)
                 ))
                 .list()
                 .stream()
@@ -96,16 +97,29 @@ public class ModelConfigService {
         return new ModelConfigRecord(rs.getLong("id"), rs.getString("config_name"), rs.getString("provider"),
                 rs.getString("model_name"), rs.getString("endpoint"), rs.getString("status"),
                 rs.getLong("created_by"), rs.getTimestamp("created_at").toLocalDateTime(),
-                rs.getTimestamp("updated_at").toLocalDateTime());
+                rs.getTimestamp("updated_at").toLocalDateTime(),
+                rs.getObject("vision_enabled", Boolean.class));
     }
 
-    public record CreateModelConfigCommand(String configName, String provider, String modelName, String endpoint, String apiKey) {
+    public record CreateModelConfigCommand(String configName, String provider, String modelName, String endpoint,
+                                           String apiKey, Boolean visionEnabled) {
+        public CreateModelConfigCommand(String configName, String provider, String modelName, String endpoint, String apiKey) {
+            this(configName, provider, modelName, endpoint, apiKey, null);
+        }
     }
 
-    public record UpdateModelConfigCommand(String configName, String provider, String modelName, String endpoint, String apiKey) {
+    public record UpdateModelConfigCommand(String configName, String provider, String modelName, String endpoint,
+                                           String apiKey, Boolean visionEnabled) {
+        public UpdateModelConfigCommand(String configName, String provider, String modelName, String endpoint, String apiKey) {
+            this(configName, provider, modelName, endpoint, apiKey, null);
+        }
     }
 
     public record RuntimeModelConfig(Long id, String provider, String modelName, String endpoint, String apiKey,
-                                     String status) {
+                                     String status, Boolean visionEnabled) {
+        public RuntimeModelConfig(Long id, String provider, String modelName, String endpoint, String apiKey,
+                                  String status) {
+            this(id, provider, modelName, endpoint, apiKey, status, null);
+        }
     }
 }

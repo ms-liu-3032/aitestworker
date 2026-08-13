@@ -96,11 +96,12 @@ public class HttpLlmAdapter implements LlmAdapter {
         String endpoint = resolveEndpoint(model.endpoint());
         boolean jsonObjectMode = shouldUseJsonObjectMode(request.systemPrompt(), request.userPrompt());
         String payload = buildPayload(model, request.systemPrompt(), request.userPrompt(),
-                request.maxTokens(), jsonObjectMode);
+                request.maxTokens(), jsonObjectMode, request.imageDataUrl());
 
-        log.info("LLM call: model={}, endpoint={}, maxTokens={}, jsonObjectMode={}, promptChars={}",
+        log.info("LLM call: model={}, endpoint={}, maxTokens={}, jsonObjectMode={}, promptChars={}, imageAttached={}",
                 model.modelName(), endpoint, request.maxTokens(), jsonObjectMode,
-                length(request.systemPrompt()) + length(request.userPrompt()));
+                length(request.systemPrompt()) + length(request.userPrompt()),
+                request.imageDataUrl() != null && !request.imageDataUrl().isBlank());
 
         HttpRequest httpRequest = HttpRequest.newBuilder(URI.create(endpoint))
                 .timeout(Duration.ofSeconds(requestTimeoutSeconds))
@@ -194,7 +195,7 @@ public class HttpLlmAdapter implements LlmAdapter {
     }
 
     private String buildPayload(ModelConfigService.RuntimeModelConfig model, String systemPrompt, String userPrompt,
-                                Integer maxTokens, boolean jsonObjectMode) {
+                                Integer maxTokens, boolean jsonObjectMode, String imageDataUrl) {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("model", model.modelName());
         body.put("temperature", 0.2);
@@ -207,9 +208,15 @@ public class HttpLlmAdapter implements LlmAdapter {
         if (usesOfficialDeepSeekEndpoint(model.endpoint())) {
             body.put("thinking", Map.of("type", normalizedDeepSeekThinkingMode()));
         }
+        Object userContent = imageDataUrl == null || imageDataUrl.isBlank()
+                ? emptySafe(userPrompt)
+                : List.of(
+                        Map.of("type", "text", "text", emptySafe(userPrompt)),
+                        Map.of("type", "image_url", "image_url", Map.of("url", imageDataUrl))
+                );
         body.put("messages", List.of(
                 Map.of("role", "system", "content", emptySafe(systemPrompt)),
-                Map.of("role", "user", "content", emptySafe(userPrompt))
+                Map.of("role", "user", "content", userContent)
         ));
         try {
             return objectMapper.writeValueAsString(body);

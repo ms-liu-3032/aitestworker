@@ -42,16 +42,36 @@ class HttpLlmAdapterAttemptLoggingTest {
                 new FakeModelConfigService("http://127.0.0.1"), new LlmAttemptLogger(new RecordingLogger()),
                 5, 30, 1, 0, 0, true);
         Method method = HttpLlmAdapter.class.getDeclaredMethod("buildPayload",
-                ModelConfigService.RuntimeModelConfig.class, String.class, String.class, Integer.class, boolean.class);
+                ModelConfigService.RuntimeModelConfig.class, String.class, String.class, Integer.class, boolean.class,
+                String.class);
         method.setAccessible(true);
         String payload = (String) method.invoke(adapter,
                 new ModelConfigService.RuntimeModelConfig(42L, "DEEPSEEK", "deepseek-v4-pro",
                         "https://api.deepseek.com/v1/chat/completions", "secret", "ACTIVE"),
-                "return json", "{}", 1024, true);
+                "return json", "{}", 1024, true, null);
 
         var body = new ObjectMapper().readTree(payload);
         assertEquals("disabled", body.path("thinking").path("type").asText());
         assertEquals("json_object", body.path("response_format").path("type").asText());
+    }
+
+    @Test
+    void sendsImageAsOpenAiCompatibleMultimodalUserContent() throws Exception {
+        HttpLlmAdapter adapter = new HttpLlmAdapter(
+                new FakeModelConfigService("http://127.0.0.1"), new LlmAttemptLogger(new RecordingLogger()),
+                5, 30, 1, 0, 0, true);
+        Method method = HttpLlmAdapter.class.getDeclaredMethod("buildPayload",
+                ModelConfigService.RuntimeModelConfig.class, String.class, String.class, Integer.class, boolean.class,
+                String.class);
+        method.setAccessible(true);
+        String payload = (String) method.invoke(adapter,
+                new ModelConfigService.RuntimeModelConfig(42L, "OPENAI", "gpt-5", "http://127.0.0.1", "secret", "ACTIVE"),
+                "system", "analyze", 1024, true, "data:image/png;base64,aW1hZ2U=");
+
+        var content = new ObjectMapper().readTree(payload).path("messages").path(1).path("content");
+        assertEquals("text", content.path(0).path("type").asText());
+        assertEquals("image_url", content.path(1).path("type").asText());
+        assertEquals("data:image/png;base64,aW1hZ2U=", content.path(1).path("image_url").path("url").asText());
     }
 
     @Test

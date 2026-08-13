@@ -210,17 +210,18 @@ export interface ModelConfigRecord {
   createdBy: number
   createdAt: string
   updatedAt: string
+  visionEnabled: boolean | null
 }
 
 export function listModelConfigs() {
   return api<ModelConfigRecord[]>('/api/admin/model-configs')
 }
 
-export function createModelConfig(body: { configName: string; provider: string; modelName: string; endpoint?: string; apiKey?: string }) {
+export function createModelConfig(body: { configName: string; provider: string; modelName: string; endpoint?: string; apiKey?: string; visionEnabled?: boolean | null }) {
   return api<ModelConfigRecord>('/api/admin/model-configs', { method: 'POST', body: JSON.stringify(body) })
 }
 
-export function updateModelConfig(id: number, body: { configName: string; provider: string; modelName: string; endpoint?: string; apiKey?: string }) {
+export function updateModelConfig(id: number, body: { configName: string; provider: string; modelName: string; endpoint?: string; apiKey?: string; visionEnabled?: boolean | null }) {
   return api<ModelConfigRecord>(`/api/admin/model-configs/${id}`, { method: 'PUT', body: JSON.stringify(body) })
 }
 
@@ -532,35 +533,36 @@ export function deleteFormalCases(projectId: number, caseIds: number[]) {
   })
 }
 
-export function exportFormalCasesToXmind(projectId: number, caseIds?: number[]) {
-  return fetch(`/api/projects/${projectId}/export/formal-cases`, {
+async function exportCases(url: string, caseIds?: number[]) {
+  const response = await fetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${getToken()}`,
     },
     body: JSON.stringify(caseIds || []),
-  }).then(res => {
-    if (!res.ok) throw new Error('导出失败');
-    return res.blob();
   })
+  if (!response.ok) {
+    const body = await response.json().catch(() => null)
+    throw new Error(body?.message || '导出失败')
+  }
+  return response.blob()
+}
+
+export function exportFormalCasesToXmind(projectId: number, caseIds?: number[]) {
+  return exportCases(`/api/projects/${projectId}/export/formal-cases`, caseIds)
+}
+
+export function exportFormalCasesToExcel(projectId: number, caseIds?: number[]) {
+  return exportCases(`/api/projects/${projectId}/export/formal-cases/excel`, caseIds)
 }
 
 export function exportLocalCasesToXmind(projectId: number, caseIds?: number[]) {
-  return fetch(`/api/projects/${projectId}/export/local-cases`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${getToken()}`,
-    },
-    body: JSON.stringify(caseIds || []),
-  }).then(async res => {
-    if (!res.ok) {
-      const body = await res.json().catch(() => null)
-      throw new Error(body?.message || '导出失败')
-    }
-    return res.blob();
-  })
+  return exportCases(`/api/projects/${projectId}/export/local-cases`, caseIds)
+}
+
+export function exportLocalCasesToExcel(projectId: number, caseIds?: number[]) {
+  return exportCases(`/api/projects/${projectId}/export/local-cases/excel`, caseIds)
 }
 
 export function submitGeneratedCase(generatedCaseId: number) {
@@ -1002,6 +1004,17 @@ export interface TestPointScopeDecision {
   testPointId: string
   disposition: 'GENERATE' | 'REFERENCE_ONLY' | 'EXCLUDED'
   reason?: string
+  edit?: TestPointContentEdit
+}
+
+export interface TestPointContentEdit {
+  title?: string
+  description?: string
+  relatedModule?: string
+  relatedPage?: string
+  relatedFlow?: string
+  pointType?: string
+  priorityHint?: string
 }
 
 export interface RequirementScopeDecision {

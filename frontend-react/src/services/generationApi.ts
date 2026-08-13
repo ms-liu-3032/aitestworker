@@ -117,6 +117,12 @@ export function listAttachments(projectId: number, sessionId: number) {
   return api<GenerationAttachment[]>(`${base(projectId)}/${sessionId}/attachments`)
 }
 
+export function reparseAttachment(projectId: number, sessionId: number, attachmentId: number) {
+  return api<GenerationAttachment>(`${base(projectId)}/${sessionId}/attachments/${attachmentId}/reparse`, {
+    method: 'POST',
+  })
+}
+
 export function triggerAnalysis(projectId: number, sessionId: number) {
   return api<GenerationAnalysis>(`${base(projectId)}/${sessionId}/analyze`, { method: 'POST' })
 }
