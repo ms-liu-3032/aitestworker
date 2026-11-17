@@ -78,7 +78,8 @@ npm run dev
 
 ### DeepSeek Harness 本机插件
 - DSH 负责需求分析、用例设计、工具编排和 UI/API 自动化；后端提供同一套项目、TOM、Wiki、用例、自动化资产与证据服务
-- 用户在原 Web 登录后生成一次性绑定码，在本机 DSH 中绑定；原 Web 端继续可用
+- 无需 Hub 绑定即可在本机设计测试点和独立用例，用 Playwright 执行 UI 自动化并保存截图报告与 trace
+- 需要项目 TOM、Wiki、正式用例或证据回写时，用户在原 Web 登录后生成一次性绑定码，在本机 DSH 中绑定；原 Web 端继续可用
 - 插件内含跨业务 Skill 和浏览器采集模块；每次自动化执行生成本地 HTML 报告，原始证据回写 Hub
 - 在仓库根目录运行 `./packaging/build-dsh-plugin-package.sh`，分享 `release/dsh-plugin/` 中的 `.tgz` 和安装说明
 

@@ -37,7 +37,8 @@ cat > "$OUT_DIR/INSTALL.md" <<EOF
    \`dsh plugin --profile desktop add /absolute/path/to/$package_name\`
 
 3. 重启 DSH，在插件页确认 AITestHub 已启用。
-4. 在 AITestHub Web 登录，生成一次性绑定码，复制页面给出的完整绑定命令到 DSH。服务地址由该命令指定，插件包不包含任何账号、绑定码或服务地址。
+4. 不连接 Hub 时，直接用自然语言要求“本地设计用例”或“本地执行 UI 自动化”，结果与报告只保存在本机。
+5. 需要项目 TOM/Wiki、正式用例、审核或证据回写时，在 AITestHub Web 登录并生成一次性绑定码，再把页面给出的完整绑定命令复制到 DSH。服务地址由该命令指定，插件包不包含任何账号、绑定码或服务地址。
 
 插件已包含 Skill 和浏览器采集代码，不需要另行启动本地 worker。浏览器执行需要本机可用的 Chrome 或 Playwright Chromium。
 EOF

@@ -11,7 +11,7 @@ type Step = { type: 'click' | 'fill' | 'press' | 'select' | 'check' | 'uncheck' 
   waitForResponse?: ResponseSpec }
 type Assertion = LocatorSpec & { locator?: LocatorSpec; expected?: string; match?: 'contains' | 'equals';
   timeout?: number; waitBefore?: number }
-type Mapping = { caseNo: string; page: string; steps: Step[]; assertions: Assertion[] }
+export type Mapping = { caseNo: string; page: string; steps: Step[]; assertions: Assertion[] }
 type Asset = { id: number; assetType?: string; status: string; currentVersion: number; latestVersion: number;
   caseStale?: boolean; caseMissing?: boolean; reviewStatus?: string }
 type Version = { versionNo: number; status: string; revisionKind: string; sourceRunId?: number; mapping: Mapping }
@@ -19,6 +19,17 @@ type RunPayload = { requestKey: string; versionNo: number; result: string; durat
   evidenceSessionId: number; failureStepIndex?: number; failureReason?: string }
 type BrowserPage = ReturnType<CaptureRuntime['pageForAutomation']>
 type BrowserLocator = ReturnType<BrowserPage['locator']>
+
+export type UiMappingResult = { result: string; failureStepIndex?: number; failureReason?: string;
+  failureContext?: { url: string; body: string } }
+
+export function resolveTargetPage(targetUrl: string, pagePath: string): URL {
+  const target = new URL(targetUrl)
+  if (!['http:', 'https:'].includes(target.protocol)) throw new Error('被测地址必须是 HTTP/HTTPS')
+  const pageUrl = new URL(pagePath, target.origin)
+  if (pageUrl.origin !== target.origin) throw new Error('映射页面不能跳出被测站点')
+  return pageUrl
+}
 
 function locator(page: BrowserPage, spec: LocatorSpec): BrowserLocator {
   if (!spec || typeof spec !== 'object') throw new Error('定位器为空')
@@ -85,6 +96,69 @@ async function performStep(page: BrowserPage, target: BrowserLocator, step: Step
   await Promise.all([action(), response])
 }
 
+/** One Playwright action/assertion path shared by Hub-backed and local-only runs. */
+export async function runUiMapping(page: BrowserPage, mapping: Mapping, pageUrl: URL,
+  params: Record<string, string> = {}): Promise<UiMappingResult> {
+  let result = 'PASS'
+  let failureStepIndex: number | undefined
+  let reason: string | undefined
+  let failureContext: { url: string; body: string } | undefined
+  let stage: 'NAVIGATION' | 'STEP' | 'ASSERTION' = 'NAVIGATION'
+  try {
+    const response = await page.goto(pageUrl.href, { waitUntil: 'domcontentloaded', timeout: 30_000 })
+    if (response && response.status() >= 500) throw new Error(`被测服务 HTTP ${response.status()}`)
+    stage = 'STEP'
+    for (let index = 0; index < mapping.steps.length; index++) {
+      const step = mapping.steps[index]
+      failureStepIndex = index
+      const data = ['fill', 'press', 'select'].includes(step.type) ? resolveData(step.data, params) : undefined
+      const candidates = [step.locator, ...(step.locator.fallback || [])]
+      for (let attempt = 0; attempt < candidates.length; attempt++) {
+        try {
+          const targetLocator = locator(page, candidates[attempt])
+          if (step.type === 'waitFor') {
+            const timeout = step.timeout || 15_000
+            if (step.expected !== undefined) await targetLocator.filter({ hasText: step.expected }).waitFor({ state: 'visible', timeout })
+            else await targetLocator.waitFor({ state: step.state || 'visible', timeout })
+            break
+          }
+          await targetLocator.waitFor({ state: 'visible', timeout: step.waitBefore || 15_000 })
+          await performStep(page, targetLocator, step, data)
+          break
+        } catch (error) {
+          if (attempt === candidates.length - 1 || !locatorFailure(error)) throw error
+        }
+      }
+    }
+    failureStepIndex = undefined
+    stage = 'ASSERTION'
+    for (const assertion of mapping.assertions) {
+      const targetLocator = locator(page, assertion.locator || assertion)
+      await targetLocator.waitFor({ state: 'visible', timeout: assertion.timeout || assertion.waitBefore || 15_000 })
+      const count = await targetLocator.count()
+      if (count !== 1) throw new Error(`断言定位到 ${count} 个元素；请限定作用域或使用已核实的 nth`)
+      if (assertion.expected !== undefined) {
+        const actual = await targetLocator.innerText({ timeout: assertion.timeout || 15_000 })
+        const matches = assertion.match === 'equals' ? actual.trim() === assertion.expected.trim()
+          : actual.includes(assertion.expected)
+        if (!matches) throw new Error('断言内容与预期不符')
+      }
+    }
+  } catch (error) {
+    reason = failureReason(error)
+    try {
+      failureContext = { url: page.url(), body: await page.locator('body').innerText()
+        .then(text => text.slice(0, 3000)).catch(() => '') }
+    } catch { /* The local trace and report still proceed after a closed page. */ }
+    result = stage === 'NAVIGATION' || /Target page, context or browser has been closed|browser.*disconnected|page has been closed/i.test(reason)
+      ? 'ENVIRONMENT_FAILURE'
+      : stage === 'ASSERTION' ? 'ASSERTION_FAILURE'
+      : /缺少运行时测试数据参数|输入步骤缺少数据/.test(reason) ? 'DATA_FAILURE'
+      : locatorFailure(error) ? 'LOCATOR_FAILURE' : 'OTHER_FAILURE'
+  }
+  return { result, failureStepIndex, failureReason: reason, failureContext }
+}
+
 /** Executes a stored mapping directly. The agent is called only if a failed locator needs a proposed heal. */
 export async function executeAutomationAsset(binding: Binding, capture: CaptureRuntime, projectId: number,
   assetId: number, targetUrl: string, params: Record<string, string> = {}, requestedVersion?: number,
@@ -110,72 +184,18 @@ export async function executeAutomationAsset(binding: Binding, capture: CaptureR
     && (versionNo <= asset.currentVersion || version.status !== 'DRAFT'))) {
     throw new Error('版本不可执行')
   }
-  const target = new URL(targetUrl)
-  if (!['http:', 'https:'].includes(target.protocol)) throw new Error('被测地址必须是 HTTP/HTTPS')
-  const pageUrl = new URL(version.mapping.page, target.origin)
-  if (pageUrl.origin !== target.origin) throw new Error('映射页面不能跳出被测站点')
+  const pageUrl = resolveTargetPage(targetUrl, version.mapping.page)
   const started = Date.now()
-  const captureRun = await capture.start(binding, projectId, target.origin, `自动化 ${version.mapping.caseNo} v${versionNo}`,
-    undefined, headless)
-  let result = 'PASS'
-  let failureStepIndex: number | undefined
-  let reason: string | undefined
-  let failureContext: { url: string; body: string } | undefined
-  let stage: 'NAVIGATION' | 'STEP' | 'ASSERTION' = 'NAVIGATION'
+  const captureRun = await capture.start(binding, projectId, pageUrl.origin,
+    `自动化 ${version.mapping.caseNo} v${versionNo}`, undefined, headless)
+  let mappingRun: UiMappingResult
   try {
-    const page = capture.pageForAutomation(binding, projectId, captureRun.sessionId)
-    const response = await page.goto(pageUrl.href, { waitUntil: 'domcontentloaded', timeout: 30_000 })
-    if (response && response.status() >= 500) throw new Error(`被测服务 HTTP ${response.status()}`)
-    stage = 'STEP'
-    for (let index = 0; index < version.mapping.steps.length; index++) {
-      const step = version.mapping.steps[index]
-      failureStepIndex = index
-      const data = ['fill', 'press', 'select'].includes(step.type) ? resolveData(step.data, params) : undefined
-      const candidates = [step.locator, ...(step.locator.fallback || [])]
-      for (let attempt = 0; attempt < candidates.length; attempt++) {
-        try {
-          const targetLocator = locator(page, candidates[attempt])
-          if (step.type === 'waitFor') {
-            const timeout = step.timeout || 15_000
-            if (step.expected !== undefined) await targetLocator.filter({ hasText: step.expected }).waitFor({ state: 'visible', timeout })
-            else await targetLocator.waitFor({ state: step.state || 'visible', timeout })
-            break
-          }
-          await targetLocator.waitFor({ state: 'visible', timeout: step.waitBefore || 15_000 })
-          await performStep(page, targetLocator, step, data)
-          break
-        } catch (error) {
-          if (attempt === candidates.length - 1 || !locatorFailure(error)) throw error
-        }
-      }
-    }
-    failureStepIndex = undefined
-    stage = 'ASSERTION'
-    for (const assertion of version.mapping.assertions) {
-      const targetLocator = locator(page, assertion.locator || assertion)
-      await targetLocator.waitFor({ state: 'visible', timeout: assertion.timeout || assertion.waitBefore || 15_000 })
-      const count = await targetLocator.count()
-      if (count !== 1) throw new Error(`断言定位到 ${count} 个元素；请限定作用域或使用已核实的 nth`)
-      if (assertion.expected !== undefined) {
-        const actual = await targetLocator.innerText({ timeout: assertion.timeout || 15_000 })
-        const matches = assertion.match === 'equals' ? actual.trim() === assertion.expected.trim()
-          : actual.includes(assertion.expected)
-        if (!matches) throw new Error('断言内容与预期不符')
-      }
-    }
+    mappingRun = await runUiMapping(capture.pageForAutomation(binding, projectId, captureRun.sessionId),
+      version.mapping, pageUrl, params)
   } catch (error) {
-    reason = failureReason(error)
-    try {
-      const page = capture.pageForAutomation(binding, projectId, captureRun.sessionId)
-      failureContext = { url: page.url(), body: await page.locator('body').innerText()
-        .then(text => text.slice(0, 3000)).catch(() => '') }
-    } catch { /* Evidence upload still proceeds when the page has closed. */ }
-    result = stage === 'NAVIGATION' || /Target page, context or browser has been closed|browser.*disconnected|page has been closed/i.test(reason)
-      ? 'ENVIRONMENT_FAILURE'
-      : stage === 'ASSERTION' ? 'ASSERTION_FAILURE'
-      : /缺少运行时测试数据参数|输入步骤缺少数据/.test(reason) ? 'DATA_FAILURE'
-      : locatorFailure(error) ? 'LOCATOR_FAILURE' : 'OTHER_FAILURE'
+    mappingRun = { result: 'ENVIRONMENT_FAILURE', failureReason: failureReason(error) }
   }
+  const { result, failureStepIndex, failureReason: reason, failureContext } = mappingRun
   const runPayload: RunPayload = { requestKey: randomUUID(), versionNo, result,
     durationMs: Date.now() - started, evidenceSessionId: captureRun.sessionId,
     failureStepIndex, failureReason: reason }

@@ -2,8 +2,9 @@ import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
 export type LocalReportInput = {
-  projectId: number
-  assetId: number
+  projectId?: number
+  assetId?: number
+  caseTitle?: string
   caseNo: string
   versionNo: number
   sessionId: number
@@ -13,7 +14,7 @@ export type LocalReportInput = {
   assertionCount: number
   failureStepIndex?: number
   failureReason?: string
-  storageStatus: 'RECORDED' | 'EVIDENCE_PENDING' | 'RUN_WRITE_PENDING'
+  storageStatus: 'RECORDED' | 'EVIDENCE_PENDING' | 'RUN_WRITE_PENDING' | 'LOCAL_ONLY' | 'LOCAL_CAPTURE_INCOMPLETE'
   startedAt: number
 }
 
@@ -70,12 +71,12 @@ export async function writeLocalAutomationReport(captureRoot: string, input: Loc
   const verdict = input.result === 'PASS' ? '通过' : '未通过'
   const failure = input.failureReason ? `<p><strong>失败原因：</strong>${escapeHtml(input.failureReason.slice(0, 1000))}</p>` : ''
   const failedStep = input.failureStepIndex === undefined ? '无' : String(input.failureStepIndex + 1)
-  const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>AITestHub 测试报告 ${escapeHtml(input.caseNo)}</title>
+  const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>${input.storageStatus.startsWith('LOCAL_') ? '本地' : 'AITestHub'} 测试报告 ${escapeHtml(input.caseNo)}</title>
 <style>body{font:15px/1.6 system-ui,sans-serif;max-width:1100px;margin:32px auto;padding:0 20px;color:#172033}h1,h2{line-height:1.3}.summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px}.card{border:1px solid #d9e0e8;border-radius:9px;padding:12px;background:#f7f9fc}.pass{color:#147d49}.fail{color:#bf3636}figure{margin:20px 0;border:1px solid #d9e0e8;border-radius:9px;overflow:hidden}img{display:block;width:100%;height:auto}figcaption{padding:7px 12px;background:#f7f9fc;color:#566}small{color:#566}</style></head><body>
-<h1>AITestHub UI 自动化测试报告</h1><p class="${input.result === 'PASS' ? 'pass' : 'fail'}"><strong>${verdict}</strong> · ${escapeHtml(input.result)}</p>
-<div class="summary"><div class="card">项目 ${input.projectId}<br>资产 ${input.assetId}<br>用例 ${escapeHtml(input.caseNo)}</div><div class="card">版本 v${input.versionNo}<br>步骤 ${input.stepCount} · 断言 ${input.assertionCount}<br>失败步骤 ${failedStep}</div><div class="card">开始 ${localTime(input.startedAt)}<br>耗时 ${(input.durationMs / 1000).toFixed(2)} 秒<br>采集会话 ${input.sessionId}</div><div class="card">回写状态 ${escapeHtml(input.storageStatus)}<br>原始截图 ${images.length} 张<br>报告内截图 ${figures.length} 张</div></div>
+<h1>${input.storageStatus.startsWith('LOCAL_') ? '本地 UI 自动化测试报告' : 'AITestHub UI 自动化测试报告'}</h1><p class="${input.result === 'PASS' ? 'pass' : 'fail'}"><strong>${verdict}</strong> · ${escapeHtml(input.result)}</p>
+<div class="summary"><div class="card">${input.projectId === undefined ? '本地用例' : `项目 ${input.projectId}<br>资产 ${input.assetId}`}<br>${escapeHtml(input.caseTitle || input.caseNo)}</div><div class="card">版本 v${input.versionNo}<br>步骤 ${input.stepCount} · 断言 ${input.assertionCount}<br>失败步骤 ${failedStep}</div><div class="card">开始 ${localTime(input.startedAt)}<br>耗时 ${(input.durationMs / 1000).toFixed(2)} 秒<br>采集会话 ${input.sessionId}</div><div class="card">${input.storageStatus.startsWith('LOCAL_') ? '保存状态' : '回写状态'} ${escapeHtml(input.storageStatus)}<br>原始截图 ${images.length} 张<br>报告内截图 ${figures.length} 张</div></div>
 ${failure}<h2>运行截图</h2>${figures.join('\n') || '<p>本次采集没有可嵌入的截图；请检查本地采集目录。</p>'}
-<small>报告保存在本机；截图来自本次 Playwright 采集。运行证据和 Hub 回写状态以实际接口结果为准。</small></body></html>`
+<small>${input.storageStatus.startsWith('LOCAL_') ? '报告和 Playwright 原始证据仅保存在本机，未写入 Hub。' : '报告保存在本机；截图来自本次 Playwright 采集。运行证据和 Hub 回写状态以实际接口结果为准。'}</small></body></html>`
   const path = join(sessionDir, 'report.html')
   await writeFile(path, html, { encoding: 'utf8', mode: 0o600 })
   return path

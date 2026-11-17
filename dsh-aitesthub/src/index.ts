@@ -7,8 +7,10 @@ import { readFileSync } from 'node:fs'
 import { BINDING_KEY, callApi, callUserApi, currentBinding, parseServerUrl, projectPath, type Binding } from './client.js'
 import { CaptureRuntime } from './capture.js'
 import { downloadCaptureEvidence } from './evidence.js'
-import { executeAutomationAsset } from './automation.js'
+import { executeAutomationAsset, type Mapping } from './automation.js'
 import { executeApiAutomationAsset } from './api-automation.js'
+import { LocalDesignStore, localDesignRules, type LocalDesignInput } from './local-design.js'
+import { OfflineAutomation } from './offline-automation.js'
 
 export const name = 'aitesthub'
 export const inject = ['tools', 'commands', 'credentials', 'skills', 'systemPrompt']
@@ -21,7 +23,9 @@ function renderAutomationResult(value: string): Array<{ type: 'text'; text: stri
   try {
     const run = JSON.parse(value) as { result?: string; status?: string; reportPath?: string; reportError?: string }
     const result = run.result === 'PASS' ? '通过' : run.result ? `未通过（${run.result}）` : '未执行'
-    const storage = run.status === 'RECORDED' ? '已回写 Hub'
+    const storage = run.status === 'LOCAL_ONLY' ? '仅本机保存，未回写 Hub'
+      : run.status === 'LOCAL_CAPTURE_INCOMPLETE' ? '本机采集未完成，未回写 Hub'
+      : run.status === 'RECORDED' ? '已回写 Hub'
       : run.status === 'EVIDENCE_PENDING' ? '证据待上传，运行尚未入库'
         : run.status === 'RUN_WRITE_PENDING' ? '证据已上传，运行结果待回写' : '状态待确认'
     const report = run.reportPath ? `本地测试报告：${run.reportPath}`
@@ -41,6 +45,11 @@ function stableJson(value: unknown): string {
 
 export function apply(ctx: Context) {
   ctx.systemPrompt.section({
+    name: 'aitesthub:local-test-mode',
+    order: 89,
+    text: '用户明确要求本地/离线测试，或尚未绑定 AITestHub 且只要求通用测试时，使用 aitest_local_design_rules 和本地设计工具；先展示测试点，再按独立可执行原则写用例，可用 aitest_local_set_mapping 保存 Playwright 映射并调用 aitest_run_local_ui。此模式不调用 Hub，不声称读取 TOM/Wiki/正式库或通过 Hub 审核；每次报告标明仅本机保存。用户明确要求 Hub 项目资产时必须走 Hub 准备流程，连接失败不能悄悄降级为本地。',
+  })
+  ctx.systemPrompt.section({
     name: 'aitesthub:case-design-preflight',
     order: 90,
     text: '处理 AITestHub 项目测试点或用例前，先问 TOM 模式，再用原始需求调用 aitest_prepare_case_design 并加载 aitesthub Skill。准备失败或 Hub 不可用就停止本轮 Hub 用例编写。用户只要求来源 ID/数量时，汇报后停止，不提每点一条、补边界、直接执行等选项。先检查 TOM 类型覆盖；缺角色、状态或流程时主动用业务词补查，不把补查选择交给用户。必须同时读取 tomConfirmedRelationAvailableCount 与 tomRelations 才能判断关系是全库缺失还是本轮未选中；没有已确认关系时不得编造角色权限或状态迁移。Wiki 检索按多个业务词检查并读相关正文；单个窄词返回 0 不等于知识库为空。Wiki 的 HISTORY/IMPORTED_HISTORICAL_CASE 仅作历史覆盖证据，空步骤不能当写作样例；优先阅读 SEMANTIC_KNOWLEDGE 的规则和实现正文。设计依据按 TOM 角色/流程/状态及已确认关系、关联的已审核 Wiki 语义和实现正文、正式用例辅助覆盖与风格的顺序使用。未关联 Wiki 只是候选，须读取正文核实。COVERAGE_PLAN 每点一项不等于每点一条用例；边界、角色、状态、异常应按覆盖义务设计多个必要场景。用户未明确要求执行、被测地址/账号/范围未确定或旧草稿未复核时，不建议直接执行。用例按返回的七栏写作标准写可复现步骤与逐项对应的预期；展示测试点后，候选用例先用 aitest_validate_case_batch 分组校验，再汇总保存。',
@@ -50,11 +59,70 @@ export function apply(ctx: Context) {
   const skillBody = skillText.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, '')
   ctx.skills.register({
     name: 'aitesthub',
-    description: 'Use AITestHub project facts and historical cases to design, execute, and review tests.',
-    whenToUse: '用户要求基于 AITestHub 项目资产设计或执行测试时使用。',
+    description: 'Design and execute tests with local-only DSH tools or connected AITestHub project assets.',
+    whenToUse: '用户要求本地测试，或基于 AITestHub 项目资产设计和执行测试时使用。',
     source: 'runtime',
     content: skillBody,
   })
+  const localDesigns = new LocalDesignStore()
+  const offlineAutomation = new OfflineAutomation()
+  ctx.tools.register(defineTool({
+    name: 'aitest_local_design_rules',
+    description: '无需 Hub 绑定，读取插件内的通用测试点、独立用例和本地保存规则；此结果不包含项目知识。',
+    parameters: {},
+    output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] },
+    async execute() { return asText(localDesignRules) },
+  }))
+  ctx.tools.register(defineTool({
+    name: 'aitest_local_save_design',
+    description: '本机保存测试设计草稿。先生成测试点，可先传空 cases；补写用例时带原设计 ID、expectedVersion 和已有用例 ID 原位更新。不会写 Hub。',
+    parameters: { design: { type: 'object', required: true, additionalProperties: true,
+      description: 'requirementText、testPoints[{id,title,pointType,sourceBasis}]、cases[{id?,title,moduleName,precondition?,steps,expectedResult,sourceTestPointRefs,sourceBasis,mapping?}]；更新时加 id 和 expectedVersion' } },
+    output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] },
+    async execute({ design }) { return asText(await localDesigns.save(design as LocalDesignInput)) },
+  }))
+  ctx.tools.register(defineTool({
+    name: 'aitest_local_list_designs',
+    description: '列出本机测试设计及用例数量；不查询 Hub。',
+    parameters: {},
+    output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] },
+    async execute() { return asText(await localDesigns.list()) },
+  }))
+  ctx.tools.register(defineTool({
+    name: 'aitest_local_get_design',
+    description: '读取本机测试点、完整用例和执行映射。',
+    parameters: { designId: { type: 'string', required: true } },
+    output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] },
+    async execute({ designId }) { return asText(await localDesigns.get(designId)) },
+  }))
+  ctx.tools.register(defineTool({
+    name: 'aitest_local_set_mapping',
+    description: '为本机设计中的一条用例保存 Playwright 页面、步骤、定位与断言映射；同一用例 ID 原位修订，不调用 Hub。',
+    parameters: { designId: { type: 'string', required: true }, caseId: { type: 'string', required: true },
+      expectedVersion: { type: 'number', required: true },
+      mapping: { type: 'object', required: true, additionalProperties: true,
+        description: 'page、steps[{type,locator,data?,waitBefore?,waitForResponse?}]、assertions[{by,value,expected?}]；具体选择器来自当前页面' } },
+    output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] },
+    async execute({ designId, caseId, expectedVersion, mapping }) {
+      return asText(await localDesigns.setMapping(designId, caseId, expectedVersion, mapping as Mapping))
+    },
+  }))
+  ctx.tools.register(defineTool({
+    name: 'aitest_run_local_ui',
+    description: '无需 Hub 绑定，在本机 Playwright 执行已保存用例映射并生成含截图的 HTML 报告和原始 trace；执行结果仅保存在本机。',
+    parameters: { designId: { type: 'string', required: true }, caseId: { type: 'string', required: true },
+      targetUrl: { type: 'string', required: true, description: '被测站点 HTTP/HTTPS 根地址' },
+      params: { type: 'object', additionalProperties: true, description: '运行时字符串测试数据' },
+      headless: { type: 'boolean', description: '默认有界面；true 为无头执行' } },
+    output: { schema: { type: 'string' }, render: (_args, value) => renderAutomationResult(value) },
+    async execute({ designId, caseId, targetUrl, params, headless }) {
+      const design = await localDesigns.get(designId)
+      const testCase = design.cases.find(item => item.id === caseId)
+      if (!testCase?.mapping) throw new Error('本地用例尚未保存 UI 执行映射')
+      return asText(await offlineAutomation.run(testCase.mapping, targetUrl,
+        (params || {}) as Record<string, string>, headless || false, testCase.title))
+    },
+  }))
   const reviewedDrafts = new Map<string, string>()
   const reviewedStages = new Map<string, string>()
   const reviewedStyleCandidates = new Map<string, string>()
@@ -66,6 +134,7 @@ export function apply(ctx: Context) {
   const capture = new CaptureRuntime()
   if (typeof ctx.effect === 'function') ctx.effect(() => async () => { await capture.shutdown() })
   if (typeof ctx.on === 'function') ctx.on('tools/execute', async (exec, next) => {
+    if (exec.name.startsWith('aitest_local_') || exec.name === 'aitest_run_local_ui') return next()
     if (!exec.name.startsWith('aitest_')) return next()
     const started = Date.now()
     async function report(state: string, errorCode?: string) {

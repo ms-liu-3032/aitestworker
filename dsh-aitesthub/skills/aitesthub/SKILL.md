@@ -1,10 +1,18 @@
 ---
 name: aitesthub
-description: Use AITestHub project facts and historical cases to analyze requirements, design coverage, and save personal case drafts through the local DSH plugin.
-whenToUse: 用户要求基于 AITestHub 项目需求、知识、历史用例设计或执行测试时使用。
+description: Use local-only DSH testing or connected AITestHub assets to analyze requirements, design cases, and execute UI tests.
+whenToUse: 用户要求本地测试，或基于 AITestHub 项目需求、知识、历史用例设计或执行测试时使用。
 ---
 
 # AITestHub 测试方法
+
+## 先选运行模式
+
+用户明确说“不连接 Hub”“本地”“离线”，或者尚未绑定 Hub 且只要求通用测试时，使用本地模式。先调用 `aitest_local_design_rules`，基于用户本轮需求与实际页面证据理解范围；合并会改变预期的澄清问题，然后先展示测试点，再设计独立可执行的用例。本地模式不调用 `aitest_prepare_case_design`，不读取或声称拥有 Hub 的 TOM、Wiki、正式用例和个人偏好，也不声称通过 Hub 校验。通过 `aitest_local_save_design` 保存本机设计，先存测试点时 `cases=[]`；补齐用例时带原 `id` 与 `expectedVersion` 更新，保留返回的用例 ID。所有事实标明来源，未知菜单或状态标为待确认。生成质量按下文“跨业务用例写作与交付检查”复核。
+
+做本地 UI 自动化时，先从当前页面核实入口、控件、数据和断言；用 `aitest_local_set_mapping` 把 Playwright 映射存到对应本地用例，再调用 `aitest_run_local_ui`。映射步骤使用 `type`、`locator`、输入时的 `data`，可用 `waitFor` 等待业务状态、`waitForResponse` 等待已核实的请求；不在 Skill 中写业务选择器或接口路径。执行后向用户逐条报告 PASS/失败、失败步骤、截图和本地 `reportPath`，明确状态 `LOCAL_ONLY` 表示仅本机保存；原始 trace、事件和录屏也留在本机。定位失败可参考现场证据修订映射再跑，但不能因页面变化自动改断言或把失败说成通过。只有用户明确要求且完成 Hub 绑定与规则准备后，才另走 Hub 资产回写流程；本地草稿不会自动成为 Hub 草稿或正式用例。
+
+用户明确要求“基于 Hub 项目/历史资产”时，必须按下文 Hub 准备流程。Hub 连接失败要报告失败，不把本地结果伪装成 Hub 结果。两种模式都由 DSH 管理模型调用；本地模式不需要 Hub 服务凭据。
 
 ## 项目资产回写
 
