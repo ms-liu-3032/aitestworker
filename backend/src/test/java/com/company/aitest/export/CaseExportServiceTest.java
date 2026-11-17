@@ -93,8 +93,8 @@ class CaseExportServiceTest {
         JdbcTemplate jdbc = mock(JdbcTemplate.class);
         when(jdbc.queryForList(anyString(), any(Object[].class))).thenReturn(List.of(Map.ofEntries(
                 Map.entry("case_no", "TC-8"),
-                Map.entry("case_title", "审批通过后通知业务对象"),
-                Map.entry("module_name", "业务对象审批"),
+                Map.entry("case_title", "审批通过后通知访客"),
+                Map.entry("module_name", "访客审批"),
                 Map.entry("precondition", "存在待审批预约"),
                 Map.entry("steps", "打开待审批预约\n点击通过"),
                 Map.entry("expected_result", "展示审批详情\n通知已发送"),
@@ -113,8 +113,8 @@ class CaseExportServiceTest {
             var sheet = workbook.getSheetAt(0);
             assertEquals("用例名称", sheet.getRow(0).getCell(0).getStringCellValue());
             assertEquals("所属模块", sheet.getRow(0).getCell(1).getStringCellValue());
-            assertEquals("审批通过后通知业务对象", sheet.getRow(1).getCell(0).getStringCellValue());
-            assertEquals("/业务对象审批", sheet.getRow(1).getCell(1).getStringCellValue());
+            assertEquals("审批通过后通知访客", sheet.getRow(1).getCell(0).getStringCellValue());
+            assertEquals("/访客审批", sheet.getRow(1).getCell(1).getStringCellValue());
             assertEquals("[1] 打开待审批预约", sheet.getRow(1).getCell(4).getStringCellValue());
             assertEquals("[2] 点击通过", sheet.getRow(2).getCell(4).getStringCellValue());
             assertEquals("STEP", sheet.getRow(1).getCell(6).getStringCellValue());

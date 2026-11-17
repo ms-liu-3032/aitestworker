@@ -1,10 +1,14 @@
 package com.company.aitest.trace;
 
+import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 
 import com.company.aitest.scan.ControlledScanService;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -12,7 +16,33 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class TraceStepNormalizerTest {
 
-    private final TraceStepNormalizer normalizer = new TraceStepNormalizer(List.of(new ConfiguredTraceRulePack()));
+    /**
+     * 加载 visitor-pack.json 从 samples 目录，用于测试规则引擎的业务特化能力。
+     */
+    private static List<TraceRulePack> loadRulePacks() {
+        try {
+            Path samplePack = Path.of("src/test/resources/trace-rulepacks-samples/visitor-pack.json");
+            if (!Files.exists(samplePack)) {
+                return List.of(new ConfiguredTraceRulePack());
+            }
+            ObjectMapper mapper = new ObjectMapper();
+            TraceRuleSetConfig config;
+            try (InputStream is = Files.newInputStream(samplePack)) {
+                config = mapper.readValue(is, TraceRuleSetConfig.class);
+            }
+            return List.of(new ConfiguredTraceRulePack(
+                    List.of(config),
+                    List.of(
+                            new DialogInputConfirmWorkflowProcessor(),
+                            new EntryNavigationSubmitWorkflowProcessor()
+                    )
+            ));
+        } catch (Exception e) {
+            return List.of(new ConfiguredTraceRulePack());
+        }
+    }
+
+    private final TraceStepNormalizer normalizer = new TraceStepNormalizer(loadRulePacks());
 
     @Test
     void shouldNormalizeCommonBusinessSteps() {
@@ -63,10 +93,10 @@ class TraceStepNormalizerTest {
     @Test
     void shouldMergeContinuousInputIntoFinalValue() {
         List<BrowserTraceEventRecord> events = List.of(
-                event(1L, "INPUT", "https://example.com/form", "新建申请", "手机号", "textbox", "1", 100L),
-                event(2L, "INPUT", "https://example.com/form", "新建申请", "手机号", "textbox", "12", 200L),
-                event(3L, "INPUT", "https://example.com/form", "新建申请", "手机号", "textbox", "1234567", 300L),
-                event(4L, "CLICK", "https://example.com/form", "新建申请", "提交", "button", null, 600L)
+                event(1L, "INPUT", "https://example.com/form", "新建邀请", "手机号", "textbox", "1", 100L),
+                event(2L, "INPUT", "https://example.com/form", "新建邀请", "手机号", "textbox", "12", 200L),
+                event(3L, "INPUT", "https://example.com/form", "新建邀请", "手机号", "textbox", "1234567", 300L),
+                event(4L, "CLICK", "https://example.com/form", "新建邀请", "提交", "button", null, 600L)
         );
 
         List<TraceStepNormalizer.CleanTraceStep> steps = normalizer.normalize(events, Map.of(10L, "默认账号"));
@@ -78,41 +108,41 @@ class TraceStepNormalizerTest {
     @Test
     void shouldKeepLatestInputValueAcrossLongTypingWindow() {
         List<BrowserTraceEventRecord> events = List.of(
-                event(1L, "INPUT", "https://example.com/form", "新建申请", "请输入手机号", "textbox", "187290", 9000L),
-                event(2L, "KEYDOWN", "https://example.com/form", "新建申请", "请输入手机号", "keyboard", "1", 11000L),
-                event(3L, "INPUT", "https://example.com/form", "新建申请", "请输入手机号", "textbox", "1**********", 13152L),
-                event(4L, "CLICK", "https://example.com/form", "新建申请", "提交", "button", null, 15000L)
+                event(1L, "INPUT", "https://example.com/form", "新建邀请", "请输入访客手机", "textbox", "187290", 9000L),
+                event(2L, "KEYDOWN", "https://example.com/form", "新建邀请", "请输入访客手机", "keyboard", "1", 11000L),
+                event(3L, "INPUT", "https://example.com/form", "新建邀请", "请输入访客手机", "textbox", "1**********", 13152L),
+                event(4L, "CLICK", "https://example.com/form", "新建邀请", "提交", "button", null, 15000L)
         );
 
         List<TraceStepNormalizer.CleanTraceStep> steps = normalizer.normalize(events, Map.of(10L, "默认账号"));
 
         assertEquals(2, steps.size());
-        assertEquals("在“输入手机号”输入1**********", steps.get(0).description());
+        assertEquals("在“输入访客手机”输入1**********", steps.get(0).description());
     }
 
     @Test
     void shouldStopMergingWhenFieldBlursAndResumeAsNewInput() {
         List<BrowserTraceEventRecord> events = List.of(
-                event(1L, "INPUT", "https://example.com/form", "新建申请", "输入申请人姓名", "textbox", "fan", 1000L),
-                event(2L, "INPUT", "https://example.com/form", "新建申请", "输入申请人姓名", "textbox", "范雯雯", 7000L),
-                event(3L, "BLUR", "https://example.com/form", "新建申请", "输入申请人姓名", "textbox", "范雯雯", 7100L),
-                event(4L, "INPUT", "https://example.com/form", "新建申请", "输入申请人姓名", "textbox", "范雯", 10000L),
-                event(5L, "CLICK", "https://example.com/form", "新建申请", "提交", "button", null, 12000L)
+                event(1L, "INPUT", "https://example.com/form", "新建邀请", "输入访客姓名", "textbox", "fan", 1000L),
+                event(2L, "INPUT", "https://example.com/form", "新建邀请", "输入访客姓名", "textbox", "范雯雯", 7000L),
+                event(3L, "BLUR", "https://example.com/form", "新建邀请", "输入访客姓名", "textbox", "范雯雯", 7100L),
+                event(4L, "INPUT", "https://example.com/form", "新建邀请", "输入访客姓名", "textbox", "范雯", 10000L),
+                event(5L, "CLICK", "https://example.com/form", "新建邀请", "提交", "button", null, 12000L)
         );
 
         List<TraceStepNormalizer.CleanTraceStep> steps = normalizer.normalize(events, Map.of(10L, "默认账号"));
 
         assertEquals(3, steps.size());
-        assertEquals("在“输入申请人姓名”输入范雯雯", steps.get(0).description());
-        assertEquals("在“输入申请人姓名”输入范雯", steps.get(1).description());
+        assertEquals("在“输入访客姓名”输入范雯雯", steps.get(0).description());
+        assertEquals("在“输入访客姓名”输入范雯", steps.get(1).description());
     }
 
     @Test
     void shouldMergeSingleCharacterInputSequence() {
         List<BrowserTraceEventRecord> events = List.of(
-                event(1L, "INPUT", "https://example.com/form", "新建申请", "姓名", "textbox", "张", 100L),
-                event(2L, "INPUT", "https://example.com/form", "新建申请", "姓名", "textbox", "三", 180L),
-                event(3L, "CLICK", "https://example.com/form", "新建申请", "保存", "button", null, 500L)
+                event(1L, "INPUT", "https://example.com/form", "新建邀请", "姓名", "textbox", "张", 100L),
+                event(2L, "INPUT", "https://example.com/form", "新建邀请", "姓名", "textbox", "三", 180L),
+                event(3L, "CLICK", "https://example.com/form", "新建邀请", "保存", "button", null, 500L)
         );
 
         List<TraceStepNormalizer.CleanTraceStep> steps = normalizer.normalize(events, Map.of(10L, "默认账号"));
@@ -124,7 +154,7 @@ class TraceStepNormalizerTest {
     @Test
     void shouldAttachNearbyNetworkForSubmitAction() {
         List<BrowserTraceEventRecord> events = List.of(
-                event(1L, "CLICK", "https://example.com/form", "新建申请", "提交", "button", null, 1000L)
+                event(1L, "CLICK", "https://example.com/form", "新建邀请", "提交", "button", null, 1000L)
         );
         List<BrowserTraceNetworkRecord> networks = List.of(
                 network(1L, "https://example.com/api/invitation/create", "POST", 200, 120L, 0, null, 1200L)
@@ -139,65 +169,65 @@ class TraceStepNormalizerTest {
     @Test
     void shouldNormalizePromptStyleTargetText() {
         List<BrowserTraceEventRecord> events = List.of(
-                event(1L, "INPUT", "https://example.com/form", "新建申请", "新增申请 · 请输入申请人姓名", "textbox", "范雯雯", 1000L)
+                event(1L, "INPUT", "https://example.com/form", "新建邀请", "新增访客 · 请输入访客姓名", "textbox", "范雯雯", 1000L)
         );
 
         List<TraceStepNormalizer.CleanTraceStep> steps = normalizer.normalize(events, Map.of(10L, "默认账号"));
 
         assertEquals(1, steps.size());
-        assertEquals("在“新增申请 · 输入申请人姓名”输入范雯雯", steps.get(0).description());
+        assertEquals("在“新增访客 · 输入访客姓名”输入范雯雯", steps.get(0).description());
     }
 
     @Test
     void shouldPreferControlledScanPageHintWhenRuntimeTitleIsTooGeneric() {
         List<BrowserTraceEventRecord> events = List.of(
-                event(1L, "PAGE_OPEN", "https://example.com/workflow/newRequest?_p=w", "企业数字化行政", null, null, null, 75L)
+                event(1L, "PAGE_OPEN", "https://example.com/vsk/newInvitation?_p=w", "企业数字化行政", null, null, null, 75L)
         );
         Map<String, ControlledScanService.PageScanHint> hints = Map.of(
-                "/workflow/newRequest",
+                "/vsk/newInvitation",
                 new ControlledScanService.PageScanHint(
-                        "WORKFLOW_REROUTE",
-                        "审批业务操作面",
-                        "新建申请",
-                        "/workflow/newRequest",
-                        "审批流 / 新建申请",
-                        List.of("新建申请"),
-                        List.of("输入申请人姓名"),
+                        "VISITOR_REROUTE",
+                        "访客业务操作面",
+                        "新建邀请",
+                        "/vsk/newInvitation",
+                        "智能访客 / 新建邀请",
+                        List.of("新建邀请"),
+                        List.of("输入访客姓名"),
                         List.of("提交"),
-                        List.of("选择流程")
+                        List.of("添加访客")
                 )
         );
 
         List<TraceStepNormalizer.CleanTraceStep> steps = normalizer.normalize(events, List.of(), Map.of(10L, "默认账号"), hints);
 
         assertEquals(1, steps.size());
-        assertEquals("打开页面“审批流 / 新建申请”", steps.get(0).description());
+        assertEquals("打开页面“智能访客 / 新建邀请”", steps.get(0).description());
     }
 
     @Test
     void shouldPrefixListActionWithObjectLabel() {
         BrowserTraceEventRecord click = new BrowserTraceEventRecord(
-                1L, 1L, 2L, 10L, "CLICK", "https://example.com/request", "申请管理",
+                1L, 1L, 2L, 10L, "CLICK", "https://example.com/visitor", "访客管理",
                 "删除", "button", null, null, null,
-                "role=button[name=\"删除\"]", null, null, "申请单 A-20260626 草稿",
+                "role=button[name=\"删除\"]", null, null, "张三 13800000000 已登记",
                 LocalDateTime.now(), LocalDateTime.now(), "Asia/Shanghai", 500L, LocalDateTime.now());
         List<TraceStepNormalizer.CleanTraceStep> steps =
                 normalizer.normalize(List.of(click), Map.of(10L, "默认账号"));
         assertEquals(1, steps.size());
-        assertEquals("在“申请单 A-20260626 草稿”行点击“删除”按钮", steps.get(0).description());
+        assertEquals("在“张三 13800000000 已登记”行点击“删除”按钮", steps.get(0).description());
     }
 
     @Test
     void shouldPrefixDialogClickWithDialogTitle() {
         BrowserTraceEventRecord click = new BrowserTraceEventRecord(
-                1L, 1L, 2L, 10L, "CLICK", "https://example.com/request", "申请管理",
+                1L, 1L, 2L, 10L, "CLICK", "https://example.com/visitor", "访客管理",
                 "下一步", "button", null, null, null,
-                "role=button[name=\"下一步\"]", null, "新建申请", null,
+                "role=button[name=\"下一步\"]", null, "新增访客", null,
                 LocalDateTime.now(), LocalDateTime.now(), "Asia/Shanghai", 500L, LocalDateTime.now());
         List<TraceStepNormalizer.CleanTraceStep> steps =
                 normalizer.normalize(List.of(click), Map.of(10L, "默认账号"));
         assertEquals(1, steps.size());
-        assertEquals("在“新建申请”弹窗点击“下一步”按钮", steps.get(0).description());
+        assertEquals("在“新增访客”弹窗点击“下一步”按钮", steps.get(0).description());
     }
 
     @Test
@@ -225,6 +255,20 @@ class TraceStepNormalizerTest {
     }
 
     @Test
+    void shouldKeepVisitorSpecificSelectionBehaviorThroughRulePack() {
+        List<BrowserTraceEventRecord> events = List.of(
+                eventWithContext(1L, "INPUT", "https://example.com/visitor", "添加访客", "确定", "checkbox", "已勾选", 100L,
+                        "历史访客", "添加访客", "张三 · 13800000000"),
+                eventWithContext(2L, "CLICK", "https://example.com/visitor", "添加访客", "张三 · 13800000000", "button", null, 200L,
+                        "历史访客", "添加访客", "张三 · 13800000000")
+        );
+
+        List<TraceStepNormalizer.CleanTraceStep> steps = normalizer.normalize(events, Map.of(10L, "默认身份"));
+
+        assertEquals(1, steps.size());
+        assertEquals("选择历史访客“张三 13800000000”", steps.get(0).description());
+    }
+
     private BrowserTraceEventRecord event(Long id, String type, String url, String title, String elementText,
                                           String role, String value, Long relativeMs) {
         return new BrowserTraceEventRecord(id, 1L, 2L, 10L, type, url, title, elementText, role,

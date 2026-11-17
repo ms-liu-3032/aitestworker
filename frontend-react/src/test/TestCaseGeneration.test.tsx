@@ -414,7 +414,7 @@ describe('AnalysisPanel - 测试点标签', () => {
     const analysis = makeAnalysis({
       analysisResult: JSON.stringify({
         requirement_understanding: '测试',
-        evidence_summary: { tom_node_refs: ['业务对象预约流程'] },
+        evidence_summary: { tom_node_refs: ['访客预约流程'] },
         test_points: [{
           title: '验证预约主流程',
           point_type: 'MAIN_FLOW',
@@ -479,7 +479,7 @@ describe('AnalysisPanel - 测试点标签', () => {
     const analysis = makeAnalysis({
       status: 'NEED_TEST_POINT_SCOPE_CONFIRMATION',
       testPoints: [{
-        id: 'TP1', title: 'AI 预约流程', description: 'AI 识别的描述', related_module: '业务对象预约',
+        id: 'TP1', title: 'AI 预约流程', description: 'AI 识别的描述', related_module: '访客预约',
         related_page: '预约表单', related_flow: '提交预约', point_type: 'MAIN_FLOW', priority_hint: 'CORE',
         generation_scope: 'GENERATE',
       }],
@@ -1093,7 +1093,7 @@ describe('TestCaseGeneration', () => {
   })
 
   it('超长异步错误可展开查看且不会撑死聊天滚动区', async () => {
-    const longError = `已完成的用例编排仍遗漏测试点：${'权限管理权限数据、'.repeat(80)}`
+    const longError = `已完成的用例编排仍遗漏测试点：${'门禁权限数据、'.repeat(80)}`
     mockPage(makeSession({ executionTaskId: 501 }))
     apiMocks.getAsyncGenerationTask.mockResolvedValue(makeTask({
       status: 'FAILED',

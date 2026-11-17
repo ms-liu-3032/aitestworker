@@ -14,6 +14,19 @@ const apiMocks = vi.hoisted(() => ({
   upgradeTomCandidate: vi.fn(),
   importManual: vi.fn(),
   buildTestScope: vi.fn(),
+  extractTomFromFormalCases: vi.fn(),
+  importHistoricalCases: vi.fn(),
+  uploadHistoricalCases: vi.fn(),
+  listHistoricalCaseImports: vi.fn(),
+  listTomRelationCandidates: vi.fn(),
+  confirmTomRelationCandidate: vi.fn(),
+  rejectTomRelationCandidate: vi.fn(),
+  listTomAliasCandidates: vi.fn(),
+  confirmTomAliasCandidate: vi.fn(),
+  rejectTomAliasCandidate: vi.fn(),
+  listTomImpactCandidates: vi.fn(),
+  confirmTomImpactCandidate: vi.fn(),
+  rejectTomImpactCandidate: vi.fn(),
 }));
 
 vi.mock('../context/AppContext', () => ({
@@ -46,9 +59,56 @@ beforeEach(() => {
     projectTomCount: 1,
     systemTomCount: 2,
   });
+  apiMocks.listTomRelationCandidates.mockResolvedValue([]);
+  apiMocks.listTomAliasCandidates.mockResolvedValue([]);
+  apiMocks.listTomImpactCandidates.mockResolvedValue([]);
+  apiMocks.extractTomFromFormalCases.mockResolvedValue({ candidates: 2, relations: 1, unchanged: 0, skipped: 0 });
+  apiMocks.listHistoricalCaseImports.mockResolvedValue([]);
+  apiMocks.importHistoricalCases.mockResolvedValue({ importId: 1, imported: 1, eligible: 1, skipped: 0, extraction: { candidates: 2, relations: 1, unchanged: 0, skipped: 0 } });
 });
 
 describe('MiniTom model selection', () => {
+  it('extracts only reviewable TOM candidates from formal cases', async () => {
+    render(<MiniTom />);
+    await waitFor(() => expect(apiMocks.listTomRelationCandidates).toHaveBeenCalledWith(12));
+    fireEvent.click(screen.getByRole('button', { name: '从正式用例提取候选' }));
+    await waitFor(() => {
+      expect(apiMocks.extractTomFromFormalCases).toHaveBeenCalledWith(12);
+      expect(appMocks.showToast).toHaveBeenCalledWith(expect.stringContaining('确认后才会进入 TOM'));
+    });
+  });
+
+  it('imports pasted historical cases as reviewable TOM evidence instead of formal cases', async () => {
+    render(<MiniTom />);
+    await waitFor(() => expect(apiMocks.listHistoricalCaseImports).toHaveBeenCalledWith(12));
+    fireEvent.click(screen.getByRole('button', { name: '导入历史用例' }));
+    fireEvent.change(screen.getByLabelText('JSON 数组或文本用例'), {
+      target: { value: '[{"title":"提交预约","module":"预约","steps":"提交","expectedResult":"创建成功"}]' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '导入并生成 TOM 候选' }));
+    await waitFor(() => expect(apiMocks.importHistoricalCases).toHaveBeenCalledWith({
+      projectId: 12, batchName: '', businessDomain: '', cases: [{ title: '提交预约', module: '预约', steps: '提交', expectedResult: '创建成功' }],
+    }));
+    expect(appMocks.showToast).toHaveBeenCalledWith(expect.stringContaining('写入正式用例库'));
+  });
+
+  it('reviews alias and impact candidates through explicit confirmation actions', async () => {
+    apiMocks.listTomAliasCandidates.mockResolvedValueOnce([{
+      id: 21, tomId: 7, tomName: '预约提交', aliasName: '创建预约', sourceType: 'FORMAL_TEST_CASE', sourceRefId: 81, status: 'CANDIDATE', createdAt: '2026-08-13',
+    }]);
+    apiMocks.listTomImpactCandidates.mockResolvedValueOnce([{
+      id: 31, fromModelId: 7, fromName: '预约提交', targetKind: 'MODULE', targetRef: '预约管理', impactType: 'IMPACTS_MODULE', sourceRefId: 81, status: 'CANDIDATE', createdAt: '2026-08-13',
+    }]);
+    render(<MiniTom />);
+    await waitFor(() => expect(screen.getByRole('button', { name: '候选别名 (1)' })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: '候选别名 (1)' }));
+    fireEvent.click(screen.getByRole('button', { name: '确认' }));
+    await waitFor(() => expect(apiMocks.confirmTomAliasCandidate).toHaveBeenCalledWith(12, 21));
+    fireEvent.click(screen.getByRole('button', { name: '影响链 (1)' }));
+    fireEvent.click(screen.getByRole('button', { name: '确认' }));
+    await waitFor(() => expect(apiMocks.confirmTomImpactCandidate).toHaveBeenCalledWith(12, 31));
+  });
+
   it('passes selected modelConfigId when importing manual TOM content', async () => {
     render(<MiniTom />);
 
@@ -60,10 +120,10 @@ describe('MiniTom model selection', () => {
 
     expect(screen.getByLabelText('LLM 模型')).toHaveValue('7');
     fireEvent.change(screen.getByLabelText('文档标题'), {
-      target: { value: '业务对象操作手册' },
+      target: { value: '访客操作手册' },
     });
     fireEvent.change(screen.getByLabelText('业务领域'), {
-      target: { value: '业务对象预约' },
+      target: { value: '访客预约' },
     });
     fireEvent.change(screen.getByLabelText('Markdown 内容'), {
       target: { value: '# 预约\n提交预约后审批。' },
@@ -74,8 +134,8 @@ describe('MiniTom model selection', () => {
     await waitFor(() => {
       expect(apiMocks.importManual).toHaveBeenCalledWith({
         projectId: 12,
-        docTitle: '业务对象操作手册',
-        businessDomain: '业务对象预约',
+        docTitle: '访客操作手册',
+        businessDomain: '访客预约',
         markdownContent: '# 预约\n提交预约后审批。',
         modelConfigId: 7,
       });
@@ -95,14 +155,14 @@ describe('MiniTom model selection', () => {
       target: { value: '8' },
     });
     fireEvent.change(screen.getByLabelText('需求描述'), {
-      target: { value: '修改业务对象预约审批流程。' },
+      target: { value: '修改访客预约审批流程。' },
     });
     fireEvent.click(screen.getAllByRole('button', { name: '构建测试范围' })[1]);
 
     await waitFor(() => {
       expect(apiMocks.buildTestScope).toHaveBeenCalledWith({
         projectId: 12,
-        requirementText: '修改业务对象预约审批流程。',
+        requirementText: '修改访客预约审批流程。',
         modelConfigId: 8,
       });
       expect(screen.getByText('预约模块')).toBeInTheDocument();
@@ -123,7 +183,7 @@ describe('MiniTom model selection', () => {
 
     expect(screen.getByText('暂无可用模型')).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText('文档标题'), {
-      target: { value: '业务对象操作手册' },
+      target: { value: '访客操作手册' },
     });
     fireEvent.change(screen.getByLabelText('Markdown 内容'), {
       target: { value: '# 预约\n提交预约后审批。' },

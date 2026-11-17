@@ -7,6 +7,7 @@ import {
   type LoopEvent, type LoopCluster
 } from '../../services/api';
 import { statusLabel } from '../../utils/displayLabels';
+import BulkReviewPicker from '../../components/BulkReviewPicker';
 
 const statusColors: Record<string, string> = {
   PENDING: 'bg-yellow-50 text-yellow-700',
@@ -94,6 +95,12 @@ export default function LoopConfig() {
           </button>
         </div>
       </div>
+
+      <BulkReviewPicker title="学习回灌聚类" items={clusters.filter(cluster => cluster.status === 'PENDING').map(cluster => ({ id: cluster.id, name: cluster.theme || `聚类 #${cluster.id}` }))}
+        onReview={async (id, approved) => {
+          if (approved) await approveLoopCluster(id); else await rejectLoopCluster(id);
+          setClusters(current => current.map(cluster => cluster.id === id ? { ...cluster, status: approved ? 'APPROVED' : 'REJECTED' } : cluster));
+        }} />
 
       <div>
         <h2 className="text-sm font-semibold text-gray-700 mb-2">学习事件 ({events.length})</h2>

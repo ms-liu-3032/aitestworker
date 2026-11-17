@@ -48,6 +48,15 @@ public class RagRetrievalService {
     }
 
     public RetrievalResult retrieve(LlmInvocationRequest request, RetrievalPolicy policy) {
+        return retrieve(request, policy, false);
+    }
+
+    /** DSH's explicit asset search applies its keyword; normal gateway retrieval retains its existing policy. */
+    public RetrievalResult searchForDsh(LlmInvocationRequest request, RetrievalPolicy policy) {
+        return retrieve(request, policy, true);
+    }
+
+    private RetrievalResult retrieve(LlmInvocationRequest request, RetrievalPolicy policy, boolean filterByQuery) {
         if (policy == null || policy.disabled()) {
             return RetrievalResult.disabled();
         }
@@ -57,13 +66,13 @@ public class RagRetrievalService {
         List<RetrievedAsset> merged = new ArrayList<>();
 
         if (policy.kinds().contains(RetrievalPolicy.RetrievalAssetKind.KNOWLEDGE)) {
-            merged.addAll(searchKnowledge(projectId, userId, policy));
+            merged.addAll(searchKnowledge(projectId, userId, policy, filterByQuery));
         }
         if (policy.kinds().contains(RetrievalPolicy.RetrievalAssetKind.CASE)) {
-            merged.addAll(searchCases(projectId, userId, policy));
+            merged.addAll(searchCases(projectId, userId, policy, filterByQuery));
         }
         if (policy.kinds().contains(RetrievalPolicy.RetrievalAssetKind.SKILL)) {
-            merged.addAll(searchSkills(projectId, userId, policy));
+            merged.addAll(searchSkills(projectId, userId, policy, filterByQuery));
         }
 
         // 简单按 (trust 权重 + 关键词命中) 排序；真实相似度等 Weaviate 接入后替换
@@ -86,7 +95,7 @@ public class RagRetrievalService {
 
     // -------------------- knowledge_chunk --------------------
 
-    private List<RetrievedAsset> searchKnowledge(Long projectId, Long userId, RetrievalPolicy policy) {
+    private List<RetrievedAsset> searchKnowledge(Long projectId, Long userId, RetrievalPolicy policy, boolean filterByQuery) {
         if (projectId == null) return List.of();
         String sql = """
                 select kc.id as id, kc.document_id as document_id,
@@ -101,11 +110,15 @@ public class RagRetrievalService {
                   and (:includeDeprecated = 1 or kc.deprecated = 0)
                   and (:includeDeprecated = 1 or kd.deprecated_at is null)
                   and kd.review_status = 'APPROVED'
+                  and (:keyword = '' or kc.chunk_title LIKE :pattern ESCAPE '!'
+                       or kc.chunk_content LIKE :pattern ESCAPE '!' or kd.title LIKE :pattern ESCAPE '!')
                 limit :limit
                 """;
         MapSqlParameterSource params = new MapSqlParameterSource()
                 .addValue("projectId", projectId)
                 .addValue("includeDeprecated", policy.includeDeprecated() ? 1 : 0)
+                .addValue("keyword", keyword(policy, filterByQuery))
+                .addValue("pattern", pattern(policy, filterByQuery))
                 .addValue("limit", policy.topN() * 3);
 
         List<Map<String, Object>> rows;
@@ -122,10 +135,10 @@ public class RagRetrievalService {
                     asLong(r.get("id")),
                     "KNOWLEDGE_CHUNK",
                     asStringOrDefault(r.get("scope"), "PROJECT"),
-                    asStringOrDefault(r.get("source_type"), "DOCUMENT"),
+                    asStringOrDefault(r.get("source_type"), "YUQUE"),
                     "knowledge_document#" + asLong(r.get("document_id")),
                     asStringOrDefault(r.get("doc_status"), "IMPORTED"),
-                    asStringOrDefault(r.get("trust_level"), "KNOWLEDGE_DOC"),
+                    asStringOrDefault(r.get("trust_level"), "YUQUE_DOC"),
                     asStringOrDefault(r.get("title"), asString(r.get("doc_title"))),
                     snippet(content, 240),
                     asString(r.get("content_hash")),
@@ -136,7 +149,7 @@ public class RagRetrievalService {
 
     // -------------------- test_case_asset --------------------
 
-    private List<RetrievedAsset> searchCases(Long projectId, Long userId, RetrievalPolicy policy) {
+    private List<RetrievedAsset> searchCases(Long projectId, Long userId, RetrievalPolicy policy, boolean filterByQuery) {
         if (projectId == null) return List.of();
         String sql = """
                 select id, case_no, case_title, module_name, expected_result, steps,
@@ -144,13 +157,19 @@ public class RagRetrievalService {
                 from test_case_asset
                 where project_id = :projectId
                   and (case_scope is null or case_scope in ('PROJECT', 'PUBLIC', 'SYSTEM') or case_scope = 'PERSONAL' and submitted_by = :userId)
+                  and case_status = 'SUBMITTED'
                   and (:includeDeprecated = 1 or deprecated_at is null)
+                  and (:keyword = '' or case_no LIKE :pattern ESCAPE '!'
+                       or case_title LIKE :pattern ESCAPE '!' or module_name LIKE :pattern ESCAPE '!'
+                       or steps LIKE :pattern ESCAPE '!' or expected_result LIKE :pattern ESCAPE '!')
                 limit :limit
                 """;
         MapSqlParameterSource params = new MapSqlParameterSource()
                 .addValue("projectId", projectId)
                 .addValue("userId", userId == null ? 0L : userId)
                 .addValue("includeDeprecated", policy.includeDeprecated() ? 1 : 0)
+                .addValue("keyword", keyword(policy, filterByQuery))
+                .addValue("pattern", pattern(policy, filterByQuery))
                 .addValue("limit", policy.topN() * 3);
 
         List<Map<String, Object>> rows;
@@ -180,7 +199,7 @@ public class RagRetrievalService {
 
     // -------------------- skill_template --------------------
 
-    private List<RetrievedAsset> searchSkills(Long projectId, Long userId, RetrievalPolicy policy) {
+    private List<RetrievedAsset> searchSkills(Long projectId, Long userId, RetrievalPolicy policy, boolean filterByQuery) {
         if (projectId == null) return List.of();
         String sql = """
                 select id, skill_name, applicable_scene, flow_steps, scope, status, review_status,
@@ -194,12 +213,17 @@ public class RagRetrievalService {
                     or (scope = 'PUBLIC' and review_status = 'APPROVED')
                     or (scope = 'PERSONAL' and created_by = :userId)
                   )
+                  and (:keyword = '' or skill_name LIKE :pattern ESCAPE '!'
+                       or applicable_scene LIKE :pattern ESCAPE '!'
+                       or flow_steps LIKE :pattern ESCAPE '!')
                 limit :limit
                 """;
         MapSqlParameterSource params = new MapSqlParameterSource()
                 .addValue("projectId", projectId)
                 .addValue("userId", userId == null ? 0L : userId)
                 .addValue("includeDeprecated", policy.includeDeprecated() ? 1 : 0)
+                .addValue("keyword", keyword(policy, filterByQuery))
+                .addValue("pattern", pattern(policy, filterByQuery))
                 .addValue("limit", policy.topN() * 3);
 
         List<Map<String, Object>> rows;
@@ -232,12 +256,21 @@ public class RagRetrievalService {
 
     // -------------------- helpers --------------------
 
+    private String keyword(RetrievalPolicy policy, boolean filterByQuery) {
+        return filterByQuery && policy.queryText() != null ? policy.queryText().strip() : "";
+    }
+
+    private String pattern(RetrievalPolicy policy, boolean filterByQuery) {
+        return "%" + keyword(policy, filterByQuery).replace("!", "!!")
+                .replace("%", "!%").replace("_", "!_") + "%";
+    }
+
     private int trustWeight(String level) {
         if (level == null) return 0;
         return switch (level) {
             case "SYSTEM_RULE" -> 100;
             case "PROJECT_APPROVED" -> 80;
-            case "KNOWLEDGE_DOC" -> 70;
+            case "YUQUE_DOC" -> 70;
             case "HISTORICAL_CASE" -> 60;
             case "TRACE_CONFIRMED" -> 55;
             case "USER_DRAFT" -> 30;

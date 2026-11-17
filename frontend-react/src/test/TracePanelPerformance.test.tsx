@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 
 const traceMocks = vi.hoisted(() => ({
@@ -40,6 +40,7 @@ vi.mock('../services/traceApi', async importOriginal => ({
 import TracePanel from '../components/trace/TracePanel'
 
 beforeEach(() => {
+  vi.stubGlobal('localStorage', { getItem: vi.fn().mockReturnValue(null) })
   vi.clearAllMocks()
   traceMocks.listProfiles.mockResolvedValue([])
   traceMocks.listGroups.mockResolvedValue([])
@@ -51,6 +52,8 @@ beforeEach(() => {
     return []
   })
 })
+
+afterEach(() => vi.unstubAllGlobals())
 
 describe('TracePanel initial loading', () => {
   it('renders core trace controls without waiting for case-library previews', async () => {

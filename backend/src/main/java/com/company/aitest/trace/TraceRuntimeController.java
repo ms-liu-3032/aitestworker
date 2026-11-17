@@ -244,7 +244,7 @@ public class TraceRuntimeController {
                                    String normalizedLocator, String sectionTitle, String dialogTitle,
                                    String objectLabel, LocalDateTime happenedAtUtc,
                                    LocalDateTime happenedAtLocal, String timezone, Long relativeMs) {
-        TraceDataService.EventInput toInput() {
+        public TraceDataService.EventInput toInput() {
             return new TraceDataService.EventInput(eventType, pageUrl, pageTitle, elementText, elementRole,
                     selector, valueSummary, screenshotPath, normalizedLocator, sectionTitle, dialogTitle,
                     objectLabel, happenedAtUtc, happenedAtLocal, timezone, relativeMs);
@@ -259,7 +259,7 @@ public class TraceRuntimeController {
                                      String responseSummary, LocalDateTime requestStartedAtUtc,
                                      LocalDateTime requestStartedAtLocal, LocalDateTime responseEndedAtUtc,
                                      LocalDateTime responseEndedAtLocal, String timezone, Long relativeMs) {
-        TraceDataService.NetworkInput toInput() {
+        public TraceDataService.NetworkInput toInput() {
             return new TraceDataService.NetworkInput(url, method, statusCode, durationMs, failed, errorMessage,
                     requestSummary, responseSummary, requestStartedAtUtc, requestStartedAtLocal, responseEndedAtUtc,
                     responseEndedAtLocal, timezone, relativeMs);

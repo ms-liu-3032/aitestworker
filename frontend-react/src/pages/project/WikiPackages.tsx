@@ -5,9 +5,12 @@ import {
   listWikiPacks, createWikiPack,
   listWikiEntries, createWikiEntry, reviewWikiEntry, reviewWikiPack, updateWikiPackStatus,
   updateWikiPack, updateWikiEntry,
+  listWikiPromotions, submitWikiPromotion,
   type WikiPack, type WikiEntry
 } from '../../services/api';
 import { statusLabel, wikiEntryTypeLabel, wikiScopeLabel } from '../../utils/displayLabels';
+import BulkReviewPicker from '../../components/BulkReviewPicker';
+import WikiTomLinksEditor from '../../components/WikiTomLinksEditor';
 
 const scopeColors: Record<string, string> = {
   PROJECT: 'bg-blue-50 text-blue-700',
@@ -33,6 +36,7 @@ export default function WikiPackages() {
   const [loading, setLoading] = useState(true);
   const [selectedPack, setSelectedPack] = useState<WikiPack | null>(null);
   const [entries, setEntries] = useState<WikiEntry[]>([]);
+  const [promotions, setPromotions] = useState<WikiPack[]>([]);
   const [showCreatePack, setShowCreatePack] = useState(false);
   const [showCreateEntry, setShowCreateEntry] = useState(false);
   const [newPackName, setNewPackName] = useState('');
@@ -69,10 +73,21 @@ export default function WikiPackages() {
   const handleSelectPack = async (pack: WikiPack) => {
     setSelectedPack(pack);
     setEntries([]);
+    setPromotions([]);
     try {
       const items = await listWikiEntries(pack.id);
       setEntries(asArray<WikiEntry>(items));
     } catch { setEntries([]); }
+    try { setPromotions(asArray<WikiPack>(await listWikiPromotions(pack.id))); }
+    catch { setPromotions([]); }
+  };
+
+  const handleSubmitPromotion = async (pack: WikiPack) => {
+    try {
+      const candidate = await submitWikiPromotion(pack.id, 'REUSABLE');
+      setPromotions(current => [candidate, ...current.filter(item => item.id !== candidate.id)]);
+      showToast('已提交跨项目复用候选，等待平台审核条目和知识包');
+    } catch (error: any) { showToast(error.message || '提交跨项目复用失败', 'error'); }
   };
 
   const replacePack = (updated: WikiPack) => {
@@ -149,11 +164,13 @@ export default function WikiPackages() {
   return (
     <div className="p-4 sm:p-6 space-y-4 animate-fade-in">
       <div className="flex items-center justify-between">
-        <div><h1 className="text-lg font-bold text-gray-900">项目知识库</h1><div className="mt-1 text-xs text-gray-500">这里只管理当前项目级知识；跨项目复用级和系统级知识请在管理后台的正式测试资产库中管理。</div></div>
+        <div><h1 className="text-lg font-bold text-gray-900">项目知识库</h1><div className="mt-1 text-xs text-gray-500">项目知识审核并激活后，可提交到跨项目复用级；平台审核通过并激活后，还可提交到系统级。</div></div>
         <button onClick={() => setShowCreatePack(true)} className="bg-slate-900 text-white px-3 py-1.5 rounded-lg text-xs font-semibold hover:bg-slate-800">
           新建知识包
         </button>
       </div>
+      <BulkReviewPicker title="项目知识包" items={packs.filter(pack => pack.reviewStatus === 'PENDING').map(pack => ({ id: pack.id, name: pack.name }))}
+        onReview={async (id, approved) => replacePack(await reviewWikiPack(id, approved ? 'APPROVED' : 'REJECTED'))} />
 
       {/* Pack 列表 */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
@@ -181,6 +198,11 @@ export default function WikiPackages() {
       {/* Entry 列表 */}
       {selectedPack && (
         <div className="mt-4">
+          <BulkReviewPicker title="项目知识条目" items={entries.filter(entry => entry.reviewStatus === 'PENDING').map(entry => ({ id: entry.id, name: entry.title }))}
+            onReview={async (id, approved) => {
+              const updated = await reviewWikiEntry(id, approved ? 'APPROVED' : 'REJECTED');
+              setEntries(current => current.map(entry => entry.id === id ? updated : entry));
+            }} />
           <div className="flex items-center justify-between mb-3">
             <div>
               <h2 className="text-sm font-semibold text-gray-700">{selectedPack.name} — 条目 ({entries.length})</h2>
@@ -198,9 +220,16 @@ export default function WikiPackages() {
               {selectedPack.status === 'ACTIVE' && (
                 <button onClick={() => handlePackStatus(selectedPack, 'INACTIVE')} className="text-xs font-medium text-amber-700">停用</button>
               )}
+              {selectedPack.scope === 'PROJECT' && selectedPack.status === 'ACTIVE' && selectedPack.reviewStatus === 'APPROVED' &&
+                !promotions.some(item => item.scope === 'REUSABLE' && item.reviewStatus !== 'REJECTED') && (
+                  <button onClick={() => void handleSubmitPromotion(selectedPack)} className="rounded bg-amber-600 px-2.5 py-1.5 text-xs font-semibold text-white">提交至跨项目复用级</button>
+                )}
               <button onClick={() => setShowCreateEntry(true)} className="text-xs text-purple-600 hover:text-purple-700 font-medium">+ 新建条目</button>
             </div>
           </div>
+          {promotions.length > 0 && <div className="mb-3 rounded-lg border border-amber-100 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+            跨项目提交记录：{promotions.filter(item => item.scope === 'REUSABLE').map(item => `${item.name}（${statusLabel(item.reviewStatus)} / ${statusLabel(item.status)}）`).join('、') || '暂无'}。提交后仍需平台审核，原项目知识保持可用。
+          </div>}
           <div className="space-y-2">
             {entries.map(entry => (
               <div key={entry.id} className="p-3 bg-white rounded-lg border border-gray-200">
@@ -295,6 +324,11 @@ export default function WikiPackages() {
           <div className="max-h-[85vh] w-full max-w-2xl overflow-y-auto rounded-lg bg-white p-5 shadow-xl" onClick={event => event.stopPropagation()}>
             <div className="flex items-start justify-between gap-4"><div><h3 className="text-base font-semibold text-gray-900">{viewingEntry.title}</h3><div className="mt-1 text-xs text-gray-500">{wikiEntryTypeLabel(viewingEntry.entryType)} · {statusLabel(viewingEntry.reviewStatus)} · {statusLabel(viewingEntry.effectiveStatus)}</div></div><button onClick={() => setViewingEntry(null)} className="text-sm text-gray-500">关闭</button></div>
             <div className="mt-4 whitespace-pre-wrap rounded-lg bg-gray-50 p-3 text-sm leading-6 text-gray-700">{viewingEntry.content}</div>
+            {selectedPack && <WikiTomLinksEditor entryId={viewingEntry.id} projectId={selectedPack.projectId} onChanged={() => {
+              setViewingEntry(null);
+              void listWikiEntries(selectedPack.id).then(items => setEntries(asArray<WikiEntry>(items)));
+              showToast('TOM 关联已保存，知识条目待重新审核');
+            }} />}
             <div className="mt-4 text-xs font-medium text-gray-600">来源追溯</div>
             <pre className="mt-1 max-h-44 overflow-auto whitespace-pre-wrap rounded-lg bg-gray-50 p-3 text-xs text-gray-600">{viewingEntry.sourceRefsJson || '该条目暂无来源追溯信息。'}</pre>
             <div className="mt-4 flex justify-end gap-2"><button onClick={() => openEntryEditor(viewingEntry)} className="rounded-lg bg-slate-900 px-3 py-2 text-xs font-semibold text-white">编辑</button><button onClick={() => setViewingEntry(null)} className="px-3 py-2 text-xs text-gray-500">关闭</button></div>

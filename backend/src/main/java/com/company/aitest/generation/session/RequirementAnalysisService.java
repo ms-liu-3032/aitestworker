@@ -80,6 +80,8 @@ public class RequirementAnalysisService {
     private final com.company.aitest.loop.LoopIntegrationService loopIntegrationService;
     private final GenerationTaskCheckpointService taskCheckpointService;
     private KnowledgeDepositionService knowledgeDepositionService;
+    private ContextContractService contextContractService;
+    private ReasoningPlanService reasoningPlanService;
 
     @org.springframework.beans.factory.annotation.Autowired
     public RequirementAnalysisService(JdbcClient jdbc, JdbcTemplate jdbcTemplate, TimeProvider timeProvider,
@@ -121,6 +123,16 @@ public class RequirementAnalysisService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     void setKnowledgeDepositionService(KnowledgeDepositionService knowledgeDepositionService) {
         this.knowledgeDepositionService = knowledgeDepositionService;
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setContextContractService(ContextContractService contextContractService) {
+        this.contextContractService = contextContractService;
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setReasoningPlanService(ReasoningPlanService reasoningPlanService) {
+        this.reasoningPlanService = reasoningPlanService;
     }
 
     public RequirementAnalysisRecord analyze(Long sessionId, CurrentUser user) {
@@ -620,11 +632,28 @@ public class RequirementAnalysisService {
                 "excluded_count", excluded,
                 "reviewed_by", user.id(),
                 "reviewed_at", timeProvider.now().toString()));
+        String scopedResult = toJson(result);
         jdbcTemplate.update("UPDATE requirement_analysis SET analysis_result = ?, status = 'SCOPE_CONFIRMED', updated_at = ? WHERE id = ?",
-                toJson(result), timeProvider.now(), analysis.id());
+                scopedResult, timeProvider.now(), analysis.id());
+        // Freeze only after the user's scope decisions are persisted.  Subsequent matrix,
+        // test-point and case-plan stages must use this exact decision set.
+        if (contextContractService != null) {
+            RequirementAnalysisRecord scopedAnalysis = getAnalysis(sessionId, version);
+            TomUsageMode tomMode = TomUsageMode.resolve(session.tomMode(), session.useMiniTom());
+            ProjectSemanticContextService.BuildResult context = buildSemanticEvidence(session.projectId(), scopedAnalysis.requirementText(), tomMode);
+            ContextContractService.ContractView contract = contextContractService.freeze(session.projectId(), sessionId, scopedAnalysis,
+                    session.modelConfigId(), context, user);
+            Map<String, Object> scopedRoot = readJsonObject(scopedResult);
+            if (scopedRoot != null) {
+                scopedRoot.put("context_contract", contextContractService.summary(contract));
+                scopedResult = toJson(scopedRoot);
+                jdbcTemplate.update("UPDATE requirement_analysis SET analysis_result = ?, updated_at = ? WHERE id = ?",
+                        scopedResult, timeProvider.now(), analysis.id());
+            }
+        }
         if (knowledgeDepositionService != null) {
             knowledgeDepositionService.depositConfirmedRequirement(session.projectId(), analysis.id(), analysis.version(),
-                    toJson(result), analysis.clarificationQuestions(), analysis.clarificationAnswers(), user);
+                    scopedResult, analysis.clarificationQuestions(), analysis.clarificationAnswers(), user);
         }
         messageService.appendSystemMessage(sessionId,
                 "需求范围已确认：本期生成 " + generate + " 项，仅参考 " + reference + " 项，排除 " + excluded + " 项。正在等待生成测试点。");
@@ -653,8 +682,7 @@ public class RequirementAnalysisService {
         Long taskId = session.executionTaskId();
         if (taskId == null) throw new BusinessException("范围确认任务未关联异步执行记录");
         TomUsageMode tomMode = TomUsageMode.resolve(session.tomMode(), session.useMiniTom());
-        ProjectSemanticContextService.BuildResult semanticContext =
-                buildSemanticEvidence(session.projectId(), analysis.requirementText(), tomMode);
+        ProjectSemanticContextService.BuildResult semanticContext = frozenOrLiveSemanticContext(analysis, session.projectId(), analysis.requirementText(), tomMode);
         String taskPrefix = "REQUIREMENT_SCOPE_CONTINUATION";
         CoverageStageResult coverageStage = runCoverageMatrixStages(user, session.projectId(), taskId,
                 session.modelConfigId(), session.promptTemplateId(), taskPrefix, generationCore, semanticContext,
@@ -676,6 +704,7 @@ public class RequirementAnalysisService {
         }
         String merged = initializeScopeReview(toJson(fullResult), testPoints);
         merged = enrichAnalysisResult(merged, semanticContext, analysis.clarificationQuestions());
+        merged = attachContractSummary(merged, analysis);
         ensureUsableAnalysisResult(merged);
         jdbcTemplate.update("UPDATE requirement_analysis SET analysis_result = ?, test_points = ?, status = 'NEED_TEST_POINT_SCOPE_CONFIRMATION', updated_at = ? WHERE id = ? AND status = 'SCOPE_CONFIRMED'",
                 merged, testPoints, timeProvider.now(), analysis.id());
@@ -807,6 +836,17 @@ public class RequirementAnalysisService {
             knowledgeDepositionService.depositConfirmedTestPoints(session.projectId(), analysis.id(), analysis.version(),
                     testPointsJson, user);
         }
+        if (reasoningPlanService != null) {
+            ContextContractService.ContractView contract = contextContractService == null ? null : contextContractService.findByAnalysis(analysis.id());
+            ReasoningPlanService.PlanView plan = reasoningPlanService.createOrReplace(session.projectId(), sessionId,
+                    getAnalysis(sessionId, version), contract == null ? null : contract.id(), user);
+            Map<String, Object> planRoot = readJsonObject(analysisResultJson);
+            if (planRoot != null) {
+                planRoot.put("reasoning_plan", plan.summary());
+                analysisResultJson = toJson(planRoot);
+                jdbcTemplate.update("UPDATE requirement_analysis SET analysis_result = ?, updated_at = ? WHERE id = ?", analysisResultJson, timeProvider.now(), analysis.id());
+            }
+        }
         messageService.appendSystemMessage(sessionId,
                 "测试点范围已确认：生成 " + generateCount + " 项，仅参考 " + referenceCount + " 项，排除 " + excludedCount
                         + " 项。人工修订的测试点将按修订内容进入后续编排。");
@@ -830,14 +870,21 @@ public class RequirementAnalysisService {
         Long taskId = session.executionTaskId();
         if (taskId == null) throw new BusinessException("测试点范围继续任务未关联异步执行记录");
         TomUsageMode tomMode = TomUsageMode.resolve(session.tomMode(), session.useMiniTom());
-        ProjectSemanticContextService.BuildResult semanticContext =
-                buildSemanticEvidence(session.projectId(), analysis.requirementText(), tomMode);
+        ProjectSemanticContextService.BuildResult semanticContext = frozenOrLiveSemanticContext(analysis, session.projectId(), analysis.requirementText(), tomMode);
         CaseCompositionStageResult composition = runCaseCompositionStage(user, session.projectId(), taskId,
                 session.modelConfigId(), session.promptTemplateId(), "TEST_POINT_SCOPE_CONTINUATION",
                 analysis.requirementText(), generationCore, coverageMatrix, generationPoints, semanticContext,
                 GenerationDepth.DEEP);
         Object casePlan = readJsonValue(composition.casePlan());
         result.put("case_plan", casePlan == null ? List.of() : casePlan);
+        if (reasoningPlanService != null) {
+            ReasoningPlanService.PlanView plan = reasoningPlanService.findByAnalysis(analysis.id());
+            if (plan != null) result.put("reasoning_plan", plan.summary());
+        }
+        if (contextContractService != null) {
+            ContextContractService.ContractView contract = contextContractService.findByAnalysis(analysis.id());
+            if (contract != null) result.put("context_contract", contextContractService.summary(contract));
+        }
         String merged = toJson(result);
         jdbcTemplate.update("UPDATE requirement_analysis SET analysis_result = ?, status = 'CONFIRMED', updated_at = ? WHERE id = ? AND status = 'TEST_POINT_SCOPE_CONFIRMED'",
                 merged, timeProvider.now(), analysis.id());
@@ -1589,7 +1636,8 @@ public class RequirementAnalysisService {
                 9. 生成前参考 coverage_matrix，避免只生成主流程；如果某个模块只有主流程没有异常/边界，应在草稿中补足或标记待确认。
                 10. 遵守防冗余规则：状态参数化、字段校验合并、同类入口合并、取消/关闭合并，避免把同一验证目标拆成多条重复用例。
                 11. 使用测试点中的 design_method 设计步骤；没有 design_method 时按需求类型选择场景法、等价类、边界值、判定表、状态迁移或错误推测。
-                12. 对 case_strategy=NODE_FOCUSED 的计划，前序测试点只能写在前置条件，步骤与预期只覆盖当前节点；对 FLOW_COMPOSED 的计划，按已声明依赖顺序覆盖完整流程。
+                12. 对 case_strategy=NODE_FOCUSED 的计划，前序测试点所需状态写成可独立准备的前置条件，步骤与预期只覆盖当前节点；对 FLOW_COMPOSED 的计划，在本条用例内按已声明依赖顺序覆盖完整流程。
+                13. 每条用例必须独立可执行，不能默认上一条用例已运行、通过或留下数据。所需账号、开关、页面状态或业务数据在本条前置条件写清；需要操作建立的状态在本条步骤中从已知入口完整写出。用例顺序不构成执行依赖。
                 """);
         return sb.toString().trim();
     }
@@ -1783,6 +1831,22 @@ public class RequirementAnalysisService {
                 .append("requirement_analysis_id: ").append(analysis.id()).append("\n")
                 .append("requirement_analysis_version: ").append(analysis.version()).append("\n")
                 .append("rule: 生成结果必须与该分析版本中的需求理解、测试点和澄清答案保持一致。");
+        if (contextContractService != null) {
+            ContextContractService.ContractView contract = contextContractService.findByAnalysis(analysis.id());
+            if (contract != null && contract.promptSection() != null && !contract.promptSection().isBlank()) {
+                sb.append("\n\n## 冻结上下文契约（本轮唯一业务背景）\n")
+                        .append(contract.promptSection())
+                        .append("\n规则：不得以任务执行期间新检索到的业务资料覆盖本契约；冲突必须标记为待确认。");
+            }
+        }
+        if (reasoningPlanService != null) {
+            ReasoningPlanService.PlanView plan = reasoningPlanService.findByAnalysis(analysis.id());
+            if (plan != null) {
+                sb.append("\n\n## 推理方法与质量规则\n")
+                        .append(toJson(plan.items()))
+                        .append("\n规则：推理方法只决定如何测，不新增业务事实。");
+            }
+        }
         return sb.toString();
     }
 
@@ -1795,6 +1859,18 @@ public class RequirementAnalysisService {
         refs.put("sessionId", sessionId);
         refs.put("analysisId", analysis.id());
         refs.put("analysisVersion", analysis.version());
+        if (contextContractService != null) {
+            ContextContractService.ContractView contract = contextContractService.findByAnalysis(analysis.id());
+            if (contract != null) {
+                refs.put("contextContract", contextContractService.summary(contract));
+            }
+        }
+        if (reasoningPlanService != null) {
+            ReasoningPlanService.PlanView plan = reasoningPlanService.findByAnalysis(analysis.id());
+            if (plan != null) {
+                refs.put("reasoningPlan", Map.of("id", plan.id(), "version", plan.version(), "summary", plan.summary()));
+            }
+        }
         refs.put("evidenceSummary", extractEvidenceSummary(analysis.analysisResult()));
         // A draft already carries its own TP/CP/CD references below.  Copying the complete
         // analysis test-point array into every draft makes a long requirement grow quadratically
@@ -1874,6 +1950,26 @@ public class RequirementAnalysisService {
             log.warn("Project semantic evidence build failed: {}", e.getMessage());
             return new ProjectSemanticContextService.BuildResult("", List.of());
         }
+    }
+
+    private ProjectSemanticContextService.BuildResult frozenOrLiveSemanticContext(RequirementAnalysisRecord analysis,
+                                                                                   Long projectId, String requirementText,
+                                                                                   TomUsageMode tomMode) {
+        if (contextContractService != null && analysis != null) {
+            ContextContractService.ContractView contract = contextContractService.findByAnalysis(analysis.id());
+            if (contract != null) return contextContractService.semanticContext(contract);
+        }
+        return buildSemanticEvidence(projectId, requirementText, tomMode);
+    }
+
+    private String attachContractSummary(String analysisResult, RequirementAnalysisRecord analysis) {
+        if (contextContractService == null || analysis == null) return analysisResult;
+        ContextContractService.ContractView contract = contextContractService.findByAnalysis(analysis.id());
+        if (contract == null) return analysisResult;
+        Map<String, Object> root = readJsonObject(analysisResult);
+        if (root == null) return analysisResult;
+        root.put("context_contract", contextContractService.summary(contract));
+        return toJson(root);
     }
 
     private record StagedAnalysisResult(String rawOutput,
@@ -4045,7 +4141,7 @@ public class RequirementAnalysisService {
         String text = firstNonBlank(String.valueOf(question.getOrDefault("question", "")), "");
         if (text.isBlank()) return new LinkedHashSet<>();
         Set<String> anchors = new LinkedHashSet<>();
-        for (String keyword : List.of("短信", "模板", "变量", "触发", "发送", "失败", "重试", "通知", "打印", "标签",
+        for (String keyword : List.of("短信", "模板", "变量", "触发", "发送", "失败", "重试", "通知", "打印", "访客贴",
                 "答题", "wifi", "大屏", "签出", "审批", "权限", "格式", "内容", "时间", "语言", "联系方式")) {
             if (text.contains(keyword)) anchors.add(keyword);
         }

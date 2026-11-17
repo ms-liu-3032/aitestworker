@@ -3,6 +3,8 @@
   "version": "0.1.0",
   "description": "AI Test Worker - 本地浏览器测试执行轨迹采集器",
   "private": true,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "bin": {
     "ai-test-worker": "./dist/cli/index.js"
   },

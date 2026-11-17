@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import DshBindingCard from '../components/DshBindingCard';
 
 function formatRole(roleCode?: string) {
   switch (roleCode) {
@@ -106,6 +107,7 @@ export default function Settings() {
           </button>
         </section>
       </div>
+      <DshBindingCard />
     </div>
   );
 }

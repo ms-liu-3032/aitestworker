@@ -609,6 +609,7 @@ public class MiniTomService {
         if (affected == 0) {
             throw new BusinessException("该资产已被其他用户处理，请刷新后查看最新状态");
         }
+        jdbcTemplate.update("UPDATE tom_evidence SET review_status = 'CONFIRMED' WHERE tom_id = ? AND review_status = 'PENDING'", id);
         return handleUpgradeMerge(record, id, user, now);
     }
 
@@ -639,6 +640,7 @@ public class MiniTomService {
         if (affected == 0) {
             throw new BusinessException("该资产已被其他用户处理，请刷新后查看最新状态");
         }
+        jdbcTemplate.update("UPDATE tom_evidence SET review_status = 'REJECTED' WHERE tom_id = ? AND review_status = 'PENDING'", id);
         return handleDowngradeOnReject(record, id, now);
     }
 
@@ -674,6 +676,7 @@ public class MiniTomService {
         if (affected == 0) {
             throw new BusinessException("该资产已被其他用户处理，请刷新后查看最新状态");
         }
+        jdbcTemplate.update("UPDATE tom_evidence SET review_status = 'CONFIRMED' WHERE tom_id = ? AND review_status = 'PENDING'", id);
         return handleUpgradeMerge(record, id, user, now);
     }
 

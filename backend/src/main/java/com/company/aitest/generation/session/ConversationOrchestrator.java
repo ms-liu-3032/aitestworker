@@ -313,7 +313,7 @@ public class ConversationOrchestrator {
         }
         if (!"CONFIRMED".equals(latest.status()) && !"GENERATED".equals(latest.status())) {
             var msg = messageService.appendAssistantMessage(sessionId,
-                    "当前分析还未完成确认，不能直接选择生成强度。请先完成需求范围和测试点范围确认；澄清问题可按需补充。",
+                    "当前分析还未完成确认，不能直接选择生成强度。请先完成需求范围和测试点范围确认。澄清问题可按需补充，不是生成门禁。",
                     null, "OPERATION_HINT", latest.version());
             return new ConversationReply(List.of(msg), latest);
         }

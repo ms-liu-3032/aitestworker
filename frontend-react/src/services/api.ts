@@ -307,6 +307,47 @@ export interface TestObjectModel {
   updatedAt: string
 }
 
+export interface TomRelationCandidate {
+  id: number
+  projectId: number
+  fromModelId: number
+  fromName: string
+  relationType: string
+  toModelId: number
+  toName: string
+  sourceType: string
+  sourceRefId: number | null
+  sourceRefsJson: string | null
+  status: string
+  requiresHumanConfirm: boolean
+  confidence: number | null
+  createdAt: string
+}
+
+export interface TomAliasCandidate {
+  id: number
+  tomId: number
+  tomName: string
+  aliasName: string
+  sourceType: string
+  sourceRefId: number | null
+  status: string
+  createdAt: string
+}
+
+export interface TomImpactCandidate {
+  id: number
+  fromModelId: number
+  fromName: string
+  targetKind: string
+  targetRef: string
+  impactType: string
+  sourceRefId: number | null
+  sourceType: string
+  status: string
+  createdAt: string
+}
+
 export function listTomCandidates(projectId?: number) {
   const qs = projectId ? `?projectId=${projectId}` : ''
   return api<TestObjectModel[]>(`/api/mini-tom/candidates${qs}`)
@@ -379,6 +420,100 @@ export function upgradeTomCandidate(id: number) {
 
 export function rejectTomCandidate(id: number, reason?: string) {
   return api<TestObjectModel>(`/api/mini-tom/candidates/${id}/reject`, { method: 'POST', body: reason ? JSON.stringify({ reason }) : undefined })
+}
+
+export function extractTomFromFormalCases(projectId: number) {
+  return api<{ candidates: number; relations: number; unchanged: number; skipped: number }>(
+    `/api/mini-tom/extract/from-formal-cases?projectId=${projectId}`, { method: 'POST' }
+  )
+}
+
+export interface HistoricalCaseImportInput {
+  title: string; module?: string; precondition?: string; steps?: string; expectedResult?: string;
+  priority?: string; caseType?: string; designMethod?: string;
+}
+
+export interface HistoricalCaseImportResult {
+  importId: number; imported: number; formalImported: number; eligible: number; skipped: number;
+  extraction: { candidates: number; relations: number; unchanged: number; skipped: number };
+}
+
+export interface HistoricalCaseImportBatch {
+  id: number; projectId: number; batchName: string; businessDomain: string | null;
+  sourceFormat: string; itemCount: number; eligibleCount: number; status: string; createdAt: string;
+}
+
+export function importHistoricalCases(body: { projectId: number; batchName?: string; businessDomain?: string; cases: HistoricalCaseImportInput[] }) {
+  return api<HistoricalCaseImportResult>('/api/mini-tom/historical-case-imports', { method: 'POST', body: JSON.stringify(body) })
+}
+
+export async function uploadHistoricalCases(projectId: number, file: File, batchName?: string, businessDomain?: string): Promise<HistoricalCaseImportResult> {
+  const formData = new FormData()
+  formData.append('projectId', String(projectId))
+  formData.append('file', file)
+  if (batchName) formData.append('batchName', batchName)
+  if (businessDomain) formData.append('businessDomain', businessDomain)
+  const headers = new Headers()
+  const token = getToken()
+  if (token) headers.set('Authorization', `Bearer ${token}`)
+  const response = await fetch(`${API_BASE}/api/mini-tom/historical-case-imports/upload`, { method: 'POST', headers, body: formData })
+  const body = await response.json().catch(() => null)
+  if (!response.ok || !body?.success) throw new Error(body?.message || '历史用例文件导入失败')
+  return body.data as HistoricalCaseImportResult
+}
+
+export function listHistoricalCaseImports(projectId: number) {
+  return api<HistoricalCaseImportBatch[]>(`/api/mini-tom/historical-case-imports?projectId=${projectId}`)
+}
+
+export function listTomRelationCandidates(projectId: number) {
+  return api<TomRelationCandidate[]>(`/api/mini-tom/relation-candidates?projectId=${projectId}`)
+}
+
+export function proposeManualTomRelation(projectId: number, command: {
+  fromModelId: number; relationType: string; toModelId: number; evidenceText: string
+}) {
+  return api<TomRelationCandidate>(`/api/mini-tom/relation-candidates/manual?projectId=${projectId}`, {
+    method: 'POST', body: JSON.stringify(command),
+  })
+}
+
+export function confirmTomRelationCandidate(projectId: number, id: number) {
+  return api<TomRelationCandidate>(`/api/mini-tom/relation-candidates/${id}/confirm?projectId=${projectId}`, { method: 'POST' })
+}
+
+export function rejectTomRelationCandidate(projectId: number, id: number, reason?: string) {
+  return api<TomRelationCandidate>(`/api/mini-tom/relation-candidates/${id}/reject?projectId=${projectId}`, {
+    method: 'POST', body: reason ? JSON.stringify({ reason }) : undefined,
+  })
+}
+
+export function listTomAliasCandidates(projectId: number) {
+  return api<TomAliasCandidate[]>(`/api/mini-tom/alias-candidates?projectId=${projectId}`)
+}
+
+export function confirmTomAliasCandidate(projectId: number, id: number) {
+  return api<void>(`/api/mini-tom/alias-candidates/${id}/confirm?projectId=${projectId}`, { method: 'POST' })
+}
+
+export function rejectTomAliasCandidate(projectId: number, id: number, reason?: string) {
+  return api<void>(`/api/mini-tom/alias-candidates/${id}/reject?projectId=${projectId}`, {
+    method: 'POST', body: reason ? JSON.stringify({ reason }) : undefined,
+  })
+}
+
+export function listTomImpactCandidates(projectId: number) {
+  return api<TomImpactCandidate[]>(`/api/mini-tom/impact-candidates?projectId=${projectId}`)
+}
+
+export function confirmTomImpactCandidate(projectId: number, id: number) {
+  return api<void>(`/api/mini-tom/impact-candidates/${id}/confirm?projectId=${projectId}`, { method: 'POST' })
+}
+
+export function rejectTomImpactCandidate(projectId: number, id: number, reason?: string) {
+  return api<void>(`/api/mini-tom/impact-candidates/${id}/reject?projectId=${projectId}`, {
+    method: 'POST', body: reason ? JSON.stringify({ reason }) : undefined,
+  })
 }
 
 export function buildTestScope(body: { projectId: number; requirementText: string; modelConfigId?: number }) {
@@ -474,6 +609,8 @@ export interface FormalCase {
   sourceTraceGroupId: number | null
   sourceTraceSessionId: number | null
   sourceIssueClipId: number | null
+  importSourceType: string | null
+  importSourceRefId: number | null
   createdAt: string
   updatedAt: string
 }
@@ -735,6 +872,76 @@ export function batchRejectCandidates(items: { type: string; id: number }[], rea
   return api<number>('/api/admin/candidates/batch-reject', {
     method: 'POST',
     body: JSON.stringify({ items, reason }),
+  })
+}
+
+export type AutomationAsset = {
+  id: number; projectId: number; caseKind: string; caseId: number; caseNo: string; assetType: 'UI' | 'API';
+  status: string; currentVersion: number; latestVersion: number; healCount: number;
+  blockedReason?: string | null; createdBy: number;
+  sourceCaseVersion: number; caseVersion: number; caseStale: boolean; caseMissing: boolean;
+  reviewStatus: string;
+  archiveReason?: string | null; archivedBy?: number | null; archivedAt?: string | null;
+}
+
+export type AutomationRun = {
+  id: number; assetId: number; versionNo: number; result: string; durationMs: number;
+  evidenceSessionId?: number | null; apiEvidenceId?: number | null;
+  failureStepIndex?: number | null; failureReason?: string | null;
+}
+
+export type AutomationApiEvidence = {
+  id: number; assetId: number; versionNo: number; result: string;
+  evidence: { steps: unknown[]; assertions: unknown[]; targetOrigin?: string };
+}
+
+export type AutomationVersion = {
+  assetId: number; versionNo: number; mapping: Record<string, unknown>; status: string;
+  changeReason: string; revisionKind: string; sourceRunId?: number | null; verifiedRunId?: number | null;
+  reviewStatus: string; reviewedBy?: number | null; reviewReason?: string | null;
+}
+
+export function listAutomationAssets(projectId: number) {
+  return api<AutomationAsset[]>(`/api/projects/${projectId}/automation-assets`)
+}
+export function getAutomationVersion(projectId: number, assetId: number, versionNo: number) {
+  return api<AutomationVersion>(`/api/projects/${projectId}/automation-assets/${assetId}/versions/${versionNo}`)
+}
+export function listAutomationRuns(projectId: number, assetId: number) {
+  return api<AutomationRun[]>(`/api/projects/${projectId}/automation-assets/${assetId}/runs`)
+}
+export function getAutomationApiEvidence(projectId: number, assetId: number, evidenceId: number) {
+  return api<AutomationApiEvidence>(`/api/projects/${projectId}/automation-assets/${assetId}/api-evidence/${evidenceId}`)
+}
+export function proposeAutomationVersion(projectId: number, assetId: number, input: {
+  requestKey: string; expectedVersion: number; changeReason: string; mapping: Record<string, unknown>;
+}) {
+  return api<AutomationVersion>(`/api/projects/${projectId}/automation-assets/${assetId}/versions`, {
+    method: 'POST', body: JSON.stringify(input),
+  })
+}
+export function unblockAutomationAsset(projectId: number, assetId: number) {
+  return api<AutomationAsset>(`/api/projects/${projectId}/automation-assets/${assetId}/unblock`, { method: 'POST' })
+}
+export function publishAutomationAsset(projectId: number, assetId: number) {
+  return api<number>(`/api/projects/${projectId}/automation-assets/${assetId}/publish-reusable`, { method: 'POST' })
+}
+export function approveAutomationVersion(projectId: number, assetId: number, versionNo: number) {
+  return api<AutomationVersion>(`/api/projects/${projectId}/automation-assets/${assetId}/versions/${versionNo}/approve`, { method: 'POST' })
+}
+export function batchApproveAutomationVersions(projectId: number, targets: { assetId: number; versionNo: number }[]) {
+  return api<AutomationVersion[]>(`/api/projects/${projectId}/automation-assets/batch-approve`, {
+    method: 'POST', body: JSON.stringify({ targets }),
+  })
+}
+export function discardAutomationCandidate(projectId: number, assetId: number, versionNo: number, reason: string) {
+  return api<AutomationVersion>(`/api/projects/${projectId}/automation-assets/${assetId}/versions/${versionNo}/discard`, {
+    method: 'POST', body: JSON.stringify({ reason }),
+  })
+}
+export function archiveAutomationAsset(projectId: number, assetId: number, reason: string) {
+  return api<AutomationAsset>(`/api/projects/${projectId}/automation-assets/${assetId}/archive`, {
+    method: 'POST', body: JSON.stringify({ reason }),
   })
 }
 
@@ -1065,6 +1272,7 @@ export interface LocalCaseDraft {
   sourceRefsJson: string | null
   caseScope: string | null
   caseStatus: string
+  versionNo: number
   createdBy: number
   createdAt: string
   updatedAt: string
@@ -1530,6 +1738,7 @@ export interface WikiPack {
   reviewStatus: string
   trustLevel: string | null
   sourceType: string | null
+  promotionSourcePackId?: number | null
   description: string | null
   createdBy: number | null
   createdAt: string
@@ -1575,6 +1784,16 @@ export function createWikiPack(projectId: number, scope: string, name: string, d
   return api<WikiPack>('/api/wiki/packs', { method: 'POST', body: JSON.stringify({ projectId, scope, name, description }) })
 }
 
+export function listWikiPromotions(packId: number) {
+  return api<WikiPack[]>(`/api/wiki/packs/${packId}/promotions`)
+}
+
+export function submitWikiPromotion(packId: number, targetScope: 'REUSABLE' | 'SYSTEM') {
+  return api<WikiPack>(`/api/wiki/packs/${packId}/promotions`, {
+    method: 'POST', body: JSON.stringify({ targetScope }),
+  })
+}
+
 export function reviewWikiPack(packId: number, reviewStatus: string) {
   return api<WikiPack>(`/api/wiki/packs/${packId}/review`, {
     method: 'PATCH', body: JSON.stringify({ reviewStatus }),
@@ -1599,6 +1818,16 @@ export function deleteWikiPack(packId: number) {
 
 export function listWikiEntries(packId: number) {
   return api<WikiEntry[]>(`/api/wiki/packs/${packId}/entries`)
+}
+
+export function listWikiTomLinks(entryId: number) {
+  return api<number[]>(`/api/wiki/entries/${entryId}/tom-links`)
+}
+
+export function updateWikiTomLinks(entryId: number, tomIds: number[]) {
+  return api<number[]>(`/api/wiki/entries/${entryId}/tom-links`, {
+    method: 'PUT', body: JSON.stringify({ tomIds }),
+  })
 }
 
 export function createWikiEntry(packId: number, entryType: string, title: string, content: string) {

@@ -15,6 +15,7 @@ import java.util.ArrayList;
 
 import com.company.aitest.common.CurrentUser;
 import com.company.aitest.common.TimeProvider;
+import com.company.aitest.trace.TraceSummaryRecord;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -64,6 +65,7 @@ class KnowledgeDepositionServiceTest {
 
         assertEquals(3, result.wikiCandidates());
         assertEquals(1, result.tomCandidates());
+        verify(template, atLeastOnce()).update(contains("VALUES (?, 'PROJECT'"), any(Object[].class));
         verify(template, atLeastOnce()).update(contains("'PENDING', 0.70, 'INACTIVE'"), any(Object[].class));
         verify(template).update(contains("'CANDIDATE', 1, 'TO_CONFIRM'"), any(Object[].class));
     }
@@ -93,6 +95,22 @@ class KnowledgeDepositionServiceTest {
         assertEquals(1, result.wikiCandidates());
         assertEquals(0, result.tomCandidates());
         verify(template).update(contains("'PENDING', 0.70, 'INACTIVE'"), any(Object[].class));
+    }
+
+    @Test
+    void confirmedTraceSummaryCreatesReviewableWikiAndTomCandidates() {
+        TraceSummaryRecord summary = new TraceSummaryRecord(21L, 3L, 9L, null, null, "GROUP",
+                "访客签到", "完成签到", "[\"打开签到页\"]", "[]", "无", "{}", null, null,
+                null, null, null, null, "CONFIRMED", "STANDARD", 7L, 7L, null,
+                null, null, null, null, null, null, null, "访客签到", "MEDIUM", "PERSONAL",
+                "PENDING", "AI_GENERATED", null, null, 1);
+
+        var result = service.depositConfirmedTraceSummary(summary, new CurrentUser(7L, "tester", null));
+
+        assertEquals(1, result.wikiCandidates());
+        assertEquals(1, result.tomCandidates());
+        verify(template, atLeastOnce()).update(contains("INSERT INTO wiki_entry"), any(Object[].class));
+        verify(template, atLeastOnce()).update(contains("INSERT INTO test_object_model"), any(Object[].class));
     }
 
     @Test

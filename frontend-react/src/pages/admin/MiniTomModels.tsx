@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import Modal from '../../components/Modal';
 import { useApp } from '../../context/AppContext';
+import BulkReviewPicker from '../../components/BulkReviewPicker';
 import {
   confirmAdminTomModel,
   deprecateAdminTomModel,
@@ -352,6 +353,12 @@ export default function MiniTomModels() {
           />
         </div>
       </div>
+
+      <BulkReviewPicker title="系统 TOM 候选" items={filteredModels.filter(model => model.status === 'CANDIDATE').map(model => ({ id: model.id, name: model.name }))}
+        onReview={async (id, approved) => {
+          const updated = approved ? await confirmAdminTomModel(id) : await rejectAdminTomModel(id);
+          updateModelInState(updated);
+        }} />
 
       <div className="grid grid-cols-1 xl:grid-cols-[1.25fr_1fr] gap-6">
         <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">

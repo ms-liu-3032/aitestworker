@@ -10,6 +10,7 @@ import {
   type PromptTemplateRecord,
 } from '../../services/api';
 import { statusLabel as uiStatusLabel } from '../../utils/displayLabels';
+import BulkReviewPicker from '../../components/BulkReviewPicker';
 
 type FilterScope = '' | 'PUBLIC' | 'SYSTEM' | 'PERSONAL';
 type FilterStatus = '' | 'ACTIVE' | 'DEPRECATED' | 'REVIEWING';
@@ -173,6 +174,13 @@ export default function PromptLibrary() {
           + 新建提示词
         </button>
       </div>
+
+      <BulkReviewPicker title="提示词候选" items={filteredPrompts.filter(prompt => prompt.reviewStatus === 'PENDING').map(prompt => ({ id: prompt.id, name: prompt.promptName }))}
+        onReview={async (id, approved) => {
+          const updated = await reviewPromptTemplate(id, approved);
+          setPrompts(current => current.map(prompt => prompt.id === id ? updated : prompt));
+          setSelectedPrompt(current => current?.id === id ? updated : current);
+        }} />
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
         <div className="bg-white rounded-xl border border-gray-200 p-4">

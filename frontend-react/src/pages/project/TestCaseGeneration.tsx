@@ -906,6 +906,21 @@ export function AnalysisPanel({
         reference_count?: number;
         excluded_count?: number;
       };
+      context_contract?: {
+        id?: number;
+        version?: number;
+        status?: string;
+        facts_count?: number;
+        background_count?: number;
+        evidence_count?: number;
+        conflict_count?: number;
+      };
+      reasoning_plan?: {
+        plan_version?: number;
+        point_count?: number;
+        skill_count?: number;
+        rule?: string;
+      };
       test_points?: {
         title?: string;
         description?: string;
@@ -1105,6 +1120,25 @@ export function AnalysisPanel({
             </div>
             {result.input_source_notes && (
               <div className="mt-1 text-xs text-gray-500">{displayText(result.input_source_notes)}</div>
+            )}
+          </div>
+        )}
+        {(result?.context_contract || result?.reasoning_plan) && (
+          <div className="rounded-lg border border-slate-200 bg-slate-50 p-2">
+            <div className="text-[11px] font-semibold text-slate-800">本轮上下文与测试推理</div>
+            {result?.context_contract && (
+              <div className="mt-1 text-[10px] leading-4 text-slate-600">
+                冻结上下文 v{result.context_contract.version || 1}：事实 {result.context_contract.facts_count || 0} 项，
+                背景 {result.context_contract.background_count || 0} 项，证据 {result.context_contract.evidence_count || 0} 项
+                {Number(result.context_contract.conflict_count || 0) > 0 ? `，待确认冲突 ${result.context_contract.conflict_count} 项` : ''}。
+                后续测试点和用例编排均以此版本为准。
+              </div>
+            )}
+            {result?.reasoning_plan && (
+              <div className="mt-1 text-[10px] leading-4 text-slate-600">
+                推理计划：为 {result.reasoning_plan.point_count || 0} 个测试点调度 {result.reasoning_plan.skill_count || 0} 类通用方法。
+                {result.reasoning_plan.rule && <span> {displayText(result.reasoning_plan.rule)}</span>}
+              </div>
             )}
           </div>
         )}

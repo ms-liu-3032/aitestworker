@@ -13,7 +13,7 @@ class IntentRecognizerTest {
     @Test
     void clarificationAnswerWithConfirmWordsIsSupplementInWaitingStage() {
         String answer = """
-                规则配置的具体入口需要确认：在业务对象管理中新增管理页面。
+                规则配置的具体入口需要确认：在访客管理中新增管理页面。
                 适用对象字段为单选。
                 批量配置不支持。
                 """;
@@ -38,7 +38,7 @@ class IntentRecognizerTest {
 
     @Test
     void clarificationContainingSkipOrGenerateWordsIsNeverTreatedAsWorkflowCommand() {
-        String answer = "如果业务对象没有绑定企业微信，该通知方式是否跳过？没有就不发送；本轮不生成权限管理权限。";
+        String answer = "如果访客没有绑定企业微信，该通知方式是否跳过？没有就不发送；本轮不生成门禁权限。";
 
         assertEquals(
                 UserIntent.SUPPLEMENT_REQUIREMENT,

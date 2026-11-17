@@ -35,6 +35,10 @@ type CandidateItem = {
   fieldName?: string;
   suggestedValue?: string;
   summaryScope?: string;
+  operationSteps?: string;
+  body?: string;
+  sourceType?: string;
+  sourceId?: number;
 };
 
 const pendingStatuses = new Set(['CANDIDATE', 'DRAFT']);
@@ -56,6 +60,7 @@ export default function CandidateReview() {
   const [actingKey, setActingKey] = useState<string | null>(null);
   const [batchActing, setBatchActing] = useState<'confirm' | 'reject' | null>(null);
   const [selectedKeys, setSelectedKeys] = useState<string[]>([]);
+  const [expandedKeys, setExpandedKeys] = useState<string[]>([]);
 
   const selectedType = tabs.find(t => t.key === tab)?.type;
 
@@ -365,6 +370,24 @@ export default function CandidateReview() {
                     {candidate.summaryScope ? <span>范围：{candidate.summaryScope}</span> : null}
                     {candidate.description ? <span className="max-w-full break-words sm:max-w-[500px]">{candidate.description}</span> : null}
                   </div>
+                  {candidate.candidateType === 'tool' && candidate.body ? (
+                    <div className="mt-2">
+                      <button type="button" onClick={() => setExpandedKeys(prev => prev.includes(key)
+                        ? prev.filter(item => item !== key) : [...prev, key])}
+                        className="text-xs font-medium text-blue-700 hover:underline">
+                        {expandedKeys.includes(key) ? '收起定位详情' : '查看定位详情'}
+                      </button>
+                      {expandedKeys.includes(key) ? (
+                        <div className="mt-2 rounded-lg border border-gray-200 bg-gray-50 p-3 text-xs">
+                          <p className="mb-2 text-gray-600">来源任务：{candidate.sourceId ?? '未记录'}；审核后仍需在当前页面版本验证定位</p>
+                          <pre className="max-h-80 overflow-auto whitespace-pre-wrap break-all text-gray-800">{(() => {
+                            try { return JSON.stringify(JSON.parse(candidate.body), null, 2); }
+                            catch { return candidate.body; }
+                          })()}</pre>
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
                 </div>
                 <div className="flex shrink-0 flex-row flex-wrap items-center gap-2 sm:flex-col sm:items-end">
                   <span className={`text-[11px] font-medium px-2 py-0.5 rounded ${

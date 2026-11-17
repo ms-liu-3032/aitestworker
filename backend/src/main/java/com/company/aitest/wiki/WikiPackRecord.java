@@ -11,6 +11,7 @@ public record WikiPackRecord(
         String reviewStatus,
         String trustLevel,
         String sourceType,
+        Long promotionSourcePackId,
         String description,
         Long createdBy,
         LocalDateTime createdAt,

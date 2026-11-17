@@ -14,7 +14,7 @@ import org.springframework.core.io.support.PathMatchingResourcePatternResolver;
 
 /**
  * 平台默认运行态回归测试。
- * 确保开源默认运行态不会回退到历史定制耦合。
+ * 确保去访客耦合后不会回退。
  */
 class DefaultRuntimeRegressionTest {
 
@@ -30,23 +30,23 @@ class DefaultRuntimeRegressionTest {
     }
 
     /**
-     * 验证样例规则包不在默认 classpath 加载路径中。
+     * 验证 visitor-pack.json 不在默认 classpath 加载路径中。
      */
     @Test
-    void samplePackNotInDefaultClasspath() throws IOException {
+    void visitorPackNotInDefaultClasspath() throws IOException {
         PathMatchingResourcePatternResolver resolver = new PathMatchingResourcePatternResolver();
         // 只搜索 trace-rulepacks/ 目录，不搜索 samples 目录
         Resource[] resources = resolver.getResources("classpath*:trace-rulepacks/*.json");
         for (Resource resource : resources) {
             String filename = resource.getFilename();
             assertNotNull(filename);
-            assertFalse(filename.contains("sample"),
-                    "默认 trace-rulepacks 目录不应包含样例规则包: " + filename);
+            assertFalse(filename.contains("visitor"),
+                    "默认 trace-rulepacks 目录不应包含 visitor 规则包: " + filename);
         }
     }
 
     /**
-     * 验证 DomainPresetService 返回通用预设。
+     * 验证 DomainPresetService 返回通用预设（不是访客预设）。
      */
     @Test
     void domainPresetServiceReturnsGeneric() {
@@ -56,12 +56,12 @@ class DefaultRuntimeRegressionTest {
         assertNotNull(defaultPreset);
         assertEquals("GENERIC", defaultPreset.presetKey());
         assertEquals("通用业务", defaultPreset.defaultBusinessDomain());
-        assertFalse(defaultPreset.defaultBusinessDomain().isBlank(),
-                "默认业务域应为非空通用值");
+        assertFalse(defaultPreset.defaultBusinessDomain().contains("访客"),
+                "默认业务域不应包含访客");
     }
 
     /**
-     * 验证 preset 列表只包含通用预设。
+     * 验证 preset 列表只包含通用预设（无 visitor provider 时）。
      */
     @Test
     void domainPresetServiceListOnlyGeneric() {
@@ -73,7 +73,7 @@ class DefaultRuntimeRegressionTest {
     }
 
     /**
-     * 验证 business_domain 默认值在 V23 迁移后为通用空值。
+     * 验证 business_domain 默认值在 V23 迁移后为非访客值。
      * 这个测试通过 SQL 语句内容验证。
      */
     @Test
@@ -82,7 +82,7 @@ class DefaultRuntimeRegressionTest {
         assertTrue(Files.exists(migrationPath), "V23 迁移文件应存在");
         String content = Files.readString(migrationPath);
         assertTrue(content.contains("SET DEFAULT ''"), "V23 应将默认值改为空字符串");
-        assertTrue(content.contains("business_domain <> ''"), "V23 应将历史业务默认值回填为空字符串");
+        assertTrue(content.contains("WHERE business_domain IS NOT NULL"), "V23 应清理历史业务默认值");
     }
 
     /**
@@ -121,6 +121,26 @@ class DefaultRuntimeRegressionTest {
         String content = Files.readString(migrationPath);
         assertTrue(content.contains("CREATE TABLE business_pack_relation"), "应创建 business_pack_relation 表");
         assertTrue(content.contains("CREATE TABLE business_pack_snapshot"), "应创建 business_pack_snapshot 表");
+    }
+
+    /**
+     * 验证 visitor provider 类不存在。
+     */
+    @Test
+    void visitorProviderClassDoesNotExist() {
+        try {
+            Class.forName("com.company.aitest.scan.VisitorBuiltinScanSourceProvider");
+            fail("VisitorBuiltinScanSourceProvider 类不应存在");
+        } catch (ClassNotFoundException expected) {
+            // 预期行为
+        }
+
+        try {
+            Class.forName("com.company.aitest.preset.VisitorDomainPresetProvider");
+            fail("VisitorDomainPresetProvider 类不应存在");
+        } catch (ClassNotFoundException expected) {
+            // 预期行为
+        }
     }
 
     /**

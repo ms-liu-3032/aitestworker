@@ -51,7 +51,7 @@ class RequirementAnalysisServiceTest {
         Map<String, Object> point = new LinkedHashMap<>();
         point.put("title", "AI 原始预约流程");
         point.put("description", "AI 识别的原始现象");
-        point.put("related_module", "业务对象预约");
+        point.put("related_module", "访客预约");
         point.put("related_page", "预约表单");
         point.put("related_flow", "提交预约");
         point.put("point_type", "MAIN_FLOW");
@@ -111,16 +111,16 @@ class RequirementAnalysisServiceTest {
 
         String previousQuestions = """
                 [
-                  {"question":"短信模板中的变量（如${subject}、${time}）的数据来源和格式是什么？"},
-                  {"question":"短展示系统送失败时的处理逻辑是什么？是否有重试机制？"}
+                  {"question":"短信模板中的变量（如${visitor}、${time}）的数据来源和格式是什么？"},
+                  {"question":"短信发送失败时的处理逻辑是什么？是否有重试机制？"}
                 ]
                 """;
-        String answers = "[{\"index\":-1,\"answer\":\"变量按业务对象信息和预约时间填充；失败记录日志后重试三次。\"}]";
+        String answers = "[{\"index\":-1,\"answer\":\"变量按访客信息和预约时间填充；失败记录日志后重试三次。\"}]";
         String candidate = """
                 [
-                  {"question":"短信变量 ${subject} 和 ${time} 的取值格式是什么？"},
+                  {"question":"短信变量 ${visitor} 和 ${time} 的取值格式是什么？"},
                   {"question":"短信失败后是否需要重试或告警？"},
-                  {"question":"业务对象贴需要打印哪些字段？"}
+                  {"question":"访客贴需要打印哪些字段？"}
                 ]
                 """;
 
@@ -128,7 +128,7 @@ class RequirementAnalysisServiceTest {
         JsonNode result = objectMapper.readTree(filtered);
 
         assertEquals(1, result.size());
-        assertTrue(result.get(0).path("question").asText().contains("业务对象贴"));
+        assertTrue(result.get(0).path("question").asText().contains("访客贴"));
     }
 
     @Test
@@ -268,23 +268,23 @@ class RequirementAnalysisServiceTest {
         String llmOutput = """
                 {
                   "analysis": {
-                    "requirement_understanding": "通过外部系统系统反写业务对象系统，自动创建业务对象预约。",
-                    "business_domain": "智能业务对象+外部系统",
+                    "requirement_understanding": "通过招投标系统反写访客系统，自动创建访客预约。",
+                    "business_domain": "智能访客+招投标",
                     "requirement_type": "MIXED",
                     "input_sources": ["PRD_TEXT", "TOM"],
-                    "affected_modules": ["业务对象预约", "协同模块联动"],
+                    "affected_modules": ["访客预约", "会议室联动"],
                     "review_risk_questions": [
                 """;
 
         String extracted = RequirementAnalysisService.extractAnalysisJson(llmOutput);
         assertNotNull(extracted);
         var root = objectMapper.readTree(extracted);
-        assertEquals("通过外部系统系统反写业务对象系统，自动创建业务对象预约。",
+        assertEquals("通过招投标系统反写访客系统，自动创建访客预约。",
                 root.path("requirement_understanding").asText());
-        assertEquals("智能业务对象+外部系统", root.path("business_domain").asText());
+        assertEquals("智能访客+招投标", root.path("business_domain").asText());
         assertEquals("MIXED", root.path("requirement_type").asText());
         assertEquals("PRD_TEXT", root.path("input_sources").get(0).asText());
-        assertEquals("业务对象预约", root.path("affected_modules").get(0).asText());
+        assertEquals("访客预约", root.path("affected_modules").get(0).asText());
         assertTrue(root.path("uncertain_items").get(0).asText().contains("可能被截断"));
     }
 
@@ -293,8 +293,8 @@ class RequirementAnalysisServiceTest {
         String truncated = """
                 {
                   "analysis": {
-                    "requirement_understanding": "通过外部系统系统反写业务对象系统，自动创建业务对象预约。",
-                    "affected_modules": ["业务对象预约"]
+                    "requirement_understanding": "通过招投标系统反写访客系统，自动创建访客预约。",
+                    "affected_modules": ["访客预约"]
                 """;
         String complete = """
                 {
@@ -730,14 +730,14 @@ class RequirementAnalysisServiceTest {
         var service = new RequirementAnalysisService(
                 null, null, null, null, null, null, null, null, null, null, null, null
         );
-        Map<String, Object> unit = Map.of("id", "U1", "name", "业务对象预约表单", "summary", "创建预约并提交", "requirement_refs", List.of("R1"));
+        Map<String, Object> unit = Map.of("id", "U1", "name", "访客预约表单", "summary", "创建预约并提交", "requirement_refs", List.of("R1"));
         Map<String, Object> atom = Map.of("id", "R1", "source_basis", "需求描述", "needs_clarification", false);
         Map<String, Object> row = new LinkedHashMap<>();
         row.put("test_unit_ref", "U1");
         row.put("requirement_refs", List.of("R1"));
-        row.put("module", "业务对象预约");
-        row.put("main_flow", Map.of("count", 1, "items", List.of("填写有效业务对象信息后提交预约成功")));
-        row.put("boundary", Map.of("count", 3, "items", List.of("业务对象姓名为空时阻止提交", "手机号格式错误时提示", "预约时间处于允许边界时可提交")));
+        row.put("module", "访客预约");
+        row.put("main_flow", Map.of("count", 1, "items", List.of("填写有效访客信息后提交预约成功")));
+        row.put("boundary", Map.of("count", 3, "items", List.of("访客姓名为空时阻止提交", "手机号格式错误时提示", "预约时间处于允许边界时可提交")));
         for (String key : List.of("branch", "exception", "state", "data", "auth", "concurrency", "idempotent")) {
             row.put(key, Map.of("count", 0, "items", List.of()));
         }
@@ -748,7 +748,7 @@ class RequirementAnalysisServiceTest {
         Map<String, Object> point = (Map<String, Object>) method.invoke(service, "U1", unit, List.of(row),
                 Map.of("R1", atom), GenerationDepth.STANDARD);
 
-        assertEquals("业务对象预约表单", point.get("title"));
+        assertEquals("访客预约表单", point.get("title"));
         assertEquals("BUSINESS_OBJECTIVE", point.get("point_kind"));
         assertEquals(List.of("main_flow", "boundary"), point.get("coverage_dimensions"));
         assertTrue(((List<String>) point.get("coverage_requirements")).contains("INVALID_EQUIVALENCE_CLASS"));
@@ -766,18 +766,18 @@ class RequirementAnalysisServiceTest {
 
     @Test
     void mergeContinuationRemovesSimpleOverlap() {
-        String original = "{\"analysis\":{\"requirement_understanding\":\"abc\",\"affected_modules\":[\"业务对象预约\",\"协同模块联动流程";
-        String continuation = "\"协同模块联动流程\"]},\"test_points\":[]}";
+        String original = "{\"analysis\":{\"requirement_understanding\":\"abc\",\"affected_modules\":[\"访客预约\",\"会议室联动流程";
+        String continuation = "\"会议室联动流程\"]},\"test_points\":[]}";
 
         String merged = RequirementAnalysisService.mergeContinuation(original, continuation);
-        assertTrue(merged.contains("\"affected_modules\":[\"业务对象预约\",\"协同模块联动流程\"]"));
+        assertTrue(merged.contains("\"affected_modules\":[\"访客预约\",\"会议室联动流程\"]"));
     }
 
     @Test
     void truncatedAnalysisKeepsRequestingAndMergingChunksUntilJsonCloses() throws Exception {
         LlmGateway gateway = mock(LlmGateway.class);
         when(gateway.invoke(any())).thenReturn(
-                new LlmInvocationResponse("c1", "\"affected_modules\":[\"业务对象预约\"],", 0, 2048,
+                new LlmInvocationResponse("c1", "\"affected_modules\":[\"访客预约\"],", 0, 2048,
                         1, null, null, null, LlmInvocationStatus.OK, null, null),
                 new LlmInvocationResponse("c2", "\"risk_scenarios\":[]}}", 0, 100,
                         1, null, null, null, LlmInvocationStatus.OK, null, null)
@@ -788,14 +788,14 @@ class RequirementAnalysisServiceTest {
         Method method = RequirementAnalysisService.class.getDeclaredMethod(
                 "continueAnalysisOutputIfNeeded", String.class, int.class, LlmInvocationRequest.class, String.class, int.class);
         method.setAccessible(true);
-        String truncated = "{\"analysis\":{\"requirement_understanding\":\"业务对象预约\",";
+        String truncated = "{\"analysis\":{\"requirement_understanding\":\"访客预约\",";
         var request = new LlmInvocationRequest("root", 1L, 1L, 1L, "REQUIREMENT_ANALYSIS_CORE",
                 LlmStage.REQ_CLARIFY, 1L, null, null, Map.of(), "system", "user", null, 4096);
 
         String merged = (String) method.invoke(service, truncated, 4096, request, "需求理解", 4096);
 
         assertNotNull(objectMapper.readTree(merged));
-        assertEquals("业务对象预约", objectMapper.readTree(merged).path("analysis").path("affected_modules").get(0).asText());
+        assertEquals("访客预约", objectMapper.readTree(merged).path("analysis").path("affected_modules").get(0).asText());
         verify(gateway, times(2)).invoke(any());
     }
 
@@ -919,7 +919,7 @@ class RequirementAnalysisServiceTest {
         assertTrue(prompt.contains("## 用例编排计划"));
         assertTrue(prompt.contains("CP1"));
         assertTrue(prompt.contains("仅作背景/前置参考的测试点"));
-        assertTrue(prompt.contains("前序测试点只能写在前置条件"));
+        assertTrue(prompt.contains("前序测试点所需状态写成可独立准备的前置条件"));
     }
 
     @Test
@@ -1095,7 +1095,7 @@ class RequirementAnalysisServiceTest {
 
         String output = (String) method.invoke(
                 service,
-                "{\"requirement_understanding\":\"禁止业务对象到访配置\"}",
+                "{\"requirement_understanding\":\"禁止访客到访配置\"}",
                 null,
                 """
                 [
@@ -1248,7 +1248,7 @@ class RequirementAnalysisServiceTest {
         assertEquals("MINOR", RequirementAnalysisService.normalizeChangeScope("MINOR"));
         assertEquals("MAJOR", RequirementAnalysisService.normalizeChangeScope("MAJOR"));
         assertEquals("MINOR", RequirementAnalysisService.normalizeChangeScope("本次只是小幅描述补充，不新增模块页面流程"));
-        assertEquals("MAJOR", RequirementAnalysisService.normalizeChangeScope("本次补充涉及员工小程序、业务对象自助申请、接口反写等多个模块，影响范围较大，需要按重大变更处理。"));
+        assertEquals("MAJOR", RequirementAnalysisService.normalizeChangeScope("本次补充涉及员工小程序、访客自助申请、接口反写等多个模块，影响范围较大，需要按重大变更处理。"));
         assertEquals("MAJOR", RequirementAnalysisService.normalizeChangeScope("无法判断的长句也不能直接写入数据库字段导致 Data too long"));
         assertNull(RequirementAnalysisService.normalizeChangeScope(null));
         assertNull(RequirementAnalysisService.normalizeChangeScope(" "));
@@ -1842,7 +1842,7 @@ class RequirementAnalysisServiceTest {
         merge.setAccessible(true);
 
         String initial = """
-                {"requirement_understanding":"业务对象预约后需要审批","business_domain":"业务对象",
+                {"requirement_understanding":"访客预约后需要审批","business_domain":"访客",
                  "requirement_atoms":[{"id":"R1","title":"提交预约"}],"test_units":[]}
                 """;
         @SuppressWarnings("unchecked")
@@ -1855,7 +1855,7 @@ class RequirementAnalysisServiceTest {
                 }]}
                 """, fields);
         var root = objectMapper.readTree(patched);
-        assertEquals("业务对象预约后需要审批", root.path("requirement_understanding").asText());
+        assertEquals("访客预约后需要审批", root.path("requirement_understanding").asText());
         assertEquals(1, root.path("requirement_atoms").size());
         assertEquals("U1", root.path("test_units").get(0).path("id").asText());
     }
@@ -1872,7 +1872,7 @@ class RequirementAnalysisServiceTest {
 
         String system = (String) systemPrompt.invoke(service);
         String user = (String) userPrompt.invoke(service, """
-                {"business_domain":"业务对象","requirement_understanding":"预约与审批",
+                {"business_domain":"访客","requirement_understanding":"预约与审批",
                  "requirement_atoms":[{"id":"R1","title":"提交预约"},{"id":"R2","title":"审批"}],
                  "test_units":[]}
                 """);

@@ -31,7 +31,7 @@ class RequirementAnalysisSchemaContractTest {
                 "generation_task_stage_checkpoint", "skill_execution_log", "generation_attachment"
         }) {
             assertTrue(migration.contains("ALTER TABLE " + table),
-                    () -> "V51 must harden generation workflow table: " + table);
+                    () -> "V50 must harden generation workflow table: " + table);
         }
 
         var serviceSource = Files.readString(Path.of(

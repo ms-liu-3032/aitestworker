@@ -67,12 +67,12 @@ describe('case libraries use server-side filtering', () => {
     expect(await screen.findByText('第 5 / 6 页，共 300 条')).toBeInTheDocument()
 
     fireEvent.change(screen.getByPlaceholderText('搜索用例名称、模块、类型...'), {
-      target: { value: '权限管理审批' },
+      target: { value: '门禁审批' },
     })
     expect(screen.getByText('正在统计筛选结果...')).toBeInTheDocument()
 
     await waitFor(() => expect(apiMocks.listLocalCasesPage).toHaveBeenLastCalledWith(9, 0, 50, {
-      keyword: '权限管理审批',
+      keyword: '门禁审批',
       modules: [],
       priorities: [],
       statuses: [],

@@ -183,6 +183,46 @@ public class KnowledgeDepositionService {
         return total;
     }
 
+    /**
+     * Formal test cases are durable behavioural evidence.  They enter Wiki as inactive,
+     * reviewable history and never bypass the existing Wiki approval gate.
+     */
+    @Transactional
+    public DepositionResult depositFormalTestCase(Long projectId, Long caseId, String title, String module,
+                                                   String precondition, String steps, String expectedResult,
+                                                   Long createdBy) {
+        if (projectId == null || caseId == null) return new DepositionResult(0, 0, 0);
+        Long packId = ensureAutoPack(projectId, createdBy == null ? 0L : createdBy);
+        String content = "模块：" + firstNonBlank(module, "未分类")
+                + "\n前置条件：" + firstNonBlank(precondition, "无")
+                + "\n步骤：" + firstNonBlank(steps, "无")
+                + "\n预期结果：" + firstNonBlank(expectedResult, "无");
+        boolean inserted = insertWikiCandidate(packId, "HISTORY", firstNonBlank(title, "正式用例 #" + caseId),
+                content, "FORMAL_TEST_CASE", "TEST_CASE_ASSET", caseId,
+                "FORMAL_TEST_CASE:WIKI:" + caseId,
+                sourceRefs("FORMAL_TEST_CASE", "TEST_CASE_ASSET", caseId, 1, null), createdBy == null ? 0L : createdBy);
+        return new DepositionResult(inserted ? 1 : 0, 0, inserted ? 0 : 1);
+    }
+
+    /** Imported external cases are historical evidence, stored as an inactive Wiki candidate until reviewed. */
+    @Transactional
+    public DepositionResult depositImportedHistoricalTestCase(Long projectId, Long importItemId, String title, String module,
+                                                              String precondition, String steps, String expectedResult,
+                                                              Long createdBy) {
+        if (projectId == null || importItemId == null) return new DepositionResult(0, 0, 0);
+        Long packId = ensureAutoPack(projectId, createdBy == null ? 0L : createdBy);
+        String content = "模块：" + firstNonBlank(module, "未分类")
+                + "\n前置条件：" + firstNonBlank(precondition, "无")
+                + "\n步骤：" + firstNonBlank(steps, "无")
+                + "\n预期结果：" + firstNonBlank(expectedResult, "无");
+        boolean inserted = insertWikiCandidate(packId, "HISTORY", firstNonBlank(title, "历史导入用例 #" + importItemId),
+                content, "IMPORTED_HISTORICAL_CASE", "HISTORICAL_CASE_IMPORT_ITEM", importItemId,
+                "IMPORTED_HISTORICAL_CASE:WIKI:" + importItemId,
+                sourceRefs("IMPORTED_HISTORICAL_CASE", "HISTORICAL_CASE_IMPORT_ITEM", importItemId, 1, null),
+                createdBy == null ? 0L : createdBy);
+        return new DepositionResult(inserted ? 1 : 0, 0, inserted ? 0 : 1);
+    }
+
     /** A confirmed trace summary is evidence, not an active rule: create reviewable candidates only. */
     @Transactional
     public DepositionResult depositConfirmedTraceSummary(TraceSummaryRecord summary, CurrentUser user) {

@@ -78,6 +78,7 @@ class GenerationCaseLibraryServiceTest {
                        tgc.source_refs_json,
                        tgc.case_scope,
                        tgc.case_status,
+                       tgc.version_no,
                        tgc.user_id AS created_by,
                        tgc.created_at,
                        tgc.updated_at,
@@ -124,6 +125,7 @@ class GenerationCaseLibraryServiceTest {
                        tgc.source_refs_json,
                        tgc.case_scope,
                        tgc.case_status,
+                       tgc.version_no,
                        tgc.user_id AS created_by,
                        tgc.created_at,
                        tgc.updated_at,
@@ -140,7 +142,7 @@ class GenerationCaseLibraryServiceTest {
     void submitRejectsAlreadySubmittedDraft() {
         GenerationCaseLibraryService.LocalCaseDraftView draft = new GenerationCaseLibraryService.LocalCaseDraftView(
                 3L, 11L, 2L, "TC-1", "title", "project", "module", "pre", "steps", "expected",
-                "P1", "FUNCTIONAL", "POSITIVE", "LLM生成", "{}", "PERSONAL", "SUBMITTED", 9L,
+                "P1", "FUNCTIONAL", "POSITIVE", "LLM生成", "{}", "PERSONAL", "SUBMITTED", 1, 9L,
                 LocalDateTime.now(), LocalDateTime.now(), 7L, "GENERATION"
         );
         when(jdbcClient.sql(eq("""

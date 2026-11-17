@@ -138,6 +138,10 @@ public class CandidateReviewController {
                         case "tool" -> {
                             map.put("toolName", rs.getString("tool_name"));
                             map.put("description", rs.getString("description"));
+                            map.put("operationSteps", rs.getString("operation_steps"));
+                            map.put("body", rs.getString("body"));
+                            map.put("sourceType", rs.getString("source_type"));
+                            map.put("sourceId", rs.getObject("source_id"));
                         }
                     }
                     return map;
@@ -168,7 +172,7 @@ public class CandidateReviewController {
                     "UPDATE test_skill_template SET status = 'ACTIVE', updated_at = ? WHERE id = ?",
                     timeProvider.now(), id);
             case "tool" -> jdbcTemplate.update(
-                    "UPDATE test_tool_template SET status = 'ACTIVE', updated_at = ? WHERE id = ?",
+                    "UPDATE test_tool_template SET status = 'ACTIVE', review_status = 'APPROVED', updated_at = ? WHERE id = ?",
                     timeProvider.now(), id);
             default -> throw new BusinessException("不支持的候选类型: " + type);
         }
@@ -192,7 +196,7 @@ public class CandidateReviewController {
                     "UPDATE test_skill_template SET status = 'DEPRECATED', updated_at = ? WHERE id = ?",
                     timeProvider.now(), id);
             case "tool" -> jdbcTemplate.update(
-                    "UPDATE test_tool_template SET status = 'DEPRECATED', updated_at = ? WHERE id = ?",
+                    "UPDATE test_tool_template SET status = 'DEPRECATED', review_status = 'REJECTED', updated_at = ? WHERE id = ?",
                     timeProvider.now(), id);
             default -> throw new BusinessException("不支持的候选类型: " + type);
         }

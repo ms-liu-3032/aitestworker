@@ -22,6 +22,7 @@ import com.company.aitest.llm.gateway.LlmRuntimeException;
 import com.company.aitest.llm.gateway.LlmStage;
 import com.company.aitest.minitom.MiniTomService;
 import com.company.aitest.minitom.TestObjectModelRecord;
+import com.company.aitest.generation.session.ContextContractService;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -57,9 +58,10 @@ public class DirectCaseGenerationService {
             11. sourceBasis：数组，写明来自需求、TOM、业务包、页面画像、轨迹摘要中的依据名称。
             12. unsupportedItems：数组，写明没有证据支撑但为了可执行性暂时假设的内容；没有则返回空数组。
             13. confidence：0~1 数字。证据不足或 unsupportedItems 非空时不得高于 0.65。
-            14. caseStrategy=NODE_FOCUSED 时，已完成的前置测试点只能写入 precondition，步骤与预期只验证当前节点；caseStrategy=FLOW_COMPOSED 时，按测试点依赖顺序覆盖完整端到端流程。不得根据具体业务名称硬编码任何流程。
+            14. caseStrategy=NODE_FOCUSED 时，前序测试点所需的业务状态应写成可独立准备的 precondition，步骤与预期只验证当前节点；caseStrategy=FLOW_COMPOSED 时，在本条用例内按依赖顺序覆盖完整端到端流程。不得根据具体业务名称硬编码任何流程。
             15. caseType 固定属于功能用例，但 scenarioType 必须表达场景性质，只允许 POSITIVE/NEGATIVE/BOUNDARY/COMBINATION/STATE/RECOVERY；不能把所有功能用例都标成 POSITIVE。
             16. designMethods 必须列出本条用例实际使用的设计方法；designCoverage 必须列出本条用例实际兑现的覆盖义务。一个 CD 可以返回多条用例共同完成其全部 design_methods 和 coverage_requirements，但不得只返回代表性正向样例。
+            17. 每条用例必须能从自身的前置条件和步骤单独执行，不能假定上一条用例已经执行、通过或留下数据。所需账号、开关、页面状态或已有数据要在本条 precondition 写清并可独立准备；必须通过操作建立的状态，要在本条 steps 从已知入口写出完整操作。用例排列顺序不构成执行依赖。
 
             steps 和 expectedResult 的条数必须一致，确保每一步都有对应预期。
             不允许生成与输入分析/测试点无关的业务场景；没有证据时宁可输出低置信草稿，也不要编造为事实。
@@ -95,6 +97,7 @@ public class DirectCaseGenerationService {
     private final MiniTomService miniTomService;
     private final ClarificationService clarificationService;
     private final com.company.aitest.loop.LoopIntegrationService loopIntegrationService;
+    private ContextContractService contextContractService;
 
     public DirectCaseGenerationService(GenerationTaskService generationTaskService, LlmGateway llmGateway,
                                        JdbcTemplate jdbcTemplate, JdbcClient jdbc, TimeProvider timeProvider,
@@ -109,6 +112,11 @@ public class DirectCaseGenerationService {
         this.miniTomService = miniTomService;
         this.clarificationService = clarificationService;
         this.loopIntegrationService = loopIntegrationService;
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setContextContractService(ContextContractService contextContractService) {
+        this.contextContractService = contextContractService;
     }
 
     public GenerateResult generateFromTask(Long projectId, Long taskId, CurrentUser user) {
@@ -132,14 +140,23 @@ public class DirectCaseGenerationService {
         int tomHitCount = 0;
         TomUsageMode tomMode = TomUsageMode.resolve(
                 task.generationMode(), Boolean.TRUE.equals(task.useMiniTom()));
+        ContextContractService.ContractView contract = findFrozenContract(task.promptSnapshot());
 
         if (tomMode.usesTom()) {
-            // --- Mini-TOM assisted generation, scoped by the session's explicit mode. ---
-            MiniTomService.TestScopeResult scope = miniTomService.buildTestScope(
-                    projectId, task.requirementText(), task.modelConfigId(), user, tomMode);
-
-            String tomContext = buildTomContextString(scope);
-            tomHitCount = countTomHits(scope);
+            // A confirmed requirement scope owns a frozen Context Contract.  It is intentionally
+            // reused here instead of querying live TOM again, so later asset changes cannot make
+            // case generation drift away from the analysis and scope that the user confirmed.
+            String tomContext;
+            if (contract != null) {
+                tomContext = buildFrozenContractContext(contract);
+                tomHitCount = countTomHits(contract);
+            } else {
+                MiniTomService.TestScopeResult scope = miniTomService.buildTestScope(
+                        projectId, task.requirementText(), task.modelConfigId(), user, tomMode);
+                tomContext = buildTomContextString(scope);
+                tomHitCount = countTomHits(scope);
+                persistTomSnapshots(taskId, scope, task);
+            }
 
             systemPrompt = SYSTEM_PROMPT + MINI_TOM_SYSTEM_PROMPT_EXTENSION;
             userPrompt = """
@@ -155,8 +172,6 @@ public class DirectCaseGenerationService {
                             tomContext,
                             emptySafe(task.promptSnapshot()));
 
-            // 持久化 TOM 快照（单独事务）
-            persistTomSnapshots(taskId, scope, task);
         } else {
             systemPrompt = SYSTEM_PROMPT;
             userPrompt = """
@@ -216,6 +231,38 @@ public class DirectCaseGenerationService {
         loopIntegrationService.onChineseLocalizationCheck(projectId, output, "CASE_GENERATION", user);
 
         return new GenerateResult(task.id(), output, saved, tomHitCount, false, List.of(), assumptions);
+    }
+
+    private ContextContractService.ContractView findFrozenContract(String promptSnapshot) {
+        if (contextContractService == null || promptSnapshot == null || promptSnapshot.isBlank()) return null;
+        java.util.regex.Matcher matcher = java.util.regex.Pattern
+                .compile("(?m)^requirement_analysis_id:\\s*(\\d+)\\s*$")
+                .matcher(promptSnapshot);
+        if (!matcher.find()) return null;
+        try {
+            return contextContractService.findByAnalysis(Long.parseLong(matcher.group(1)));
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
+    }
+
+    private String buildFrozenContractContext(ContextContractService.ContractView contract) {
+        return """
+                【冻结 Context Contract】
+                %s
+
+                该上下文在需求范围确认时已冻结。只可把其中的已确认 TOM/审核通过知识作为业务事实；
+                不得在生成阶段重新检索并以新资料改写本轮范围。冲突或证据不足必须写入 unsupportedItems。
+                """.formatted(emptySafe(contract.promptSection()));
+    }
+
+    private int countTomHits(ContextContractService.ContractView contract) {
+        if (contract == null || contract.evidence() == null) return 0;
+        return (int) contract.evidence().stream().filter(item -> {
+            Object category = item.get("category");
+            String value = category == null ? "" : String.valueOf(category);
+            return value.startsWith("TOM:") || value.startsWith("页面:");
+        }).count();
     }
 
     private GenerateResult generateByTestPointBatches(Long projectId,

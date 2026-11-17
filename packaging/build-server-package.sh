@@ -258,6 +258,9 @@ server {
   index index.html;
 
   location /api/ {
+    # Browser traces and screenshots can exceed nginx's 1 MiB default.
+    # Spring and evidence storage still enforce the 50 MiB file limit.
+    client_max_body_size 64m;
     proxy_pass http://backend:8080/api/;
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
@@ -335,6 +338,9 @@ if [[ ! -f .env ]]; then
 fi
 mkdir -p data/mysql data/redis data/weaviate data/neo4j data/minio data/files
 compose_cmd up -d
+# nginx.conf is bind-mounted. Compose may leave the existing Web container running
+# after only the file contents change, so reload it on package installation.
+compose_cmd restart web
 
 echo ""
 echo "服务端安装完成。"
@@ -364,6 +370,7 @@ compose_cmd() {
 
 cd "$ROOT_DIR"
 compose_cmd up -d
+compose_cmd restart web
 echo "服务已启动。"
 EOF
 

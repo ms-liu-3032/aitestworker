@@ -29,6 +29,7 @@ import {
   type BusinessPackRefreshDiagnostic
 } from '../../services/api'
 import { displayLabel, statusLabel as uiStatusLabel } from '../../utils/displayLabels'
+import BulkReviewPicker from '../../components/BulkReviewPicker'
 
 const STATUS_COLORS: Record<string, string> = {
   DRAFT: 'bg-yellow-100 text-yellow-800',
@@ -337,6 +338,11 @@ export default function BusinessPacks() {
         {notice && (
           <div className="mb-4 px-4 py-3 bg-green-50 border border-green-200 rounded-lg text-sm text-green-700">{notice}</div>
         )}
+
+        <BulkReviewPicker title="业务包" allowReject={false}
+          items={packs.filter(pack => pack.status === 'DRAFT').map(pack => ({ id: pack.id, name: pack.packName }))}
+          onReview={async id => { await activateBusinessPack(pid, id) }}
+          onComplete={async () => { await loadPacks() }} />
 
         {/* Stats */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">

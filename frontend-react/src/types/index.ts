@@ -46,6 +46,7 @@ export const PROJECT_NAV_ITEMS: ProjectNavItem[] = [
   { key: 'trace', label: '测试执行轨迹', icon: '🎯' },
   { key: 'local-cases', label: '本地用例库', icon: '📋' },
   { key: 'formal-cases', label: '正式用例库', icon: '✅' },
+  { key: 'automation-assets', label: '自动化资产', icon: '🧪' },
   { key: 'assets', label: '测试资产沉淀', icon: '💎' },
   { key: 'mini-tom', label: 'Mini-TOM', icon: '🧩' },
   { key: 'wiki', label: '知识库', icon: '📚' },

@@ -328,7 +328,7 @@ public class ManualImportService {
     private String normalizeModelType(String type) {
         if (type == null) return "PAGE";
         return switch (type.toUpperCase()) {
-            case "MODULE", "PAGE", "FIELD", "ACTION", "FLOW", "STATE", "ASSERTION" -> type.toUpperCase();
+            case "MODULE", "PAGE", "FIELD", "ROLE", "ACTION", "FLOW", "STATE", "ASSERTION" -> type.toUpperCase();
             default -> "PAGE";
         };
     }

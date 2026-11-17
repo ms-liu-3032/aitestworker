@@ -8,6 +8,8 @@ export interface StartCaptureRequest {
   traceGroupId: number;
   sessionId: number;
   profileId: number;
+  /** Headless is opt-in for unattended UI runs; interactive capture remains headed. */
+  headless?: boolean;
   profileName?: string;
   targetHost?: string;
   storageStatePath?: string;
@@ -102,6 +104,7 @@ interface ActiveSession {
   videoStartedAtUtc: string | null;
   events: CapturedEvent[];
   networks: CapturedNetwork[];
+  pendingNetworkTasks: Set<Promise<void>>;
   requestStarted: Map<Request, { startedAtMs: number; method: string; url: string }>;
   sessionDir: string;
   traceFilePath: string;
@@ -145,28 +148,36 @@ export class CaptureManager {
   private readonly hookedPages = new WeakSet<Page>();
   private readonly browserContextIds = new WeakMap<BrowserContext, string>();
   private sharedBrowser: Browser | null = null;
+  private sharedBrowserHeadless: boolean | null = null;
 
   constructor(
     private readonly browserInfo: BrowserInfo | null,
     private readonly platformName: string,
+    private readonly dataRoot: string = platform.getDataDir(platformName),
   ) {
   }
 
-  private async ensureBrowser(): Promise<Browser> {
-    if (this.sharedBrowser?.isConnected()) return this.sharedBrowser;
+  private async ensureBrowser(headless = this.sharedBrowserHeadless ?? false): Promise<Browser> {
+    if (this.sharedBrowser?.isConnected() && this.sharedBrowserHeadless === headless) return this.sharedBrowser;
+    if (this.sharedBrowser?.isConnected()) {
+      if (this.sessions.size > 0) throw new Error('当前有采集会话，须结束后才能切换浏览器显示模式');
+      await this.shutdown();
+    }
     if (!this.browserInfo) {
       throw new Error('未找到可用浏览器，请先安装 Chrome 或执行 ai-test-worker doctor 检查环境。');
     }
     this.sharedBrowser = await chromium.launch({
       executablePath: this.browserInfo.executablePath,
-      headless: false,
+      headless,
       args: [
         '--disable-blink-features=AutomationControlled',
         '--start-maximized',
       ],
     });
+    this.sharedBrowserHeadless = headless;
     this.sharedBrowser.on('disconnected', () => {
       this.sharedBrowser = null;
+      this.sharedBrowserHeadless = null;
       this.profileContexts.clear();
       this.sessions.clear();
     });
@@ -178,15 +189,15 @@ export class CaptureManager {
   }
 
   private profileDir(profileId: number): string {
-    return path.join(platform.getDataDir(this.platformName), 'profiles', String(profileId));
+    return path.join(this.dataRoot, 'profiles', String(profileId));
   }
 
   private profileDownloadsDir(profileId: number): string {
-    return getProfileDownloadsDir(this.platformName, profileId);
+    return path.join(this.dataRoot, 'profiles', String(profileId), 'downloads');
   }
 
   private traceRootDir(): string {
-    return path.join(platform.getDataDir(this.platformName), 'traces');
+    return path.join(this.dataRoot, 'traces');
   }
 
   private async getOrCreateProfileContext(
@@ -292,6 +303,7 @@ export class CaptureManager {
       }
     }
 
+    await this.ensureBrowser(request.headless ?? false);
     // Sprint 4 · M4.7：CDP `Page.startScreencast` 是 page 级，profileContext 不再需要重建
     const hadExistingContext = this.profileContexts.has(request.profileId);
     const pc = await this.getOrCreateProfileContext({
@@ -336,6 +348,7 @@ export class CaptureManager {
       videoStartedAtUtc,
       events: [],
       networks: [],
+      pendingNetworkTasks: new Set(),
       requestStarted: new Map(),
       sessionDir,
       traceFilePath,
@@ -419,6 +432,7 @@ export class CaptureManager {
     });
 
     await active.context.tracing.stop({ path: active.traceFilePath }).catch(() => undefined);
+    await Promise.allSettled([...active.pendingNetworkTasks]);
     active.lastScreenshotPath = await this.captureScreenshot(active, 'stop');
 
     // 找到对应的 profile context，保存 storageState 供下次复用
@@ -490,17 +504,26 @@ export class CaptureManager {
       await this.stop(sid).catch(() => undefined);
     }
     for (const pc of this.profileContexts.values()) {
+      await pc.context.storageState({ path: pc.storageStatePath }).catch(() => undefined);
       await pc.context.close().catch(() => undefined);
     }
     this.profileContexts.clear();
     if (this.sharedBrowser) {
       await this.sharedBrowser.close().catch(() => undefined);
       this.sharedBrowser = null;
+      this.sharedBrowserHeadless = null;
     }
   }
 
   listActiveSessions(): number[] {
     return Array.from(this.sessions.keys());
+  }
+
+  /** DSH actions use the same page that passive recording observes. */
+  pageForSession(sessionId: number): Page {
+    const session = this.sessions.get(sessionId);
+    if (!session || session.page.isClosed()) throw new Error('采集会话未运行或页面已关闭');
+    return session.page;
   }
 
   /** Close a specific profile's context (used for CLEAR_AUTH / RESET) */
@@ -533,7 +556,8 @@ export class CaptureManager {
         .replace(/确\s*定/g, '确定')
         .replace(/提\s*交/g, '提交')
         .replace(/取\s*消/g, '取消')
-        .replace(/详\s*情\s*及\s*操\s*作/g, '详情及操作');
+        .replace(/详\s*情\s*及\s*操\s*作/g, '详情及操作')
+        .replace(/请\s*添加\s*访\s*客/g, '添加访客');
       const sanitizeHeadingText = (value: string) => cleanText(value)
         .replace(/提\s*交\s*取\s*消/g, '')
         .replace(/取\s*消\s*确\s*定/g, '')
@@ -542,6 +566,7 @@ export class CaptureManager {
         .replace(/提\s*交/g, '提交')
         .replace(/取\s*消/g, '取消')
         .replace(/详\s*情\s*及\s*操\s*作/g, '详情及操作')
+        .replace(/请\s*添加\s*访\s*客/g, '添加访客')
         .replace(/^\W+|\W+$/g, '')
         .trim();
       const isPromptLike = (text: string) => /请输入|请选择|请搜索|姓名|手机|证件|公司|邮箱|排序|全选/.test(text);
@@ -817,6 +842,7 @@ export class CaptureManager {
         .replace(/取消/g, '')
         .replace(/提交/g, '')
         .replace(/提 交/g, '')
+        .replace(/请添加访客/g, '')
         .replace(/\s+/g, ' ')
         .trim();
       const findRowText = (el: Element) => {
@@ -1144,40 +1170,45 @@ export class CaptureManager {
       }
     });
 
-    page.on('response', async (response) => {
+    page.on('response', (response) => {
       const req = response.request();
       const url = req.url();
       if (!shouldTrackRequest(req)) return;
       for (const session of this.sessions.values()) {
         if (session.page === page) {
-          const started = session.requestStarted.get(req);
-          const responseEndedAtMs = Date.now();
-          const requestStartedAtMs = started?.startedAtMs || responseEndedAtMs;
-          session.requestStarted.delete(req);
-          let responseSummary = '';
-          try {
-            const contentType = (await response.headerValue('content-type')) || '';
-            if (/json|text|xml|html/i.test(contentType)) {
-              responseSummary = sanitizeSummary(await response.text());
-            } else {
-              const contentLength = (await response.headerValue('content-length')) || '';
-              responseSummary = sanitizeSummary(`${contentType || 'binary'} ${contentLength ? `(${contentLength} bytes)` : ''}`);
+          const task = (async () => {
+            const started = session.requestStarted.get(req);
+            const responseEndedAtMs = Date.now();
+            const requestStartedAtMs = started?.startedAtMs || responseEndedAtMs;
+            session.requestStarted.delete(req);
+            let responseSummary = '';
+            try {
+              const contentType = (await response.headerValue('content-type')) || '';
+              if (/json|text|xml|html/i.test(contentType)) {
+                responseSummary = sanitizeSummary(await response.text());
+              } else {
+                const contentLength = (await response.headerValue('content-length')) || '';
+                responseSummary = sanitizeSummary(`${contentType || 'binary'} ${contentLength ? `(${contentLength} bytes)` : ''}`);
+              }
+            } catch {
+              responseSummary = '';
             }
-          } catch {
-            responseSummary = '';
-          }
-          this.recordNetwork(session, {
-            url,
-            method: req.method(),
-            statusCode: response.status(),
-            durationMs: Math.max(0, responseEndedAtMs - requestStartedAtMs),
-            failed: response.status() >= 400,
-            errorMessage: null,
-            requestSummary: sanitizeSummary(req.postData() || ''),
-            responseSummary,
-            requestStartedAtMs,
-            responseEndedAtMs,
-          });
+            this.recordNetwork(session, {
+              url,
+              method: req.method(),
+              statusCode: response.status(),
+              durationMs: Math.max(0, responseEndedAtMs - requestStartedAtMs),
+              failed: response.status() >= 400,
+              errorMessage: null,
+              requestSummary: sanitizeSummary(req.postData() || ''),
+              responseSummary,
+              requestStartedAtMs,
+              responseEndedAtMs,
+            });
+          })();
+          session.pendingNetworkTasks.add(task);
+          void task.then(() => session.pendingNetworkTasks.delete(task),
+            () => session.pendingNetworkTasks.delete(task));
         }
       }
     });

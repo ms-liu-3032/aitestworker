@@ -28,17 +28,18 @@ function isFormalCaseActive(status: string | null | undefined) {
 }
 
 function getFormalCaseSourceType(testCase: FormalCase): SourceFilter {
+  if (testCase.importSourceType === 'MANUAL_IMPORT') return 'MANUAL';
   return testCase.sourceTraceGroupId || testCase.sourceTraceSessionId || testCase.sourceIssueClipId
     ? 'TRACE'
     : 'GENERATION';
 }
 
 function formalCaseSourceLabel(sourceType: SourceFilter) {
-  return sourceType === 'TRACE' ? '轨迹回放' : '需求生成';
+  return sourceType === 'TRACE' ? '轨迹回放' : sourceType === 'MANUAL' ? '手动导入' : '需求生成';
 }
 
 function formalCaseSourceClass(sourceType: SourceFilter) {
-  return sourceType === 'TRACE'
+  return sourceType === 'MANUAL' ? 'bg-amber-50 text-amber-700' : sourceType === 'TRACE'
     ? 'bg-purple-50 text-purple-700'
     : 'bg-sky-50 text-sky-700';
 }
@@ -148,6 +149,7 @@ export default function FormalCaseLibrary() {
     exported: cases.filter(item => item.exportedAt).length,
     generation: cases.filter(item => getFormalCaseSourceType(item) === 'GENERATION').length,
     trace: cases.filter(item => getFormalCaseSourceType(item) === 'TRACE').length,
+    manual: cases.filter(item => getFormalCaseSourceType(item) === 'MANUAL').length,
   }), [cases]);
 
   const toggleSelect = (id: number) => {
@@ -263,6 +265,9 @@ export default function FormalCaseLibrary() {
             </span>
             <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium bg-purple-50 text-purple-700">
               轨迹回放 {counts.trace}
+            </span>
+            <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium bg-amber-50 text-amber-700">
+              手动导入 {counts.manual}
             </span>
           </div>
         </div>

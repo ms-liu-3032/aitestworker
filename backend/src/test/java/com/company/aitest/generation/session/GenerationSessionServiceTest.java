@@ -90,8 +90,8 @@ class GenerationSessionServiceTest {
         service.updateConfig(2L, 99L, 12L, 13L, "PROJECT_TOM", user);
 
         verify(jdbcTemplate).update(
-                "UPDATE generation_session SET model_config_id = ?, prompt_template_id = ?, use_mini_tom = ?, tom_mode = ?, updated_at = ? WHERE id = ? AND project_id = ? AND created_by = ?",
-                12L, 13L, 1, "PROJECT_TOM", now, 99L, 2L, 7L);
+                "UPDATE generation_session SET model_config_id = ?, prompt_template_id = ?, use_mini_tom = ?, tom_mode = ?, generation_depth = ?, updated_at = ? WHERE id = ? AND project_id = ? AND created_by = ?",
+                12L, 13L, 1, "PROJECT_TOM", "STANDARD", now, 99L, 2L, 7L);
     }
 
     @Test

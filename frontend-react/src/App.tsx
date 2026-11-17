@@ -24,6 +24,7 @@ const TestTools = lazy(() => import('./pages/project/TestTools'));
 const ProjectSettings = lazy(() => import('./pages/project/ProjectSettings'));
 const BusinessPacks = lazy(() => import('./pages/project/BusinessPacks'));
 const WikiPackages = lazy(() => import('./pages/project/WikiPackages'));
+const AutomationAssets = lazy(() => import('./pages/project/AutomationAssets'));
 
 // 模块 C：Management Console
 const UserManagement = lazy(() => import('./pages/admin/UserManagement'));
@@ -159,6 +160,7 @@ function ProtectedApp() {
             <Route path="settings" element={<ProjectSettings />} />
             <Route path="business-packs" element={<BusinessPacks />} />
             <Route path="wiki" element={<WikiPackages />} />
+            <Route path="automation-assets" element={<AutomationAssets />} />
           </Route>
 
           {/* 模块 C：Management Console（带侧边栏） */}

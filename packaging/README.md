@@ -1,87 +1,14 @@
-# 打包与安装说明
+# 打包与安装
 
-本目录负责两件事：
+在仓库根目录运行以下脚本，产物统一输出到忽略版本控制的 `release/` 目录。
 
-1. 生成服务端一键安装包
-2. 生成客户端一键安装包
+| 脚本 | 产物 | 用途 |
+| --- | --- | --- |
+| `./packaging/build-server-package.sh` | `release/server/*.tar.gz` | 原有后端、Web 和依赖的一体化服务端包 |
+| `./packaging/build-dsh-plugin-package.sh` | `release/dsh-plugin/*.tgz`、`INSTALL.md` | 本机 DeepSeek Harness 插件，内含 Skill 和浏览器采集模块 |
+| `./packaging/build-client-package.sh` | `release/client/` | 旧版 macOS 独立浏览器 worker 客户端 |
+| `./packaging/build-client-package-windows.sh` | `release/client/` | 旧版 Windows 独立浏览器 worker 客户端 |
 
-## 目录说明
+DSH 插件与服务端分别分发。使用者先安装 DSH Desktop，在插件页选择 `.tgz`，再从 AITestHub Web 获取一次性绑定码。插件包不包含服务地址、账号、绑定码、数据库数据或本机证据。原 Web 功能和独立 worker 打包脚本继续保留。
 
-- [build-server-package.sh](/Users/lms/aitesthub/packaging/build-server-package.sh)
-  - 生成服务端安装包
-  - 包含后端 Jar、前端静态资源、Docker Compose、MySQL/Redis/Weaviate/Neo4j/MinIO 依赖编排
-- [build-client-package.sh](/Users/lms/aitesthub/packaging/build-client-package.sh)
-  - 生成 macOS 客户端安装包
-  - 包含 local-browser-worker、运行时 Node、命令封装、可选 Playwright Chromium 缓存
-- [build-client-package-windows.sh](/Users/lms/aitesthub/packaging/build-client-package-windows.sh)
-  - 生成 Windows 客户端安装包
-  - 包含 local-browser-worker、Windows Node Runtime、命令封装
-
-## 输出目录
-
-默认输出到：
-
-```text
-/Users/lms/aitesthub/release
-```
-
-## 打包顺序
-
-### 服务端
-
-```bash
-cd /Users/lms/aitesthub
-./packaging/build-server-package.sh
-```
-
-### 客户端
-
-```bash
-cd /Users/lms/aitesthub
-./packaging/build-client-package.sh
-```
-
-### 客户端（Windows）
-
-```bash
-cd /Users/lms/aitesthub
-./packaging/build-client-package-windows.sh
-```
-
-## 当前策略
-
-### 服务端
-
-使用 Docker Compose 作为一键安装底座：
-
-1. MySQL
-2. Redis
-3. Weaviate
-4. Neo4j
-5. MinIO
-6. 后端
-7. Nginx（前端静态站点）
-
-优点：
-
-- 安装简单
-- 依赖完整
-- 数据库与依赖一致性高
-
-### 客户端
-
-使用“自带 Node Runtime + Worker 产物 + 命令封装”的方式：
-
-1. 不依赖本机预装 Node
-2. 不依赖本机再执行 npm install
-3. 绑定、启动、doctor、日志、清理都有现成命令
-4. 当前已支持 macOS 和 Windows x64 两套客户端交付
-
-## 交付标准
-
-打包脚本提交前至少保证：
-
-1. 能生成产物目录
-2. 能生成压缩包
-3. 包内有安装说明
-4. 包内脚本有执行权限
+服务端构建需要 Java 17、Maven、Node.js、npm、Docker 和 tar。插件构建需要 Node.js、npm 和 tar。打包脚本会检查依赖和包内必需文件。

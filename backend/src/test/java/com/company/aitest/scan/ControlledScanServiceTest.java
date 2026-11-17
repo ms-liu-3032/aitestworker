@@ -11,22 +11,22 @@ class ControlledScanServiceTest {
         String html = """
                 <html lang="zh-CN">
                 <head>
-                  <title>审批申请 - 平台</title>
+                  <title>访客预约 - 威思客平台</title>
                 </head>
                 <body>
                   <nav aria-label="breadcrumb">
                     <a>首页</a>
-                    <a>审批中心</a>
-                    <span>审批申请</span>
+                    <a>访客管理</a>
+                    <span>访客预约</span>
                   </nav>
-                  <h1>审批申请</h1>
-                  <h2>申请信息</h2>
-                  <label>申请人</label>
-                  <label>申请单号</label>
-                  <input placeholder="请输入部门名称" />
+                  <h1>访客预约</h1>
+                  <h2>预约信息</h2>
+                  <label>访客姓名</label>
+                  <label>手机号</label>
+                  <input placeholder="请输入公司名称" />
                   <button>查询</button>
                   <button>导出</button>
-                  <div class="modal-title">申请详情</div>
+                  <div class="modal-title">预约详情</div>
                 </body>
                 </html>
                 """;
@@ -34,18 +34,18 @@ class ControlledScanServiceTest {
         ControlledScanService.PageProfileDraft draft = ControlledScanService.extractDraftFromHtml(
                 "URL_IMPORT",
                 "页面链接扫描",
-                "https://example.com/workflow/request/list",
+                "https://example.com/vsk/web/visit/visit",
                 html);
 
         assertNotNull(draft);
-        assertEquals("审批申请", draft.pageLabel());
-        assertEquals("/workflow/request/list", draft.routePath());
-        assertEquals("审批中心 / 审批申请", draft.breadcrumbPath());
-        assertTrue(draft.headings().contains("审批申请"));
-        assertTrue(draft.fieldLabels().contains("申请人"));
-        assertTrue(draft.fieldLabels().contains("输入部门名称"));
+        assertEquals("访客预约", draft.pageLabel());
+        assertEquals("/vsk/web/visit/visit", draft.routePath());
+        assertEquals("访客管理 / 访客预约", draft.breadcrumbPath());
+        assertTrue(draft.headings().contains("访客预约"));
+        assertTrue(draft.fieldLabels().contains("访客姓名"));
+        assertTrue(draft.fieldLabels().contains("输入公司名称"));
         assertTrue(draft.actionLabels().contains("查询"));
         assertTrue(draft.actionLabels().contains("导出"));
-        assertTrue(draft.dialogTitles().contains("申请详情"));
+        assertTrue(draft.dialogTitles().contains("预约详情"));
     }
 }

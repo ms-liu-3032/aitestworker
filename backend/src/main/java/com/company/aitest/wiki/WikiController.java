@@ -51,8 +51,29 @@ public class WikiController {
     public ApiResponse<WikiPackRecord> getPack(@PathVariable Long packId, Authentication auth) {
         CurrentUser user = (CurrentUser) auth.getPrincipal();
         WikiPackRecord pack = wikiService.getPack(packId);
-        projectAccessService.ensureCanAccess(pack.projectId(), user);
+        ensureCanReadPack(pack, user);
         return ApiResponse.ok(pack);
+    }
+
+    @GetMapping("/packs/{packId}/promotions")
+    public ApiResponse<List<WikiPackRecord>> listPromotions(@PathVariable Long packId, Authentication auth) {
+        CurrentUser user = (CurrentUser) auth.getPrincipal();
+        WikiPackRecord source = wikiService.getPack(packId);
+        ensureCanReadPack(source, user);
+        return ApiResponse.ok(wikiService.listPromotions(packId));
+    }
+
+    @PostMapping("/packs/{packId}/promotions")
+    public ApiResponse<WikiPackRecord> submitPromotion(@PathVariable Long packId,
+                                                       @RequestBody Map<String, String> body,
+                                                       Authentication auth) {
+        CurrentUser user = (CurrentUser) auth.getPrincipal();
+        WikiPackRecord source = wikiService.getPack(packId);
+        ensureCanManagePack(source, user);
+        WikiPackRecord candidate = wikiService.submitPromotion(packId, body.get("targetScope"), user);
+        operationLogService.recordQuietly(user.id(), "WIKI_SUBMIT_PROMOTION", "WIKI_PACK", candidate.id(),
+                "{\"sourcePackId\":" + packId + ",\"targetScope\":\"" + safe(candidate.scope()) + "\"}");
+        return ApiResponse.ok(candidate);
     }
 
     @PostMapping("/packs")
@@ -134,8 +155,28 @@ public class WikiController {
     @GetMapping("/packs/{packId}/entries")
     public ApiResponse<List<WikiEntryRecord>> listEntries(@PathVariable Long packId, Authentication auth) {
         CurrentUser user = (CurrentUser) auth.getPrincipal();
-        projectAccessService.ensureCanAccess(wikiService.projectIdForPack(packId), user);
+        ensureCanReadPack(wikiService.getPack(packId), user);
         return ApiResponse.ok(wikiService.listEntries(packId));
+    }
+
+    @GetMapping("/entries/{entryId}/tom-links")
+    public ApiResponse<List<Long>> listTomLinks(@PathVariable Long entryId, Authentication auth) {
+        CurrentUser user = (CurrentUser) auth.getPrincipal();
+        ensureCanReadPack(wikiService.getPackForEntry(entryId), user);
+        return ApiResponse.ok(wikiService.listTomLinks(entryId));
+    }
+
+    @PutMapping("/entries/{entryId}/tom-links")
+    public ApiResponse<List<Long>> replaceTomLinks(@PathVariable Long entryId,
+                                                    @RequestBody Map<String, List<Long>> body,
+                                                    Authentication auth) {
+        CurrentUser user = (CurrentUser) auth.getPrincipal();
+        WikiPackRecord pack = wikiService.getPackForEntry(entryId);
+        ensureCanManagePack(pack, user);
+        List<Long> ids = wikiService.replaceTomLinks(entryId, body.get("tomIds"), user);
+        operationLogService.recordQuietly(user.id(), "WIKI_LINK_TOM", "WIKI_ENTRY", entryId,
+                "{\"packId\":" + pack.id() + ",\"tomCount\":" + ids.size() + "}");
+        return ApiResponse.ok(ids);
     }
 
     @PostMapping("/packs/{packId}/entries")
@@ -192,6 +233,14 @@ public class WikiController {
             projectAccessService.ensurePlatformAdmin(user);
         } else {
             projectAccessService.ensureCanManageProject(pack.projectId(), user);
+        }
+    }
+
+    private void ensureCanReadPack(WikiPackRecord pack, CurrentUser user) {
+        if ("REUSABLE".equals(pack.scope()) || "SYSTEM".equals(pack.scope())) {
+            projectAccessService.ensurePlatformAdmin(user);
+        } else {
+            projectAccessService.ensureCanAccess(pack.projectId(), user);
         }
     }
 

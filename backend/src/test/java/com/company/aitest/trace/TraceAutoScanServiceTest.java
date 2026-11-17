@@ -42,8 +42,8 @@ class TraceAutoScanServiceTest {
     void buildDraftsFromEventsShouldProducePageProfiles() {
         List<ControlledScanService.PageProfileDraft> drafts = TraceAutoScanService.buildDraftsFromEvents(List.of(
                 new TraceAutoScanService.TraceEventSnapshot(
-                        "https://example.com/workflow/request/list",
-                        "审批申请 - 平台",
+                        "https://example.com/vsk/web/visit/visit",
+                        "访客预约 - 威思客平台",
                         "PAGE_OPEN",
                         null,
                         null,
@@ -53,40 +53,40 @@ class TraceAutoScanServiceTest {
                         null
                 ),
                 new TraceAutoScanService.TraceEventSnapshot(
-                        "https://example.com/workflow/request/list",
-                        "审批申请 - 平台",
+                        "https://example.com/vsk/web/visit/visit",
+                        "访客预约 - 威思客平台",
                         "INPUT",
-                        "申请人",
+                        "访客姓名",
                         "textbox",
                         "张三",
-                        "申请信息",
+                        "预约信息",
                         null,
-                        "申请人"
+                        "访客姓名"
                 ),
                 new TraceAutoScanService.TraceEventSnapshot(
-                        "https://example.com/workflow/request/list",
-                        "审批申请 - 平台",
+                        "https://example.com/vsk/web/visit/visit",
+                        "访客预约 - 威思客平台",
                         "CLICK",
                         "导出",
                         "button",
                         null,
-                        "申请信息",
-                        "申请详情",
+                        "预约信息",
+                        "预约详情",
                         "导出"
                 )
         ));
 
         assertEquals(1, drafts.size());
         ControlledScanService.PageProfileDraft draft = drafts.get(0);
-        assertEquals("审批申请", draft.pageLabel());
-        assertEquals("/workflow/request/list", draft.routePath());
-        assertEquals("审批申请", draft.pageTitle());
+        assertEquals("访客预约", draft.pageLabel());
+        assertEquals("/vsk/web/visit/visit", draft.routePath());
+        assertEquals("访客预约", draft.pageTitle());
         assertEquals(TraceAutoScanService.TRACE_AUTO_SCAN_SOURCE_KEY, draft.sourceKey());
         assertEquals(TraceAutoScanService.TRACE_AUTO_SCAN_SOURCE_LABEL, draft.sourceLabel());
-        assertEquals(List.of("审批申请", "申请信息"), draft.headings());
-        assertEquals(List.of("申请人", "张三"), draft.fieldLabels());
+        assertEquals(List.of("访客预约", "预约信息"), draft.headings());
+        assertEquals(List.of("访客姓名", "张三"), draft.fieldLabels());
         assertEquals(List.of("导出"), draft.actionLabels());
-        assertEquals(List.of("申请详情"), draft.dialogTitles());
+        assertEquals(List.of("预约详情"), draft.dialogTitles());
     }
 
     @SuppressWarnings("unchecked")

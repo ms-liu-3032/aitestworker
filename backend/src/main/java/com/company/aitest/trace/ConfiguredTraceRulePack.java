@@ -306,7 +306,8 @@ class ConfiguredTraceRulePack implements TraceRulePack {
         return template
                 .replace("${field}", target)
                 .replace("${value}", value)
-                .replace("${object}", selectedObject);
+                .replace("${object}", selectedObject)
+                .replace("${visitor}", selectedObject);
     }
 
     private String bestSelectedObject(String objectLabel, String fallbackTarget) {

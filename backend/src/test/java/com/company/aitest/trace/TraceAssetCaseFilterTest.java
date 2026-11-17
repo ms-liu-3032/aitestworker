@@ -18,7 +18,7 @@ class TraceAssetCaseFilterTest {
         Map<String, Object> params = new HashMap<>();
         StringBuilder sql = new StringBuilder(" WHERE project_id = :projectId");
 
-        service.appendFormalCaseFilters(sql, params, "审批", List.of("权限"), List.of("P1"),
+        service.appendFormalCaseFilters(sql, params, "门禁", List.of("权限"), List.of("P1"),
                 List.of("ACTIVE"), List.of("TRACE"), List.of("BOUNDARY"));
 
         assertTrue(sql.toString().contains("case_title LIKE :keyword"));
@@ -26,7 +26,7 @@ class TraceAssetCaseFilterTest {
         assertTrue(sql.toString().contains("source_trace_group_id IS NOT NULL"));
         assertTrue(sql.toString().contains("scenario_type IN (:scenarioTypes)"));
         assertEquals(List.of("ACTIVE", "SUBMITTED"), params.get("statuses"));
-        assertEquals("%审批%", params.get("keyword"));
+        assertEquals("%门禁%", params.get("keyword"));
     }
 
     @Test
@@ -51,5 +51,19 @@ class TraceAssetCaseFilterTest {
 
         assertTrue(sql.contains(")\nORDER BY"));
         assertFalse(sql.contains(")ORDER BY"));
+    }
+
+    @Test
+    void manualImportSourceIsDistinctFromGeneratedCases() {
+        var service = new TraceAssetService(null, null, null, null, null, null, null, null, null, null, List.of());
+        StringBuilder manual = new StringBuilder(" WHERE project_id = :projectId");
+        service.appendFormalCaseFilters(manual, new HashMap<>(), null, List.of(), List.of(),
+                List.of(), List.of("MANUAL"), List.of());
+        assertTrue(manual.toString().contains("import_source_type = 'MANUAL_IMPORT'"));
+
+        StringBuilder generation = new StringBuilder(" WHERE project_id = :projectId");
+        service.appendFormalCaseFilters(generation, new HashMap<>(), null, List.of(), List.of(),
+                List.of(), List.of("GENERATION"), List.of());
+        assertTrue(generation.toString().contains("import_source_type IS NULL"));
     }
 }

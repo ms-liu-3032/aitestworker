@@ -66,6 +66,7 @@ import StatusBadge from '../StatusBadge';
 import Drawer from '../Drawer';
 import Modal from '../Modal';
 import ScreencastPlayer from './ScreencastPlayer';
+import BulkReviewPicker from '../BulkReviewPicker';
 
 // ===== Helpers =====
 const TOKEN_KEY = 'aitest_worker_local_token';
@@ -1553,6 +1554,13 @@ export default function TracePanel({ projectId }: { projectId: number }) {
                           {/* Summaries */}
                           {groupSummaries.length > 0 && (
                             <div className="bg-white rounded-lg border border-gray-200 p-3">
+                              <BulkReviewPicker title="轨迹摘要" rejectReasonRequired
+                                items={groupSummaries.filter(summary => summary.status === 'PENDING_CONFIRMATION').map(summary => ({ id: summary.id, name: summary.overview || `摘要 #${summary.id}` }))}
+                                onComplete={async () => { if (groupSummaries[0]) setGroupSummaries(await getGroupSummaries(groupSummaries[0].traceGroupId)); }}
+                                onReview={async (id, approved, reason) => {
+                                  if (approved) await apiConfirmSummary(id); else await apiRejectSummary(id, reason || '');
+                                  setGroupSummaries(current => current.map(summary => summary.id === id ? { ...summary, status: approved ? 'CONFIRMED' : 'REJECTED' } : summary));
+                                }} />
                               <div className="flex items-center justify-between mb-2">
                                 <h4 className="text-xs font-semibold uppercase tracking-wider text-gray-400">摘要</h4>
                                 {summaryRefreshSuggested && (
@@ -2139,6 +2147,19 @@ export default function TracePanel({ projectId }: { projectId: number }) {
                           {/* Corrections */}
                           {groupCorrections.length > 0 && (
                             <div className="bg-white rounded-lg border border-gray-200 p-3">
+                              <BulkReviewPicker title="轨迹修正建议" rejectReasonRequired
+                                items={groupCorrections.filter(correction => correction.status === 'PENDING_CONFIRMATION').map(correction => ({ id: correction.id, name: correction.candidateValue || `修正 #${correction.id}` }))}
+                                onComplete={async () => {
+                                  if (!groupCorrections[0]) return;
+                                  const groupId = groupCorrections[0].traceGroupId;
+                                  const [corrections, steps] = await Promise.all([getGroupCorrections(groupId), getGroupCleanSteps(groupId)]);
+                                  setGroupCorrections(corrections); setCleanSteps(steps);
+                                }}
+                                onReview={async (id, approved, reason) => {
+                                  if (approved) await apiConfirmCorrection(id, { confirmedStepText: null }); else await apiRejectCorrection(id, reason || '');
+                                  setGroupCorrections(current => current.map(correction => correction.id === id ? { ...correction, status: approved ? 'CONFIRMED' : 'REJECTED' } : correction));
+                                  if (approved) setSummaryRefreshSuggested(true);
+                                }} />
                               <h4 className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-2">修正建议</h4>
                               <div className="space-y-2">
                                 {groupCorrections.map(c => (

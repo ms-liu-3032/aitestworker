@@ -5,6 +5,8 @@ const apiMocks = vi.hoisted(() => ({
   listAdminWikiPacks: vi.fn(), listProjects: vi.fn(), listWikiEntries: vi.fn(),
   createWikiPack: vi.fn(), createWikiEntry: vi.fn(), reviewWikiEntry: vi.fn(),
   reviewWikiPack: vi.fn(), updateWikiPackStatus: vi.fn(), updateWikiPack: vi.fn(), updateWikiEntry: vi.fn(),
+  submitWikiPromotion: vi.fn(),
+  listActiveTomModels: vi.fn(), listWikiTomLinks: vi.fn(), updateWikiTomLinks: vi.fn(),
 }));
 const appMocks = vi.hoisted(() => ({ showToast: vi.fn() }));
 
@@ -18,6 +20,8 @@ beforeEach(() => {
   apiMocks.listProjects.mockResolvedValue({ items: [{ id: 3, projectName: '通用项目' }] });
   apiMocks.listAdminWikiPacks.mockResolvedValue([{ id: 11, projectId: 3, scope: 'SYSTEM', name: '全局质量规则', status: 'DRAFT', reviewStatus: 'PENDING' }]);
   apiMocks.listWikiEntries.mockResolvedValue([{ id: 21, packId: 11, entryType: 'RULE', title: '幂等规则', content: '重复提交不得产生重复数据', reviewStatus: 'PENDING', effectiveStatus: 'INACTIVE' }]);
+  apiMocks.listActiveTomModels.mockResolvedValue([]);
+  apiMocks.listWikiTomLinks.mockResolvedValue([]);
 });
 
 describe('WikiAssetManager', () => {
@@ -56,5 +60,15 @@ describe('WikiAssetManager', () => {
     fireEvent.click(screen.getByText('保存并重新审核'));
     await waitFor(() => expect(apiMocks.updateWikiEntry).toHaveBeenCalledWith(21, 'RULE', '修订后的幂等规则', '重复提交不得产生重复数据'));
     expect(appMocks.showToast).toHaveBeenCalledWith('知识条目已保存，已回到待审核状态');
+  });
+
+  it('submits a reviewed reusable pack as a pending system candidate', async () => {
+    apiMocks.listAdminWikiPacks.mockResolvedValue([{ id: 11, projectId: 3, scope: 'REUSABLE', name: '复用规则', status: 'ACTIVE', reviewStatus: 'APPROVED' }]);
+    apiMocks.submitWikiPromotion.mockResolvedValue({ id: 20, projectId: 3, scope: 'SYSTEM', name: '系统候选', status: 'DRAFT', reviewStatus: 'PENDING', promotionSourcePackId: 11 });
+    render(<WikiAssetManager />);
+    fireEvent.click(await screen.findByText('复用规则'));
+    fireEvent.click(await screen.findByText('提交至系统级'));
+    await waitFor(() => expect(apiMocks.submitWikiPromotion).toHaveBeenCalledWith(11, 'SYSTEM'));
+    expect(await screen.findByText('系统候选')).toBeInTheDocument();
   });
 });

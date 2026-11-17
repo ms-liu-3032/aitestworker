@@ -1,0 +1,237 @@
+{
+  "name": "visitor",
+  "workflows": [
+    { "kind": "dialogInputConfirmFlow", "ref": "dialogInputConfirmFlow" },
+    { "kind": "entryNavigationSubmitFlow", "ref": "entryNavigationSubmitFlow" }
+  ],
+  "objectHistoryContextContains": ["历史访客", "访客记录"],
+  "objectSelectionDialogContains": ["添加访客"],
+  "objectSelectionTargetContains": ["确定"],
+  "dialogContextContains": ["取消邀请"],
+  "dialogInputConfirmFlows": [
+    {
+      "name": "dialogInputConfirmFlow",
+      "startDescription": "发起取消邀请",
+      "activePageContains": "取消邀请",
+      "sourcePageContains": "邀请记录",
+      "sourceDescriptionContainsAny": ["输入取消原因", "发起取消邀请"],
+      "sourceLookaheadDistance": 4,
+      "entryExcludeContains": ["详情及操作", "输入取消原因", "确认取消邀请"],
+      "inputPrefix": "在“输入取消原因”输入",
+      "mergedInputTemplate": "在“输入取消原因”输入%s",
+      "fallbackValue": "取消原因",
+      "placeholderTokens": ["输入取消原因", "取消原因"],
+      "sendSmsDescriptions": ["选择“发送短信”"],
+      "explicitNoSendDescriptions": ["选择“不发送短信”", "保持“不发送短信”状态"],
+      "cancelDescriptions": ["点击“取消”", "点击“取消”按钮"],
+      "cancelRewrite": "取消当前取消邀请操作",
+      "confirmDescriptions": ["确认取消邀请"],
+      "confirmRewrite": "确认取消邀请",
+      "implicitConfirmRewrite": "保持“不发送短信”状态并确认取消邀请",
+      "successPrefixes": ["出现提示“"],
+      "successDescriptions": ["出现提示“操作成功”"],
+      "dialogNoiseContains": ["详情及操作", "点击“test", "在“test”选择", "点击“取消确定"],
+      "dialogNoiseRegexes": ["^点击“20\\\\d{2}[-/].+”按钮?$", "^点击“20\\\\d{2}[-/].+”$"],
+      "detailProbeDescriptions": ["详情及操作"],
+      "focusClickDescriptions": ["点击“输入取消原因”", "点击“输入取消原因”按钮"],
+      "typingNoiseContains": ["按下回车键"],
+      "confirmSuffixStripTokens": ["，触发接口 GET /vsk/vst-visitor/api/wx/getServerTime"]
+    }
+  ],
+  "entryNavigationSubmitFlows": [
+    {
+      "name": "entryNavigationSubmitFlow",
+      "sourcePageContains": "邀请记录",
+      "flowPageContains": "添加访客",
+      "entryDescriptionContains": "修改",
+      "entryLookaheadDistance": 3,
+      "entryNavigationDescriptionContains": "新建邀请",
+      "entryRewrite": "发起邀请变更",
+      "navigationRewrite": "进入邀请变更页面",
+      "fieldFocusNoisePrefixes": ["点击“输入访客手机”", "点击“输入证件号码”", "点击“输入公司”", "点击“输入邮箱”"],
+      "fieldFocusFollowupPrefixes": ["在“输入访客手机”输入", "在“输入证件号码”输入", "在“输入公司”输入", "在“输入邮箱”输入"],
+      "fieldFocusTerminalDescriptions": ["确认访客信息修改"],
+      "intermediateConfirmPageContains": "添加访客",
+      "intermediateConfirmDescriptions": ["点击“确定”", "点击“确定”按钮"],
+      "intermediateConfirmRewrite": "确认访客信息修改",
+      "submitDescriptions": ["点击“提交”", "点击“提交”按钮"],
+      "submitRewrite": "提交邀请变更",
+      "submitLookaheadDistance": 4,
+      "recentSubmitDescriptions": ["提交邀请变更"],
+      "submitApiContains": ["/api/invitations/modify"],
+      "notificationChoiceDescriptions": ["点击“是”", "点击“是”按钮", "点击“否”", "点击“否”按钮"],
+      "notificationChoiceRewrites": ["选择“发送更新通知”", "选择“发送更新通知”", "选择“不发送更新通知”", "选择“不发送更新通知”"],
+      "languageChoiceDescriptions": ["点击“简体中文”", "点击“简体中文”按钮"],
+      "languageChoiceRewrites": ["选择通知语言“简体中文”", "选择通知语言“简体中文”"],
+      "timeNoiseRegexes": ["^点击“20\\\\d{2}[-/].+”按钮?$", "^点击“20\\\\d{2}[-/].+”$"],
+      "successDescriptions": ["出现提示“操作成功”"]
+    }
+  ],
+  "inputRules": [
+    {
+      "valueEquals": "已勾选",
+      "dialogContextRequired": true,
+      "resultType": "REPLACE",
+      "template": "选择“发送短信”"
+    },
+    {
+      "valueEquals": "已勾选",
+      "objectSelectionContext": true,
+      "selectedObjectRequired": true,
+      "resultType": "REPLACE",
+      "template": "选择历史访客“${object}”"
+    },
+    {
+      "valueEquals": "已勾选",
+      "resultType": "REPLACE",
+      "template": "勾选“${field}”"
+    },
+    {
+      "valueEquals": "已取消勾选",
+      "dialogContextRequired": true,
+      "resultType": "REPLACE",
+      "template": "选择“不发送短信”"
+    },
+    {
+      "valueEquals": "已取消勾选",
+      "objectSelectionContext": true,
+      "selectedObjectRequired": true,
+      "resultType": "REPLACE",
+      "template": "取消选择历史访客“${object}”"
+    },
+    {
+      "valueEquals": "已取消勾选",
+      "resultType": "REPLACE",
+      "template": "取消勾选“${field}”"
+    },
+    {
+      "dialogContextRequired": true,
+      "targetEqualsValue": true,
+      "resultType": "REPLACE",
+      "template": "在“输入取消原因”输入${value}"
+    }
+  ],
+  "changeRules": [
+    {
+      "valueEquals": "已勾选",
+      "dialogContextRequired": true,
+      "resultType": "REPLACE",
+      "template": "选择“发送短信”"
+    },
+    {
+      "valueEquals": "已勾选",
+      "objectSelectionContext": true,
+      "selectedObjectRequired": true,
+      "resultType": "REPLACE",
+      "template": "选择历史访客“${object}”"
+    },
+    {
+      "valueEquals": "已勾选",
+      "resultType": "REPLACE",
+      "template": "勾选“${field}”"
+    },
+    {
+      "valueEquals": "已取消勾选",
+      "dialogContextRequired": true,
+      "resultType": "REPLACE",
+      "template": "选择“不发送短信”"
+    },
+    {
+      "valueEquals": "已取消勾选",
+      "objectSelectionContext": true,
+      "selectedObjectRequired": true,
+      "resultType": "REPLACE",
+      "template": "取消选择历史访客“${object}”"
+    },
+    {
+      "valueEquals": "已取消勾选",
+      "resultType": "REPLACE",
+      "template": "取消勾选“${field}”"
+    }
+  ],
+  "clickRules": [
+    {
+      "objectSelectionContext": true,
+      "selectedObjectRequired": true,
+      "resultType": "DROP",
+      "template": ""
+    },
+    {
+      "targetEquals": "确定",
+      "objectSelectionContext": true,
+      "resultType": "DROP",
+      "template": ""
+    },
+    {
+      "targetEquals": "详情及操作",
+      "selectedObjectRequired": true,
+      "resultType": "DROP",
+      "template": ""
+    },
+    {
+      "targetEquals": "关闭",
+      "dialogContextRequired": true,
+      "resultType": "REPLACE",
+      "template": "发起取消邀请"
+    },
+    {
+      "targetEquals": "确定",
+      "dialogContextRequired": true,
+      "resultType": "REPLACE",
+      "template": "确认取消邀请"
+    }
+  ],
+  "objectLabelRules": [
+    {
+      "pageTitleContains": "历史",
+      "label": "历史记录行对象"
+    },
+    {
+      "pageTitleContains": "访客",
+      "label": "访客记录行对象"
+    }
+  ],
+  "checkboxSemanticRules": [
+    {
+      "elementTextContains": "短信",
+      "semantic": "选择\"发送短信\"选项"
+    },
+    {
+      "elementTextContains": "邮件",
+      "semantic": "选择\"发送邮件\"选项"
+    },
+    {
+      "elementTextContains": "提醒",
+      "semantic": "选择\"开启提醒\"选项"
+    }
+  ],
+  "dialogActionRules": [
+    {
+      "elementTextContains": "确定",
+      "dialogTitleContains": "取消",
+      "action": "确认取消邀请"
+    },
+    {
+      "elementTextContains": "取消",
+      "dialogTitleContains": "取消",
+      "action": "取消当前取消邀请操作"
+    }
+  ],
+  "businessActionRules": [
+    {
+      "contextContains": "签到",
+      "containsText": "wafer",
+      "action": "点击签到"
+    },
+    {
+      "contextContains": "邀请记录",
+      "containsText": "wafer",
+      "action": "点击签到"
+    },
+    {
+      "contextContains": "取消邀请",
+      "exactText": "test003未开始test",
+      "action": "发起取消邀请"
+    }
+  ]
+}

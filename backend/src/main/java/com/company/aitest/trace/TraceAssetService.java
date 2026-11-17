@@ -55,6 +55,7 @@ public class TraceAssetService {
             8. 禁止出现 locator、xpath、selector、click()、fill()、press()、page.、Playwright、Selenium、Cypress。
             9. steps 必须写成业务动作，例如“打开页面”“输入字段”“点击提交”“跳转到结果页”。
             10. expectedResult 必须写成页面结果或业务结果，不要写代码断言。
+            11. 本条用例必须独立可执行；所需初始账号、开关和数据写入前置条件，轨迹中实际发生的准备操作仍保留在本条步骤内，不假定其他用例已执行。
             """;
 
     private static final String SKILL_SYSTEM_PROMPT = """
@@ -407,7 +408,8 @@ public class TraceAssetService {
                        NULL AS precondition, NULL AS steps, NULL AS expected_result,
                        priority, case_type, scenario_type, design_method, case_scope, case_status,
                        submitted_by, submitted_at, exported_at,
-                       source_trace_group_id, source_trace_session_id, source_issue_clip_id, created_at, updated_at
+                       source_trace_group_id, source_trace_session_id, source_issue_clip_id,
+                       import_source_type, import_source_ref_id, created_at, updated_at
                 FROM test_case_asset
                 """;
         return String.join("\n",
@@ -442,9 +444,8 @@ public class TraceAssetService {
             if (normalizedSources.contains("TRACE")) {
                 conditions.add("(source_trace_group_id IS NOT NULL OR source_trace_session_id IS NOT NULL OR source_issue_clip_id IS NOT NULL)");
             }
-            if (normalizedSources.contains("GENERATION") || normalizedSources.contains("MANUAL")) {
-                conditions.add("(source_trace_group_id IS NULL AND source_trace_session_id IS NULL AND source_issue_clip_id IS NULL)");
-            }
+            if (normalizedSources.contains("GENERATION")) conditions.add("(import_source_type IS NULL AND source_trace_group_id IS NULL AND source_trace_session_id IS NULL AND source_issue_clip_id IS NULL)");
+            if (normalizedSources.contains("MANUAL")) conditions.add("import_source_type = 'MANUAL_IMPORT'");
             if (!conditions.isEmpty()) sql.append(" AND (").append(String.join(" OR ", conditions)).append(")");
         }
     }
@@ -1115,6 +1116,8 @@ public class TraceAssetService {
                 getLongNullable(rs, "source_trace_group_id"),
                 getLongNullable(rs, "source_trace_session_id"),
                 getLongNullable(rs, "source_issue_clip_id"),
+                rs.getString("import_source_type"),
+                getLongNullable(rs, "import_source_ref_id"),
                 rs.getTimestamp("created_at").toLocalDateTime(),
                 rs.getTimestamp("updated_at").toLocalDateTime()
         );
@@ -1202,7 +1205,8 @@ public class TraceAssetService {
                                     String caseType, String scenarioType, String designMethod,
                                     String caseScope, String caseStatus, Long submittedBy,
                                     LocalDateTime submittedAt, LocalDateTime exportedAt, Long sourceTraceGroupId,
-                                    Long sourceTraceSessionId, Long sourceIssueClipId, LocalDateTime createdAt,
+                                    Long sourceTraceSessionId, Long sourceIssueClipId,
+                                    String importSourceType, Long importSourceRefId, LocalDateTime createdAt,
                                     LocalDateTime updatedAt) {
     }
 

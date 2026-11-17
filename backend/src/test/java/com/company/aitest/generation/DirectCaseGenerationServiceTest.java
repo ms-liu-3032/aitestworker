@@ -8,9 +8,32 @@ import java.lang.reflect.Method;
 import java.util.List;
 import java.util.Map;
 
+import com.company.aitest.generation.session.ContextContractService;
+
 import org.junit.jupiter.api.Test;
 
 class DirectCaseGenerationServiceTest {
+
+    @Test
+    void frozenContractIsUsedAsTheGenerationContextAndCountsOnlyTomEvidence() throws Exception {
+        var service = new DirectCaseGenerationService(null, null, null, null, null, null, null, null);
+        ContextContractService.ContractView contract = new ContextContractService.ContractView(5L, 1, "FROZEN", Map.of(),
+                List.of(Map.of("category", "Wiki:DECISION", "title", "背景", "summary", "说明")),
+                List.of(Map.of("category", "TOM:ACTION", "title", "提交", "summary", "提交申请"),
+                        Map.of("category", "页面:页面", "title", "申请页", "summary", "入口")),
+                List.of(), "冻结的 TOM 与 Wiki 上下文");
+        Method build = DirectCaseGenerationService.class.getDeclaredMethod("buildFrozenContractContext", ContextContractService.ContractView.class);
+        Method count = DirectCaseGenerationService.class.getDeclaredMethod("countTomHits", ContextContractService.ContractView.class);
+        build.setAccessible(true);
+        count.setAccessible(true);
+
+        String prompt = (String) build.invoke(service, contract);
+        int hits = (int) count.invoke(service, contract);
+
+        assertTrue(prompt.contains("冻结的 TOM 与 Wiki 上下文"));
+        assertTrue(prompt.contains("不得在生成阶段重新检索"));
+        assertEquals(2, hits);
+    }
 
     @Test
     void extractsStructuredTestPointsAndRemovesThemFromBatchContext() throws Exception {
@@ -21,7 +44,7 @@ class DirectCaseGenerationServiceTest {
         strip.setAccessible(true);
         String requirement = """
                 ## 原始需求
-                业务对象预约需要审批。
+                访客预约需要审批。
 
                 ## 测试点
                 [{"title":"预约提交","requirement_refs":["R1"]},{"title":"审批处理","requirement_refs":["R2"]}]
@@ -71,7 +94,7 @@ class DirectCaseGenerationServiceTest {
                 "summarizePreconditionPoints", List.class, Map.class);
         summarize.setAccessible(true);
         Map<String, Map<String, Object>> points = Map.of(
-                "TP1", Map.of("id", "TP1", "title", "预约已提交", "description", "业务对象已提交预约并进入待审批状态",
+                "TP1", Map.of("id", "TP1", "title", "预约已提交", "description", "访客已提交预约并进入待审批状态",
                         "requirement_refs", List.of("R1"), "source_basis", List.of("需求")),
                 "TP2", Map.of("id", "TP2", "title", "审批处理", "description", "审批人处理待审批预约")
         );
@@ -82,7 +105,7 @@ class DirectCaseGenerationServiceTest {
         assertEquals(1, material.size());
         assertEquals("TP1", material.get(0).get("trace_ref"));
         assertEquals("预约已提交", material.get(0).get("title"));
-        assertEquals("业务对象已提交预约并进入待审批状态", material.get(0).get("description"));
+        assertEquals("访客已提交预约并进入待审批状态", material.get(0).get("description"));
         assertFalse(material.get(0).containsKey("id"));
     }
 

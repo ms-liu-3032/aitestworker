@@ -1,0 +1,54 @@
+{
+  "name": "@aitesthub/dsh-plugin",
+  "version": "0.1.45",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "files": [
+    "dist",
+    "skills",
+    "README.md",
+    "cordis.patch.yml"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "engines": {
+    "dsh": ">=0.2.1-rc.5 <0.3.0"
+  },
+  "bundledDependencies": [
+    "local-browser-worker"
+  ],
+  "scripts": {
+    "check": "tsc --noEmit",
+    "build": "tsc",
+    "test": "npm run build && node --test test/*.test.mjs",
+    "package": "node scripts/package.mjs",
+    "smoke:real-capture": "npm run build && node scripts/smoke-real-capture.mjs",
+    "smoke:dual-entry": "node scripts/smoke-dual-entry.mjs",
+    "smoke:http-binding": "npm run build && node scripts/smoke-http-binding.mjs"
+  },
+  "dependencies": {
+    "local-browser-worker": "file:../local-browser-worker"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.5",
+    "@deepseek-ai/dsh-commands": ">=0.0.1-rc.1 <0.1.0",
+    "@deepseek-ai/dsh-credentials": ">=0.0.1-rc.1 <0.1.0",
+    "@deepseek-ai/dsh-skill": ">=0.0.1-rc.1 <0.1.0",
+    "@deepseek-ai/dsh-system-prompt": ">=0.0.1-rc.5 <0.1.0",
+    "@deepseek-ai/dsh-tools": ">=0.0.1-rc.1 <0.1.0"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "^4.0.5",
+    "@deepseek-ai/dsh-commands": "0.0.1-rc.1",
+    "@deepseek-ai/dsh-credentials": "0.0.1-rc.1",
+    "@deepseek-ai/dsh-skill": "0.0.1-rc.1",
+    "@deepseek-ai/dsh-system-prompt": "0.0.1-rc.5",
+    "@deepseek-ai/dsh-tools": "0.0.1-rc.1",
+    "@types/node": "^20.14.0",
+    "typescript": "^5.5.0"
+  }
+}

@@ -71,7 +71,7 @@ describe('TestAssets', () => {
   })
 
   it('uses project asset APIs and sends edited Skill content back for review', async () => {
-    const skill = { id: 8, projectId: 1, skillName: '预约操作', applicableScene: '业务对象预约', flowSteps: '1. 填表\n2. 提交', status: 'ACTIVE', createdAt: '', updatedAt: '' }
+    const skill = { id: 8, projectId: 1, skillName: '预约操作', applicableScene: '访客预约', flowSteps: '1. 填表\n2. 提交', status: 'ACTIVE', createdAt: '', updatedAt: '' }
     apiMocks.listProjectSkills.mockResolvedValue([skill])
     apiMocks.updateProjectSkill.mockResolvedValue({ ...skill, skillName: '预约操作修订', status: 'DRAFT' })
 
@@ -81,7 +81,7 @@ describe('TestAssets', () => {
     fireEvent.change(screen.getByDisplayValue('预约操作'), { target: { value: '预约操作修订' } })
     fireEvent.click(screen.getByText('保存并重新审核'))
     await waitFor(() => expect(apiMocks.updateProjectSkill).toHaveBeenCalledWith(1, 8, {
-      skillName: '预约操作修订', applicableScene: '业务对象预约', flowSteps: '1. 填表\n2. 提交',
+      skillName: '预约操作修订', applicableScene: '访客预约', flowSteps: '1. 填表\n2. 提交',
     }))
   })
 })

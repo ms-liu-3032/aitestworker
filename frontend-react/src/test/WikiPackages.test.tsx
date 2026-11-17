@@ -11,6 +11,11 @@ const apiMocks = vi.hoisted(() => ({
   updateWikiPackStatus: vi.fn(),
   updateWikiPack: vi.fn(),
   updateWikiEntry: vi.fn(),
+  listWikiPromotions: vi.fn(),
+  submitWikiPromotion: vi.fn(),
+  listActiveTomModels: vi.fn(),
+  listWikiTomLinks: vi.fn(),
+  updateWikiTomLinks: vi.fn(),
 }))
 
 const appMocks = vi.hoisted(() => ({
@@ -31,6 +36,21 @@ import WikiPackages from '../pages/project/WikiPackages'
 
 beforeEach(() => {
   vi.clearAllMocks()
+  apiMocks.listWikiPromotions.mockResolvedValue([])
+  apiMocks.listActiveTomModels.mockResolvedValue([])
+  apiMocks.listWikiTomLinks.mockResolvedValue([])
+})
+
+it('submits an active reviewed project pack as a reusable candidate without changing the source', async () => {
+  const pack = { id: 7, projectId: 1, scope: 'PROJECT', name: '访客项目规则', status: 'ACTIVE', reviewStatus: 'APPROVED', description: '', createdAt: '', updatedAt: '' }
+  apiMocks.listWikiPacks.mockResolvedValue([pack])
+  apiMocks.listWikiEntries.mockResolvedValue([])
+  apiMocks.submitWikiPromotion.mockResolvedValue({ ...pack, id: 20, scope: 'REUSABLE', status: 'DRAFT', reviewStatus: 'PENDING', promotionSourcePackId: 7 })
+  render(<WikiPackages />)
+  fireEvent.click(await screen.findByText('访客项目规则'))
+  fireEvent.click(await screen.findByText('提交至跨项目复用级'))
+  await waitFor(() => expect(apiMocks.submitWikiPromotion).toHaveBeenCalledWith(7, 'REUSABLE'))
+  expect(await screen.findByText(/跨项目提交记录/)).toBeInTheDocument()
 })
 
 describe('WikiPackages', () => {

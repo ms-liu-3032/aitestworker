@@ -17,13 +17,17 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 @Service
 public class GenerationCaseLibraryService {
+    private static final Logger log = LoggerFactory.getLogger(GenerationCaseLibraryService.class);
     private final JdbcClient jdbc;
     private final JdbcTemplate jdbcTemplate;
     private final TimeProvider timeProvider;
     private final com.company.aitest.loop.LoopIntegrationService loopIntegrationService;
+    private com.company.aitest.minitom.HistoricalCaseTomCandidateService historicalCaseTomCandidateService;
 
     @Autowired
     public GenerationCaseLibraryService(JdbcClient jdbc, JdbcTemplate jdbcTemplate, TimeProvider timeProvider,
@@ -36,6 +40,11 @@ public class GenerationCaseLibraryService {
 
     GenerationCaseLibraryService(JdbcClient jdbc, JdbcTemplate jdbcTemplate, TimeProvider timeProvider) {
         this(jdbc, jdbcTemplate, timeProvider, null);
+    }
+
+    @Autowired(required = false)
+    void setHistoricalCaseTomCandidateService(com.company.aitest.minitom.HistoricalCaseTomCandidateService service) {
+        this.historicalCaseTomCandidateService = service;
     }
 
     public List<LocalCaseDraftView> list(Long projectId, CurrentUser user) {
@@ -69,6 +78,7 @@ public class GenerationCaseLibraryService {
                        tgc.source_refs_json,
                        tgc.case_scope,
                        tgc.case_status,
+                       tgc.version_no,
                        tgc.user_id AS created_by,
                        tgc.created_at,
                        tgc.updated_at,
@@ -104,7 +114,7 @@ public class GenerationCaseLibraryService {
                     SELECT id, task_id, project_id, case_no, case_title, project_name, module_name,
                            NULL AS precondition, NULL AS steps, NULL AS expected_result,
                            priority, case_type, scenario_type, design_method, NULL AS source_refs_json,
-                           case_scope, case_status, created_by, created_at, updated_at, session_id,
+                           case_scope, case_status, version_no, created_by, created_at, updated_at, session_id,
                            'GENERATION' AS source_type
                     FROM test_case_draft
                     WHERE project_id = :projectId AND created_by = :createdBy
@@ -115,7 +125,7 @@ public class GenerationCaseLibraryService {
                            NULL AS precondition, NULL AS steps, NULL AS expected_result,
                            tgc.priority, tgc.case_type, 'POSITIVE' AS scenario_type,
                            '轨迹回放法' AS design_method, NULL AS source_refs_json,
-                           tgc.case_scope, tgc.case_status, tgc.user_id AS created_by,
+                           tgc.case_scope, tgc.case_status, tgc.version_no, tgc.user_id AS created_by,
                            tgc.created_at, tgc.updated_at, tgc.trace_session_id AS session_id,
                            'TRACE' AS source_type
                     FROM trace_generated_case tgc
@@ -260,6 +270,7 @@ public class GenerationCaseLibraryService {
                        tgc.source_refs_json,
                        tgc.case_scope,
                        tgc.case_status,
+                       tgc.version_no,
                        tgc.user_id AS created_by,
                        tgc.created_at,
                        tgc.updated_at,
@@ -305,6 +316,7 @@ public class GenerationCaseLibraryService {
                     steps = ?,
                     expected_result = ?,
                     priority = ?,
+                    version_no = version_no + 1,
                     updated_at = ?
                 WHERE id = ?
                   AND project_id = ?
@@ -337,6 +349,7 @@ public class GenerationCaseLibraryService {
                     steps = ?,
                     expected_result = ?,
                     priority = ?,
+                    version_no = version_no + 1,
                     updated_at = ?
                 WHERE id = ?
                   AND project_id = ?
@@ -457,8 +470,10 @@ public class GenerationCaseLibraryService {
                 now,
                 user.id(),
                 now);
+        Long formalCaseId = jdbcTemplate.queryForObject("SELECT LAST_INSERT_ID()", Long.class);
         updateGenerationStatus(projectId, draftId, user.id(), "SUBMITTED");
         if (loopIntegrationService != null) loopIntegrationService.onCaseFeedback(projectId, draftId, draft.sourceType(), "SUBMITTED", draft.caseTitle(), user);
+        extractHistoricalTomEvidenceSafely(projectId, formalCaseId, user);
     }
 
     private void submitTraceDraftToFormal(Long projectId, Long draftId, CurrentUser user, LocalCaseDraftView draft) {
@@ -493,8 +508,21 @@ public class GenerationCaseLibraryService {
                 traceGroupId,
                 traceSessionId,
                 issueClipId);
+        Long formalCaseId = jdbcTemplate.queryForObject("SELECT LAST_INSERT_ID()", Long.class);
         updateTraceStatus(projectId, draftId, user.id(), "SUBMITTED");
         if (loopIntegrationService != null) loopIntegrationService.onCaseFeedback(projectId, Math.abs(draftId), draft.sourceType(), "SUBMITTED", draft.caseTitle(), user);
+        extractHistoricalTomEvidenceSafely(projectId, formalCaseId, user);
+    }
+
+    private void extractHistoricalTomEvidenceSafely(Long projectId, Long formalCaseId, CurrentUser user) {
+        if (historicalCaseTomCandidateService == null) return;
+        try {
+            historicalCaseTomCandidateService.extractOne(projectId, formalCaseId, user);
+        } catch (Exception e) {
+            // Formal submission is the primary user command. Candidate deposition is reviewable
+            // enrichment and must never turn a valid formal submission into a failed transaction.
+            log.warn("Formal case {} submitted but historical TOM candidate extraction failed: {}", formalCaseId, e.getMessage());
+        }
     }
 
     private void updateGenerationStatus(Long projectId, Long draftId, Long userId, String status) {
@@ -605,6 +633,7 @@ public class GenerationCaseLibraryService {
                 rs.getString("source_refs_json"),
                 rs.getString("case_scope"),
                 rs.getString("case_status"),
+                rs.getInt("version_no"),
                 rs.getLong("created_by"),
                 rs.getTimestamp("created_at").toLocalDateTime(),
                 rs.getTimestamp("updated_at").toLocalDateTime(),
@@ -631,6 +660,7 @@ public class GenerationCaseLibraryService {
                 rs.getString("source_refs_json"),
                 rs.getString("case_scope"),
                 rs.getString("case_status"),
+                rs.getInt("version_no"),
                 rs.getLong("created_by"),
                 rs.getTimestamp("created_at").toLocalDateTime(),
                 rs.getTimestamp("updated_at").toLocalDateTime(),
@@ -666,6 +696,7 @@ public class GenerationCaseLibraryService {
             String sourceRefsJson,
             String caseScope,
             String caseStatus,
+            int versionNo,
             Long createdBy,
             LocalDateTime createdAt,
             LocalDateTime updatedAt,
