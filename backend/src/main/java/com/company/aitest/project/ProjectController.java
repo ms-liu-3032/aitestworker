@@ -20,10 +20,13 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/api/projects")
 public class ProjectController {
     private final ProjectService projectService;
+    private final ProjectAccessService projectAccess;
     private final OperationLogService operationLogService;
 
-    public ProjectController(ProjectService projectService, OperationLogService operationLogService) {
+    public ProjectController(ProjectService projectService, ProjectAccessService projectAccess,
+                             OperationLogService operationLogService) {
         this.projectService = projectService;
+        this.projectAccess = projectAccess;
         this.operationLogService = operationLogService;
     }
 
@@ -52,7 +55,8 @@ public class ProjectController {
     }
 
     @GetMapping("/{projectId}")
-    public ApiResponse<ProjectRecord> get(@PathVariable Long projectId) {
+    public ApiResponse<ProjectRecord> get(@PathVariable Long projectId, Authentication authentication) {
+        projectAccess.ensureCanAccess(projectId, (CurrentUser) authentication.getPrincipal());
         return ApiResponse.ok(projectService.get(projectId));
     }
 

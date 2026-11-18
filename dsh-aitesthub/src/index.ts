@@ -1202,6 +1202,36 @@ export function apply(ctx: Context) {
   }))
 
   ctx.tools.register(defineTool({
+    name: 'aitest_save_case_batch',
+    description: '一次提交 1–100 条独立用例草稿，可同时创建各自的 UI/API 执行映射；整批原子写入，失败不留半批。只创建草稿和待验证映射，不执行浏览器，也不自动审核。',
+    parameters: {
+      projectId: { type: 'number', required: true },
+      workSessionId: { type: 'number', required: true },
+      items: { type: 'array', required: true, items: { type: 'object', additionalProperties: true },
+        description: '每项含 draft:{idempotencyKey,caseTitle,moduleName,precondition?,steps,expectedResult,priority?,pointType?,sourceRefs?:字符串数组}；可选 assetRequestKey、assetType(UI/API)、mapping。批内键须唯一。' },
+    },
+    output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] },
+    async execute({ projectId, workSessionId, items }) {
+      if (!Array.isArray(items) || items.length < 1 || items.length > 100) throw new Error('每批须有 1–100 条用例')
+      const binding = await currentBinding(ctx)
+      const work = await callApi<{ requirementText: string }>(binding,
+        `${projectPath(projectId)}/work-sessions/${workSessionId}`)
+      const prepared = items.map((raw, index) => {
+        const item = raw as Record<string, unknown>
+        const draft = item.draft as Record<string, unknown> | undefined
+        if (!draft || typeof draft !== 'object' || (draft.sourceRefs !== undefined
+            && (!Array.isArray(draft.sourceRefs) || !draft.sourceRefs.every(ref => typeof ref === 'string')))) {
+          throw new Error(`第 ${index + 1} 条草稿格式或来源引用无效`)
+        }
+        return { draft: { ...draft, workSessionId, requirementText: work.requirementText },
+          assetRequestKey: item.assetRequestKey, assetType: item.assetType, mapping: item.mapping }
+      })
+      return asText(await callApi(binding, `${projectPath(projectId)}/case-batch`, 'POST',
+        { workSessionId, items: prepared }))
+    },
+  }))
+
+  ctx.tools.register(defineTool({
     name: 'aitest_get_my_style',
     description: '读取本人针对该项目的用例写作偏好。偏好仅影响表达，不可覆盖事实或强制规则。',
     parameters: { projectId: { type: 'number', required: true, description: '项目 ID' } },
