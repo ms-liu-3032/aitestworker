@@ -55,6 +55,20 @@ class BusinessPackControllerAccessTest {
     }
 
     @Test
+    @SuppressWarnings("unchecked")
+    void mvcRejectsForeignPackIdBeforeHandlerRuns() {
+        JdbcClient.StatementSpec statement = mock(JdbcClient.StatementSpec.class);
+        JdbcClient.MappedQuerySpec<Integer> query = mock(JdbcClient.MappedQuerySpec.class);
+        when(jdbc.sql(anyString())).thenReturn(statement);
+        when(statement.param(anyString(), any())).thenReturn(statement);
+        when(statement.query(Integer.class)).thenReturn(query);
+        when(query.single()).thenReturn(0);
+        assertThrows(Exception.class, () -> MockMvcBuilders.standaloneSetup(controller).build()
+                .perform(get("/api/projects/3/business-packs/77").principal(auth)));
+        verifyNoInteractions(packs);
+    }
+
+    @Test
     void ordinaryMemberCannotMutateProjectPacks() {
         doThrow(new BusinessException("无权管理当前项目")).when(access).ensureCanManageProject(3L, user);
         assertThrows(BusinessException.class, () -> controller.authorize(3L, Map.of(), auth, request("POST")));
