@@ -63,6 +63,12 @@ export default function GlobalHeader() {
       shortcut: '⌘,',
       action: () => navigate('/settings'),
     },
+    {
+      id: 'cmd-dsh-connections',
+      label: '本机 DSH 连接',
+      group: '导航',
+      action: () => navigate('/dsh-connections'),
+    },
   ];
 
   return (
@@ -213,6 +219,12 @@ export default function GlobalHeader() {
                   <div className="truncate text-sm font-medium text-gray-900">{user?.displayName || user?.username}</div>
                   <div className="truncate text-xs text-gray-500">{displayLabel(user?.roleCode, '普通用户')}</div>
                 </div>
+                <button
+                  onClick={() => { navigate('/dsh-connections'); setUserMenuOpen(false); }}
+                  className="w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-50"
+                >
+                  本机 DSH 连接
+                </button>
                 <button
                   onClick={() => { navigate('/settings'); setUserMenuOpen(false); }}
                   className="w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-50"

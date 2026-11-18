@@ -11,6 +11,7 @@ import LoginPage from './pages/LoginPage';
 const ProjectList = lazy(() => import('./pages/workspace/ProjectList'));
 const CollectorManager = lazy(() => import('./pages/CollectorManager'));
 const Settings = lazy(() => import('./pages/Settings'));
+const DshConnections = lazy(() => import('./pages/DshConnections'));
 
 // 模块 B：Project Context
 const ProjectOverview = lazy(() => import('./pages/project/ProjectOverview'));
@@ -145,6 +146,7 @@ function ProtectedApp() {
           <Route path="/" element={<ProjectList />} />
           <Route path="/collectors" element={<CollectorManager />} />
           <Route path="/settings" element={<Settings />} />
+          <Route path="/dsh-connections" element={<DshConnections />} />
 
           {/* 模块 B：Project Context（带侧边栏） */}
           <Route path="/projects/:projectId" element={<ProjectLayout />}>
