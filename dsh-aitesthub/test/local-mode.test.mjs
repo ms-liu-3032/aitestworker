@@ -26,6 +26,8 @@ test('local rules are available without a Hub binding', async () => {
   apply(ctx)
   const rules = JSON.parse(await tools.get('aitest_local_design_rules').execute({}))
   assert.equal(rules.mode, 'LOCAL_ONLY')
+  assert.match(rules.coverage, /单项留空/)
+  assert.match(rules.coverage, /未执行不得报告完整覆盖/)
   assert.ok(tools.has('aitest_run_local_ui'))
   assert.ok(tools.has('aitest_local_save_design'))
 })

@@ -134,6 +134,29 @@ export function getProject(projectId: number) {
   return api<Project>(`/api/projects/${projectId}`)
 }
 
+export interface ProjectMember {
+  userId: number
+  username: string
+  displayName: string | null
+  projectRole: 'OWNER' | 'MEMBER'
+}
+
+export interface ProjectMemberList { canManage: boolean; members: ProjectMember[] }
+
+export function listProjectMembers(projectId: number) {
+  return api<ProjectMemberList>(`/api/projects/${projectId}/members`)
+}
+
+export function addProjectMember(projectId: number, username: string) {
+  return api<ProjectMember>(`/api/projects/${projectId}/members`, {
+    method: 'POST', body: JSON.stringify({ username }),
+  })
+}
+
+export function removeProjectMember(projectId: number, userId: number) {
+  return api<void>(`/api/projects/${projectId}/members/${userId}`, { method: 'DELETE' })
+}
+
 export function createProject(body: { projectName: string; description?: string }) {
   return api<Project>('/api/projects', { method: 'POST', body: JSON.stringify(body) })
 }

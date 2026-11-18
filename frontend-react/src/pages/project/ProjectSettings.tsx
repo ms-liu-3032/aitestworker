@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useApp } from '../../context/AppContext';
-import { getProject, updateProject, deleteProject } from '../../services/api';
+import { getProject, updateProject, deleteProject, listProjectMembers, addProjectMember,
+  removeProjectMember, type ProjectMemberList, type ProjectMember } from '../../services/api';
 
 export default function ProjectSettings() {
   const { projectId } = useParams<{ projectId: string }>();
@@ -14,6 +15,13 @@ export default function ProjectSettings() {
   const [form, setForm] = useState({ projectName: '', description: '' });
   const [originalForm, setOriginalForm] = useState({ projectName: '', description: '' });
   const [deleteInput, setDeleteInput] = useState('');
+  const [memberList, setMemberList] = useState<ProjectMemberList | null>(null);
+  const [memberName, setMemberName] = useState('');
+  const [memberBusy, setMemberBusy] = useState(false);
+
+  const refreshMembers = async (id: number) => {
+    setMemberList(await listProjectMembers(id));
+  };
 
   useEffect(() => {
     if (!projectId) return;
@@ -26,6 +34,7 @@ export default function ProjectSettings() {
       })
       .catch(() => showToast('加载项目失败'))
       .finally(() => setLoading(false));
+    refreshMembers(Number(projectId)).catch(() => showToast('加载项目成员失败', 'error'));
   }, [projectId]);
 
   const trimmedProjectName = form.projectName.trim();
@@ -61,6 +70,31 @@ export default function ProjectSettings() {
       setDeleting(false);
     }
   }
+
+  const handleAddMember = async () => {
+    if (!projectId || !memberName.trim() || memberBusy) return;
+    setMemberBusy(true);
+    try {
+      await addProjectMember(Number(projectId), memberName.trim());
+      setMemberName('');
+      await refreshMembers(Number(projectId));
+      showToast('成员已添加');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '添加成员失败', 'error');
+    } finally { setMemberBusy(false); }
+  };
+
+  const handleRemoveMember = async (member: ProjectMember) => {
+    if (!projectId || !window.confirm(`确认移除成员“${member.username}”？`)) return;
+    setMemberBusy(true);
+    try {
+      await removeProjectMember(Number(projectId), member.userId);
+      await refreshMembers(Number(projectId));
+      showToast('成员已移除');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '移除成员失败', 'error');
+    } finally { setMemberBusy(false); }
+  };
 
   if (loading) {
     return (
@@ -126,6 +160,33 @@ export default function ProjectSettings() {
                 撤销修改
               </button>
             </div>
+          </div>
+        </div>
+
+        <div className="bg-white rounded-xl border border-gray-200 p-5 space-y-4">
+          <div>
+            <h2 className="text-sm font-semibold text-gray-900">项目成员</h2>
+            <p className="text-xs text-gray-500 mt-1">项目创建者或管理员可添加现有用户；成员才能在 Web 和 DSH 中访问项目。</p>
+          </div>
+          {memberList?.canManage && (
+            <div className="flex flex-wrap gap-2">
+              <input aria-label="成员登录名" value={memberName} onChange={e => setMemberName(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') handleAddMember(); }}
+                placeholder="输入用户登录名" maxLength={64}
+                className="min-w-48 flex-1 h-9 px-3 border border-gray-200 rounded-lg text-sm" />
+              <button onClick={handleAddMember} disabled={memberBusy || !memberName.trim()}
+                className="px-4 py-2 bg-slate-900 text-white text-sm rounded-lg disabled:opacity-50">添加成员</button>
+            </div>
+          )}
+          <div className="divide-y divide-gray-100">
+            {memberList?.members.map(member => (
+              <div key={member.userId} className="py-2 flex items-center justify-between gap-3 text-sm">
+                <span>{member.displayName || member.username}（{member.username}） · {member.projectRole === 'OWNER' ? '创建者' : '成员'}</span>
+                {memberList.canManage && member.projectRole !== 'OWNER' &&
+                  <button onClick={() => handleRemoveMember(member)} disabled={memberBusy}
+                    className="text-red-600 disabled:opacity-50">移除</button>}
+              </div>
+            ))}
           </div>
         </div>
 
