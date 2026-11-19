@@ -33,6 +33,9 @@ function harness() {
 test('full batch automation guidance requires orchestration and complete ID reconciliation', () => {
   const { promptSections, skills } = harness()
   assert.match(promptSections.get('aitesthub:complete-batch-automation').text, /workflow/)
+  assert.match(promptSections.get('aitesthub:complete-batch-automation').text, /无须每次输入 workflow 关键词/)
+  assert.match(promptSections.get('aitesthub:complete-batch-automation').text, /一轮能完成就直接完成/)
+  assert.match(promptSections.get('aitesthub:complete-batch-automation').text, /不设置固定条数门槛/)
   const content = skills.get('aitesthub').content
   assert.match(content, /expectedIds/)
   assert.match(content, /got < expected/)

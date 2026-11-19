@@ -57,7 +57,7 @@ export function apply(ctx: Context) {
   ctx.systemPrompt.section({
     name: 'aitesthub:complete-batch-automation',
     order: 91,
-    text: '用户已要求大批量/全量自动化测试由 DSH 自行拆分、调用多个子 Agent 并汇总时，加载 aitesthub Skill 的“全量任务编排”规则。先列出完整且去重的用例 ID 与范围，按可独立执行、浏览器/账号/测试数据隔离情况分组；若 DSH workflow 可用，使用它并发处理独立组并等待结果，不把第一批结束当成全量完成。每组返回结构化 ID、执行状态、证据和报告路径；父 Agent 核对预期 ID 与已返回 ID，补跑遗漏或失败组并明确剩余未完成项。共享浏览器会话、同一账号状态或相互污染的数据不得并发。workflow 不可用时在当前任务内顺序推进，不能虚报全量；create_goal 只有在用户明确要求跨轮持续执行且自动续轮能力已启用时才用于续轮。',
+    text: '本用户已明确授权 AITestHub 插件在需要时自动使用 DSH 多 Agent 编排，无须每次输入 workflow 关键词。收到测试任务后先理解完整范围，估计目标数量、依赖、耗时、工具和浏览器/账号/数据隔离情况；一轮能完成就直接完成，不能完成才自行决定拆成几组、每组多少项及安全并发数，不设置固定条数门槛，也不为凑并发启动 workflow。需要大规模编排且 DSH workflow 可用时，加载 aitesthub Skill 的“全量任务编排”规则并使用 workflow 等待独立组完成；先固定去重的目标 ID，末尾核对预期与返回 ID、证据和报告，补跑遗漏，不把第一批结束当成全量完成。共享浏览器会话、同一账号状态或相互污染的数据不得并发。workflow 不可用时顺序推进并说明实际未完成项；create_goal 只有在用户明确要求跨轮持续执行且自动续轮能力已启用时才用于续轮。',
   })
   const skillFile = new URL('../skills/aitesthub/SKILL.md', import.meta.url)
   const skillText = readFileSync(skillFile, 'utf8')
