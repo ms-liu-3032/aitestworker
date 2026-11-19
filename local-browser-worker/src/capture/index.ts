@@ -537,7 +537,13 @@ export class CaptureManager {
           break;
         }
       }
-      await pc.context.close().catch(() => undefined);
+      try {
+        await pc.context.close();
+      } catch (error) {
+        // A disconnected browser is already closed; otherwise keep the context
+        // registered so the caller can report and retry a failed window cleanup.
+        if (!pc.page.isClosed()) throw error;
+      }
       this.profileContexts.delete(profileId);
     }
   }

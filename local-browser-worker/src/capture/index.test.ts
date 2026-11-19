@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
+  CaptureManager,
   getProfileDownloadsDir,
   getTraceScreencastFramePath,
   getTraceScreencastManifestPath,
@@ -27,5 +28,30 @@ describe('capture download helpers', () => {
   it('returns null when created context id is ambiguous', () => {
     expect(resolveCreatedBrowserContextId([], [])).toBeNull();
     expect(resolveCreatedBrowserContextId([], ['ctx-1', 'ctx-2'])).toBeNull();
+  });
+});
+
+describe('profile window cleanup', () => {
+  it('closes only the selected profile context', async () => {
+    const manager = new CaptureManager(null, 'darwin');
+    const profiles = (manager as any).profileContexts as Map<number, unknown>;
+    const selected = { context: { close: vi.fn().mockResolvedValue(undefined) }, page: { isClosed: () => false } };
+    const other = { context: { close: vi.fn().mockResolvedValue(undefined) }, page: { isClosed: () => false } };
+    profiles.set(1, selected);
+    profiles.set(2, other);
+    await manager.closeProfileContext(1);
+    expect(selected.context.close).toHaveBeenCalledOnce();
+    expect(other.context.close).not.toHaveBeenCalled();
+    expect(profiles.has(1)).toBe(false);
+    expect(profiles.has(2)).toBe(true);
+  });
+
+  it('keeps a failed context registered for retry', async () => {
+    const manager = new CaptureManager(null, 'darwin');
+    const profiles = (manager as any).profileContexts as Map<number, unknown>;
+    profiles.set(3, { context: { close: vi.fn().mockRejectedValue(new Error('close failed')) },
+      page: { isClosed: () => false } });
+    await expect(manager.closeProfileContext(3)).rejects.toThrow('close failed');
+    expect(profiles.has(3)).toBe(true);
   });
 });
