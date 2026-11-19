@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { afterEach, test } from 'node:test'
 import { apply } from '../dist/index.js'
 import { parseServerUrl } from '../dist/client.js'
+import { applyMappingEdits } from '../dist/asset-reuse.js'
 
 const previousFetch = globalThis.fetch
 const validBindCode = 'ABCDEFGHJKLM'
@@ -46,6 +47,128 @@ test('full batch automation guidance requires orchestration and complete ID reco
   assert.match(content, /failureStepIndex.*failureReason.*reportPath/)
   assert.match(content, /0 个成员启动/)
   assert.match(content, /只续做未确认的动作/)
+})
+
+test('changed UI requirement finds the existing mapping before a new script is designed', async () => {
+  const { tools, commands, promptSections, skills } = harness()
+  assert.match(promptSections.get('aitesthub:reuse-before-ui-automation').text, /aitest_find_auto_asset_candidates/)
+  assert.match(skills.get('aitesthub').content, /业务语义修订，不是定位失效/)
+  const requested = []
+  globalThis.fetch = async (url) => {
+    const path = new URL(url).pathname
+    requested.push(path)
+    let data
+    if (path === '/api/dsh/bind') data = { userToken: 'user_secret', agentToken: 'agent_secret', userId: 9, connectionId: 3 }
+    else if (path === '/api/dsh/tools/projects/2/automation-assets') data = [
+      { id: 21, caseKind: 'DRAFT', caseId: 12, caseNo: 'DSH-12', assetType: 'UI',
+        status: 'VERIFIED', currentVersion: 3, latestVersion: 3, reviewStatus: 'APPROVED' },
+      { id: 22, caseKind: 'DRAFT', caseId: 13, caseNo: 'DSH-13', assetType: 'API',
+        status: 'VERIFIED', currentVersion: 1, latestVersion: 1 },
+    ]
+    else if (path === '/api/dsh/user/projects/2/drafts') data = [
+      { id: 12, caseNo: 'DSH-12', caseTitle: '手机号必填时阻止提交', moduleName: '/邀请/新增' },
+      { id: 13, caseNo: 'DSH-13', caseTitle: '其他接口', moduleName: '/接口' },
+    ]
+    else throw new Error(`unexpected request ${path}`)
+    return { ok: true, status: 200, json: async () => ({ success: true, data }) }
+  }
+  await commands.get('aitest-bind').handler({ rawInput: `https://hub.example ${validBindCode}` })
+  const found = JSON.parse(await tools.get('aitest_find_auto_asset_candidates').execute({
+    projectId: 2, change: '原来手机号必填，改成手机号或邮箱至少填写一个',
+  }))
+  assert.equal(found.candidates[0].assetId, 21)
+  assert.equal(found.candidates[0].currentVersion, 3)
+  assert.equal(found.candidates[0].caseTitle, '手机号必填时阻止提交')
+  assert.equal(found.candidates.length, 1)
+  assert.deepEqual(requested, ['/api/dsh/bind', '/api/dsh/tools/projects/2/automation-assets',
+    '/api/dsh/user/projects/2/drafts'])
+})
+
+test('UI reuse search also finds titled formal cases without exposing full case text', async () => {
+  const { tools, commands } = harness()
+  globalThis.fetch = async (url) => {
+    const path = new URL(url).pathname
+    let data
+    if (path === '/api/dsh/bind') data = { userToken: 'user_secret', agentToken: 'agent_secret', userId: 9, connectionId: 3 }
+    else if (path === '/api/dsh/tools/projects/2/automation-assets') data = [
+      { id: 30, caseKind: 'FORMAL', caseId: 40, caseNo: 'TC-40', assetType: 'UI',
+        status: 'VERIFIED', currentVersion: 2, latestVersion: 2, reviewStatus: 'APPROVED' },
+    ]
+    else if (path === '/api/dsh/user/projects/2/drafts') data = []
+    else if (path === '/api/dsh/tools/projects/2/cases') data = [
+      { id: 40, caseNo: 'TC-40', caseTitle: '邮箱输入后提交申请', moduleName: '/申请/新增',
+        steps: '敏感的完整历史步骤不应出现在候选列表' },
+    ]
+    else throw new Error(`unexpected request ${path}`)
+    return { ok: true, status: 200, json: async () => ({ success: true, data }) }
+  }
+  await commands.get('aitest-bind').handler({ rawInput: `https://hub.example ${validBindCode}` })
+  const found = JSON.parse(await tools.get('aitest_find_auto_asset_candidates').execute({
+    projectId: 2, change: '邮箱提交条件改变',
+  }))
+  assert.equal(found.candidates[0].assetId, 30)
+  assert.equal(found.candidates[0].caseKind, 'FORMAL')
+  assert.equal(JSON.stringify(found).includes('敏感的完整历史步骤'), false)
+})
+
+test('UI asset copy preserves unaffected steps and creates a revision from small edits', async () => {
+  const { tools, commands } = harness()
+  const original = { caseNo: 'DSH-12', page: '/request/new', steps: [
+    { type: 'click', locator: { by: 'text', value: '新增' } },
+    { type: 'fill', locator: { by: 'label', value: '手机号' }, data: '${phone}' },
+    { type: 'click', locator: { by: 'text', value: '提交' } },
+  ], assertions: [{ by: 'text', value: '手机号不能为空' }] }
+  let saved
+  let savedNew
+  globalThis.fetch = async (url, options = {}) => {
+    const path = new URL(url).pathname
+    let data
+    if (path === '/api/dsh/bind') data = { userToken: 'user_secret', agentToken: 'agent_secret', userId: 9, connectionId: 3 }
+    else if (path === '/api/dsh/tools/projects/2/automation-assets/21') data = {
+      id: 21, caseKind: 'DRAFT', caseId: 12, caseNo: 'DSH-12', assetType: 'UI', currentVersion: 3,
+    }
+    else if (path === '/api/dsh/tools/projects/2/automation-assets/21/versions/3') data = {
+      versionNo: 3, status: 'VERIFIED', mapping: original,
+    }
+    else if (path === '/api/dsh/tools/projects/2/automation-assets/21/versions') {
+      saved = JSON.parse(options.body)
+      data = { assetId: 21, versionNo: 4, status: 'DRAFT' }
+    } else if (path === '/api/dsh/tools/projects/2/automation-assets') {
+      savedNew = JSON.parse(options.body)
+      data = { id: 31, currentVersion: 1, status: 'DRAFT' }
+    } else throw new Error(`unexpected request ${path}`)
+    return { ok: true, status: 200, json: async () => ({ success: true, data }) }
+  }
+  await commands.get('aitest-bind').handler({ rawInput: `https://hub.example ${validBindCode}` })
+  const result = JSON.parse(await tools.get('aitest_copy_ui_asset_version').execute({
+    projectId: 2, sourceAssetId: 21, sourceVersionNo: 3, mode: 'REVISE', expectedVersion: 3,
+    requestKey: 'change-1', changeReason: '需求改为手机或邮箱至少填写一项', edits: [
+      { operation: 'insert', section: 'steps', index: 2,
+        value: { type: 'fill', locator: { by: 'label', value: '邮箱' }, data: '${email}' } },
+      { operation: 'replace', section: 'assertions', index: 0,
+        value: { by: 'text', value: '手机号或邮箱至少填写一项' } },
+    ],
+  }))
+  assert.equal(result.saved.versionNo, 4)
+  assert.equal(saved.mapping.steps.length, 4)
+  assert.deepEqual(saved.mapping.steps[0], original.steps[0])
+  assert.deepEqual(saved.mapping.steps[3], original.steps[2])
+  assert.equal(saved.mapping.assertions[0].value, '手机号或邮箱至少填写一项')
+  assert.equal(original.steps.length, 3)
+  const newCase = JSON.parse(await tools.get('aitest_copy_ui_asset_version').execute({
+    projectId: 2, sourceAssetId: 21, sourceVersionNo: 3, mode: 'NEW_CASE',
+    targetCaseKind: 'DRAFT', targetCaseId: 30, targetCaseNo: 'DSH-30', workSessionId: 8,
+    requestKey: 'change-2', changeReason: '新增邮箱单独满足条件的独立用例', edits: [
+      { operation: 'replace', section: 'steps', index: 1,
+        value: { type: 'fill', locator: { by: 'label', value: '邮箱' }, data: '${email}' } },
+    ],
+  }))
+  assert.equal(newCase.saved.id, 31)
+  assert.equal(savedNew.mapping.caseNo, 'DSH-30')
+  assert.deepEqual(savedNew.mapping.steps[0], original.steps[0])
+  assert.throws(() => applyMappingEdits(original, [
+    { operation: 'remove', section: 'steps', index: 9 },
+  ], 'DSH-12'), /序号无效/)
 })
 
 test('Hub case design requires a live rule and context preflight before work starts', async () => {

@@ -11,6 +11,7 @@ import { executeAutomationAsset, type Mapping } from './automation.js'
 import { executeApiAutomationAsset } from './api-automation.js'
 import { LocalDesignStore, localDesignRules, type LocalDesignInput } from './local-design.js'
 import { OfflineAutomation } from './offline-automation.js'
+import { copyUiAssetVersion, findAutoAssetCandidates, type MappingEdit } from './asset-reuse.js'
 
 export const name = 'aitesthub'
 export const inject = ['tools', 'commands', 'credentials', 'skills', 'systemPrompt']
@@ -58,6 +59,11 @@ export function apply(ctx: Context) {
     name: 'aitesthub:complete-batch-automation',
     order: 91,
     text: '本用户已明确授权 AITestHub 插件在需要时自动使用 DSH 多 Agent 编排，无须每次输入 workflow 关键词。收到测试任务后先理解完整范围，估计目标数量、依赖、耗时、工具和浏览器/账号/数据隔离情况；一轮能完成就直接完成，不能完成才自行决定拆成几组、每组多少项及安全并发数，不设置固定条数门槛，也不为凑并发启动 workflow。需要大规模编排且 DSH workflow 可用时，加载 aitesthub Skill 的“全量任务编排”规则并使用 workflow 等待独立组完成；先固定去重的目标 ID，末尾核对预期与返回 ID、证据和报告，补跑遗漏，不把第一批结束当成全量完成。agent schema 的 type 必须是单个字符串，可选字段省略，不写 type 数组或 nullable；schema 错误且 0 个成员启动时修正后重跑。遇到 tool input is invalid JSON / MALFORMED_RESPONSE 时先核对最后确认的工具结果和已落库状态，只用原幂等键续做未确认的 ID，并缩短单次输入；宿主在工具调用前中断时不能宣称插件已执行。共享浏览器会话、同一账号状态或相互污染的数据不得并发。workflow 不可用时顺序推进并说明实际未完成项；create_goal 只有在用户明确要求跨轮持续执行且自动续轮能力已启用时才用于续轮。',
+  })
+  ctx.systemPrompt.section({
+    name: 'aitesthub:reuse-before-ui-automation',
+    order: 92,
+    text: '用户要求修改已有 UI 用例或自动化场景、调整校验条件或复跑相似流程时，先确认本轮是 Hub 模式还是本地模式。Hub 模式先调用 aitest_find_auto_asset_candidates 查找已有 UI 映射，读取匹配资产的完整版本和归属用例，再做新旧需求差异表；本地模式先列出并读取已有本地设计及映射。Hub 中优先用 aitest_copy_ui_asset_version 从已验证映射复制，只提交受影响步骤和断言的差异，保存为原用例候选版或新用例资产；本地映射也先复制再修改。业务规则或预期变化不是仅改定位的自愈，必须重新运行并按 Hub 审核规则处理。未检索或未读映射时不得声称没有可复用脚本，也不要直接从零推演。',
   })
   const skillFile = new URL('../skills/aitesthub/SKILL.md', import.meta.url)
   const skillText = readFileSync(skillFile, 'utf8')
@@ -925,6 +931,47 @@ export function apply(ctx: Context) {
     async execute({ projectId, workSessionId, requestKey, caseKind, caseId, assetType, mapping }) {
       return asText(await callApi(await currentBinding(ctx), `${projectPath(projectId)}/automation-assets`, 'POST',
         { workSessionId, requestKey, caseKind, caseId, assetType, mapping }))
+    },
+  }))
+
+  ctx.tools.register(defineTool({
+    name: 'aitest_find_auto_asset_candidates',
+    description: '按本次需求变化查找可复用的项目 UI 自动化映射，合并本人草稿、正式用例标题与可访问资产，返回候选资产 ID/版本；新会话修改已有 UI 流程时应先调用，再读取完整映射。结果受资产列表与权限范围限制，空结果不代表全库没有。',
+    parameters: {
+      projectId: { type: 'number', required: true, description: '当前 Hub 项目 ID' },
+      change: { type: 'string', required: true, description: '本次业务/页面变化的自然语言描述，最多 500 字' },
+    },
+    output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] },
+    async execute({ projectId, change }) {
+      return asText(await findAutoAssetCandidates(await currentBinding(ctx), projectId, change))
+    },
+  }))
+
+  ctx.tools.register(defineTool({
+    name: 'aitest_copy_ui_asset_version',
+    description: '从已验证的 UI 映射复制原页面、步骤、定位和断言，仅应用明确的差异，保存为同一用例的待验证新版本或新用例的 v1 资产。业务条件变化用此工具，不能伪装成只改 locator 的自愈；保存后仍须真实运行并按规则审核。',
+    parameters: {
+      projectId: { type: 'number', required: true },
+      sourceAssetId: { type: 'number', required: true },
+      sourceVersionNo: { type: 'number', required: true },
+      mode: { type: 'string', required: true, description: 'REVISE（同一用例）或 NEW_CASE（新用例）' },
+      requestKey: { type: 'string', required: true, description: '重试保持不变的幂等键' },
+      changeReason: { type: 'string', required: true, description: '业务修订依据，至少 10 字' },
+      edits: { type: 'array', required: true, items: { type: 'object', additionalProperties: true },
+        description: '1–20 项差异，每项 {operation:replace|insert|remove,section:page|steps|assertions,index?:从0开始,value?:完整步骤/断言对象或页面路径}；未列出的旧步骤和断言自动保留' },
+      expectedVersion: { type: 'number', description: 'REVISE 必填：来源资产 currentVersion' },
+      targetCaseKind: { type: 'string', description: 'NEW_CASE 必填：DRAFT 或 FORMAL' },
+      targetCaseId: { type: 'number', description: 'NEW_CASE 必填：新用例 ID' },
+      targetCaseNo: { type: 'string', description: 'NEW_CASE 必填：新用例编号' },
+      workSessionId: { type: 'number', description: 'NEW_CASE 必填：当前 Hub 测试任务 ID' },
+    },
+    output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] },
+    async execute(input) {
+      return asText(await copyUiAssetVersion(await currentBinding(ctx), {
+        ...input, mode: input.mode as 'REVISE' | 'NEW_CASE',
+        targetCaseKind: input.targetCaseKind as 'DRAFT' | 'FORMAL' | undefined,
+        edits: input.edits as MappingEdit[],
+      }))
     },
   }))
 
