@@ -22,7 +22,8 @@ function asText(value: unknown): string {
 
 function renderAutomationResult(value: string): Array<{ type: 'text'; text: string }> {
   try {
-    const run = JSON.parse(value) as { result?: string; status?: string; reportPath?: string; reportError?: string }
+    const run = JSON.parse(value) as { result?: string; status?: string; reportPath?: string;
+      reportError?: string; windowCloseError?: string; browserWindowClosed?: boolean }
     const result = run.result === 'PASS' ? '通过' : run.result ? `未通过（${run.result}）` : '未执行'
     const storage = run.status === 'LOCAL_ONLY' ? '仅本机保存，未回写 Hub'
       : run.status === 'LOCAL_CAPTURE_INCOMPLETE' ? '本机采集未完成，未回写 Hub'
@@ -31,7 +32,9 @@ function renderAutomationResult(value: string): Array<{ type: 'text'; text: stri
         : run.status === 'RUN_WRITE_PENDING' ? '证据已上传，运行结果待回写' : '状态待确认'
     const report = run.reportPath ? `本地测试报告：${run.reportPath}`
       : run.reportError ? `本地测试报告生成失败：${run.reportError}` : '本次没有生成本地测试报告'
-    return [{ type: 'text', text: `执行结果：${result}\n回写状态：${storage}\n${report}\n${value}` }]
+    const window = run.browserWindowClosed === undefined ? '' : run.browserWindowClosed
+      ? '浏览器窗口回收：已完成\n' : `浏览器窗口回收：失败（${run.windowCloseError || '原因待查'}）\n`
+    return [{ type: 'text', text: `执行结果：${result}\n回写状态：${storage}\n${window}${report}\n${value}` }]
   } catch { return [{ type: 'text', text: value }] }
 }
 

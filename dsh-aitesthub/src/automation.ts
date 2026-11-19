@@ -210,12 +210,18 @@ export async function executeAutomationAsset(binding: Binding, capture: CaptureR
       return { reportError: failureReason(error) }
     }
   }
+  let windowCloseError: string | undefined
+  let browserWindowClosed: boolean | undefined
   try {
-    await capture.stop(binding, projectId, captureRun.sessionId)
+    const stopped = await capture.stop(binding, projectId, captureRun.sessionId)
+    windowCloseError = stopped?.windowCloseError
+    browserWindowClosed = stopped?.browserWindowClosed
   } catch (error) {
     const report = await localReport('EVIDENCE_PENDING')
     return { status: 'EVIDENCE_PENDING', assetId, sessionId: captureRun.sessionId,
-      result, failureReason: reason, failureContext, runPayload, uploadError: failureReason(error), ...report }
+      result, failureReason: reason, failureContext, runPayload, uploadError: failureReason(error),
+      windowCloseError: capture.windowCloseError?.(captureRun.sessionId),
+      browserWindowClosed: capture.windowClosed?.(captureRun.sessionId), ...report }
   }
   let stored: unknown
   try {
@@ -223,9 +229,11 @@ export async function executeAutomationAsset(binding: Binding, capture: CaptureR
   } catch (error) {
     const report = await localReport('RUN_WRITE_PENDING')
     return { status: 'RUN_WRITE_PENDING', assetId, sessionId: captureRun.sessionId,
-      result, failureReason: reason, failureContext, runPayload, writeError: failureReason(error), ...report }
+      result, failureReason: reason, failureContext, runPayload, writeError: failureReason(error),
+      windowCloseError, browserWindowClosed, ...report }
   }
   const report = await localReport('RECORDED')
   return { status: 'RECORDED', assetId, sessionId: captureRun.sessionId, result, run: stored,
-    selfHealAllowed: result === 'LOCATOR_FAILURE', failureStepIndex, failureReason: reason, failureContext, ...report }
+    selfHealAllowed: result === 'LOCATOR_FAILURE', failureStepIndex, failureReason: reason,
+    failureContext, windowCloseError, browserWindowClosed, ...report }
 }

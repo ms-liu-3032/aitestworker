@@ -32,6 +32,7 @@ export class OfflineAutomation {
     let execution: UiMappingResult = { result: 'ENVIRONMENT_FAILURE', failureReason: '浏览器未启动' }
     let evidence: StopCaptureResponse | undefined
     let captureError: string | undefined
+    let windowCloseError: string | undefined
     try {
       await manager.start({ traceGroupId: sessionId, sessionId, profileId: sessionId,
         profileName: caseTitle || mapping.caseNo, targetHost: pageUrl.origin, headless })
@@ -41,7 +42,9 @@ export class OfflineAutomation {
     } finally {
       try { evidence = await manager.stop(sessionId) }
       catch (error) { captureError = error instanceof Error ? error.message : String(error) }
-      await manager.shutdown().catch(() => undefined)
+      await manager.shutdown().catch(() => {
+        windowCloseError = '本次浏览器窗口回收失败，请检查本机浏览器进程'
+      })
       this.active = false
     }
     const status = evidence ? 'LOCAL_ONLY' : 'LOCAL_CAPTURE_INCOMPLETE'
@@ -59,7 +62,8 @@ export class OfflineAutomation {
     const summary = { id: randomUUID(), mode: 'LOCAL_ONLY', status, sessionId, caseNo: mapping.caseNo,
       caseTitle, result: execution.result, durationMs, failureStepIndex: execution.failureStepIndex,
       failureReason: execution.failureReason, failureContext: execution.failureContext,
-      reportPath, reportError, captureError,
+      reportPath, reportError, captureError, windowCloseError,
+      browserWindowClosed: !windowCloseError,
       evidence: evidence ? { eventCount: evidence.events.length, networkCount: evidence.networks.length,
         screenshotPath: evidence.videoPath, tracePath: evidence.traceFilePath,
         screencastPath: evidence.screencastPath } : undefined }

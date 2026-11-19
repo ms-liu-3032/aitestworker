@@ -24,6 +24,8 @@ export class CaptureRuntime {
   private readonly running = new Map<number, Running>()
   private readonly pending = new Map<number, StopCaptureResponse>()
   private readonly uploadedBySession = new Map<number, Map<string, number>>()
+  private readonly windowCloseErrors = new Map<number, string>()
+  private readonly windowCloseStatus = new Map<number, boolean>()
 
   constructor(manager?: CaptureManagerType,
               private readonly recoveryRoot = join(homedir(), '.dsh', 'aitesthub-capture', 'pending'),
@@ -32,6 +34,9 @@ export class CaptureRuntime {
   }
 
   hasActive(): boolean { return this.running.size > 0 }
+
+  windowCloseError(sessionId: number): string | undefined { return this.windowCloseErrors.get(sessionId) }
+  windowClosed(sessionId: number): boolean | undefined { return this.windowCloseStatus.get(sessionId) }
 
   pageForAutomation(binding: Binding, projectId: number, sessionId: number) {
     const run = this.owned(binding, projectId, sessionId)
@@ -120,12 +125,28 @@ export class CaptureRuntime {
   }
 
   async stop(binding: Binding, projectId: number, sessionId: number): Promise<{ sessionId: number; eventCount: number; networkCount: number; alreadyFinished: boolean;
+    windowCloseError?: string;
+    browserWindowClosed?: boolean;
     bundle: { id: number; sha256: string; sizeBytes: number; summary: { artifactCount: number; sourceBytes: number; eventCount: number; networkCount: number; byKind: Record<string, number> } } }> {
     await this.restore(binding, projectId, sessionId)
-    this.owned(binding, projectId, sessionId)
+    const run = this.owned(binding, projectId, sessionId)
     let result = this.pending.get(sessionId)
     if (!result) {
-      result = await this.getManager().stop(sessionId)
+      const manager = this.getManager()
+      try {
+        result = await manager.stop(sessionId)
+      } finally {
+        // Evidence is already on disk after stop. Close only this run's window before the
+        // potentially long upload; other active browser contexts remain available.
+        if (run.start.profileId > 0) {
+          await manager.closeProfileContext(run.start.profileId).then(() => {
+            this.windowCloseStatus.set(sessionId, true)
+          }).catch(() => {
+            this.windowCloseStatus.set(sessionId, false)
+            this.windowCloseErrors.set(sessionId, '本次浏览器窗口回收失败，请检查本机浏览器进程')
+          })
+        }
+      }
       await this.persist(binding, projectId, sessionId, result)
     }
     this.pending.set(sessionId, result)
@@ -187,14 +208,19 @@ export class CaptureRuntime {
           screencastStartedAtUtc: localTime(result.screencastStartedAtUtc),
           screencastStoppedAtUtc: localTime(result.screencastStoppedAtUtc),
           screencastDurationMs: result.screencastDurationMs })
+      const windowCloseError = this.windowCloseError(sessionId)
+      const browserWindowClosed = this.windowClosed(sessionId)
       await this.clear(sessionId)
-      return { ...finished, bundle }
+      return { ...finished, bundle, windowCloseError, browserWindowClosed }
     } catch (error) {
       const remote = await callUserApi<{ status: string }>(binding,
         `/api/dsh/user/projects/${projectId}/captures/${sessionId}`).catch(() => null)
       if (remote?.status === 'FINISHED') {
+        const windowCloseError = this.windowCloseError(sessionId)
+        const browserWindowClosed = this.windowClosed(sessionId)
         await this.clear(sessionId)
-        return { sessionId, eventCount: events.length, networkCount: networks.length, alreadyFinished: true, bundle }
+        return { sessionId, eventCount: events.length, networkCount: networks.length, alreadyFinished: true,
+          bundle, windowCloseError, browserWindowClosed }
       }
       throw error
     }
@@ -208,12 +234,16 @@ export class CaptureRuntime {
     this.running.clear()
     this.pending.clear()
     this.uploadedBySession.clear()
+    this.windowCloseErrors.clear()
+    this.windowCloseStatus.clear()
   }
 
   private async clear(sessionId: number): Promise<void> {
     this.running.delete(sessionId)
     this.pending.delete(sessionId)
     this.uploadedBySession.delete(sessionId)
+    this.windowCloseErrors.delete(sessionId)
+    this.windowCloseStatus.delete(sessionId)
     await unlink(this.recoveryFile(sessionId)).catch(() => undefined)
     await clearCaptureBundle(this.recoveryRoot, sessionId)
   }

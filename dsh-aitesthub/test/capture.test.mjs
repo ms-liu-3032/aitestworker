@@ -39,6 +39,7 @@ test('active UI and passive recorder share a page; remote evidence upload can re
     throw new Error(`unexpected URL: ${url}`)
   }
   let stopped = 0
+  const closedProfiles = []
   const page = {
     url: () => 'https://example.test/page',
     title: async () => 'Example',
@@ -76,6 +77,7 @@ test('active UI and passive recorder share a page; remote evidence upload can re
       }
     },
     shutdown: async () => {},
+    closeProfileContext: async profileId => { closedProfiles.push(profileId) },
   }
   const binding = { serverUrl: 'https://hub.example', userToken: 'user', agentToken: 'agent', userId: 7, connectionId: 8 }
   const runtime = new CaptureRuntime(manager, join(dir, 'recovery'))
@@ -92,11 +94,15 @@ test('active UI and passive recorder share a page; remote evidence upload can re
     await assert.rejects(runtime.action(binding, 2, 31, 'assertText', 'body', '不存在'), /文本断言失败/)
     assert.ok(calls.some(call => call.action === 'select:select:visitor'))
     await assert.rejects(runtime.stop(binding, 2, 31), /network interrupted/)
+    assert.deepEqual(closedProfiles, [33], 'window closes before a failed evidence upload')
+    assert.equal(runtime.windowClosed(31), true)
     const restarted = new CaptureRuntime(manager, join(dir, 'recovery'))
     const finished = await restarted.stop(binding, 2, 31)
     assert.equal(finished.eventCount, 1)
+    assert.equal(finished.browserWindowClosed, undefined, 'a resumed upload does not claim a second window cleanup')
     assert.equal(finished.bundle.summary.artifactCount, 13)
     assert.equal(stopped, 1)
+    assert.deepEqual(closedProfiles, [33], 'upload retry must not reopen or close another window')
     assert.equal(calls.filter(call => call.url?.endsWith('/artifacts/SCREENSHOT')).length, 1)
     const finish = calls.find(call => call.url?.endsWith('/finish'))
     assert.equal(JSON.parse(finish.options.body).events[0].event.happenedAtUtc, '2026-11-03T01:02:03')
