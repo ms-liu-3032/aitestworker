@@ -20,7 +20,11 @@ whenToUse: 用户要求本地测试，或基于 AITestHub 项目需求、知识�
 
 评估认为需要多 Agent 才能完成时，使用 DSH 内置 `workflow` 编排互不依赖的组。父 Agent 在脚本 `args` 中传完整清单，使用自行评估的有界并发与结构化 schema，等待各组完成；子 Agent 能看到的工具与凭据须在预检时确认。UI 用例只有在浏览器上下文、登录身份和测试数据确实隔离时才并发；同一账号、同一采集会话或会相互改动的数据必须串行。每条 UI/API 用例仍调用现有执行工具，独立产生 run、原始证据和本地报告；workflow 返回的文字不代替运行记录。首次验证、失败修复、证据上传和 Hub 审核仍遵守各自现有规则。
 
+DSH `workflow` 的 `agent({ schema })` 只接受受限 JSON Schema：根为 `type: 'object'`，各字段的 `type` 必须是单个字符串，不能写 `type: ['string', 'null']`、`type: ['integer', 'null']` 或 `nullable`。可缺省的 `failureStepIndex`、`failureReason`、`reportPath` 等字段不要列入 `required`；有值才返回，空值直接省略。子 Agent 结果保持扁平：每项至少返回唯一 ID、资产版本、执行状态；失败步骤、原因和报告路径作为可选字段。创建 workflow 前先检查整棵 schema，避免一条不支持的字段让所有子 Agent 在启动前失败。若出现 `schema is outside the supported subset` 且显示 0 个成员启动，修正 schema 后只重跑未启动的组；若已有成员启动，先查询和核对已落库的草稿、资产、运行与证据，再续跑缺少的 ID，不重新创建整批。
+
 聚合时以唯一 ID 和版本核对 `expectedIds`、已收到、PASS、FAIL、BLOCKED、未执行；子 Agent 报错、结果为 null、缺少 ID、重复 ID 或只给总结时都不能算完成。对遗漏和可重试的环境故障在相同任务内有界重试，再核对一次；业务/断言失败保留失败，不为凑全绿改预期。最终逐条给出状态、证据与报告位置，以及总数与未完成原因；`got < expected` 时明确全量未完成。`workflow` 不可用时用可用工具顺序推进并如实报告；长任务只有在用户明确要求跨轮持续执行且 DSH 的自动续轮组件已启用时才使用 `create_goal`，不能把建目标本身当作自动续跑的保证。不要因为第一批结束就让用户反复输入“继续”。
+
+若 DSH 报 `DeepSeek Messages stream: tool input is invalid JSON` 或 `MALFORMED_RESPONSE`，这是模型提交工具参数时的格式中断；不能据此判定用例失败、Hub 写入失败或重新执行成功。先读取本轮最后一个已确认的工具结果，并按唯一 ID 查询实际草稿、资产、运行和证据状态；只续做未确认的动作，沿用原有幂等键、资产 ID、候选版本和 run 请求键。重试时缩短单次工具输入，分成较小的有界批次，提交前检查参数是完整有效的 JSON。若宿主在插件工具执行前反复拒绝参数，就记录未完成 ID 和最近确认结果，向用户说明 DSH 模型/宿主层中断；插件无法在未收到调用时自行恢复。不得因传输或格式错误改动业务断言，也不要重新生成已存在的草稿。
 
 ## 项目资产回写
 

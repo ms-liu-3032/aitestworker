@@ -36,11 +36,16 @@ test('full batch automation guidance requires orchestration and complete ID reco
   assert.match(promptSections.get('aitesthub:complete-batch-automation').text, /无须每次输入 workflow 关键词/)
   assert.match(promptSections.get('aitesthub:complete-batch-automation').text, /一轮能完成就直接完成/)
   assert.match(promptSections.get('aitesthub:complete-batch-automation').text, /不设置固定条数门槛/)
+  assert.match(promptSections.get('aitesthub:complete-batch-automation').text, /type 必须是单个字符串/)
+  assert.match(promptSections.get('aitesthub:complete-batch-automation').text, /MALFORMED_RESPONSE/)
   const content = skills.get('aitesthub').content
   assert.match(content, /expectedIds/)
   assert.match(content, /got < expected/)
   assert.match(content, /同一采集会话.*串行/)
   assert.match(content, /自动续轮组件已启用/)
+  assert.match(content, /failureStepIndex.*failureReason.*reportPath/)
+  assert.match(content, /0 个成员启动/)
+  assert.match(content, /只续做未确认的动作/)
 })
 
 test('Hub case design requires a live rule and context preflight before work starts', async () => {
