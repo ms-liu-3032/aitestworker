@@ -30,6 +30,16 @@ function harness() {
   return { tools, commands, skills, events, promptSections }
 }
 
+test('full batch automation guidance requires orchestration and complete ID reconciliation', () => {
+  const { promptSections, skills } = harness()
+  assert.match(promptSections.get('aitesthub:complete-batch-automation').text, /workflow/)
+  const content = skills.get('aitesthub').content
+  assert.match(content, /expectedIds/)
+  assert.match(content, /got < expected/)
+  assert.match(content, /同一采集会话.*串行/)
+  assert.match(content, /自动续轮组件已启用/)
+})
+
 test('Hub case design requires a live rule and context preflight before work starts', async () => {
   const { tools, commands, promptSections } = harness()
   assert.match(promptSections.get('aitesthub:case-design-preflight').text, /aitest_prepare_case_design/)
@@ -72,7 +82,7 @@ test('case writing guidance stays reusable across businesses', () => {
   assert.match(content, /一步一项可执行动作/)
   assert.match(content, /每一步配同序号的一项预期/)
   assert.match(content, /依目标模板导出/)
-  assert.doesNotMatch(content, /访客|邀请|一体机|Underway/)
+  assert.doesNotMatch(content, /寒武纪|访客|邀请|一体机|1914533709912|Underway/)
 })
 
 test('case design refuses to proceed when the Wiki inventory is unavailable', async () => {

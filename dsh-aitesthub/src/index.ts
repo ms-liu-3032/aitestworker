@@ -54,6 +54,11 @@ export function apply(ctx: Context) {
     order: 90,
     text: '处理 AITestHub 项目测试点或用例前，先问 TOM 模式，再用原始需求调用 aitest_prepare_case_design 并加载 aitesthub Skill。准备失败或 Hub 不可用就停止本轮 Hub 用例编写。用户只要求来源 ID/数量时，汇报后停止，不提每点一条、补边界、直接执行等选项。先检查 TOM 类型覆盖；缺角色、状态或流程时主动用业务词补查，不把补查选择交给用户。必须同时读取 tomConfirmedRelationAvailableCount 与 tomRelations 才能判断关系是全库缺失还是本轮未选中；没有已确认关系时不得编造角色权限或状态迁移。Wiki 检索按多个业务词检查并读相关正文；单个窄词返回 0 不等于知识库为空。Wiki 的 HISTORY/IMPORTED_HISTORICAL_CASE 仅作历史覆盖证据，空步骤不能当写作样例；优先阅读 SEMANTIC_KNOWLEDGE 的规则和实现正文。设计依据按 TOM 角色/流程/状态及已确认关系、关联的已审核 Wiki 语义和实现正文、正式用例辅助覆盖与风格的顺序使用。未关联 Wiki 只是候选，须读取正文核实。COVERAGE_PLAN 每点一项不等于每点一条用例；边界、角色、状态、异常应按覆盖义务设计多个必要场景。用户未明确要求执行、被测地址/账号/范围未确定或旧草稿未复核时，不建议直接执行。用例按返回的七栏写作标准写可复现步骤与逐项对应的预期；展示测试点后，候选用例先用 aitest_validate_case_batch 分组校验，再汇总保存。',
   })
+  ctx.systemPrompt.section({
+    name: 'aitesthub:complete-batch-automation',
+    order: 91,
+    text: '用户已要求大批量/全量自动化测试由 DSH 自行拆分、调用多个子 Agent 并汇总时，加载 aitesthub Skill 的“全量任务编排”规则。先列出完整且去重的用例 ID 与范围，按可独立执行、浏览器/账号/测试数据隔离情况分组；若 DSH workflow 可用，使用它并发处理独立组并等待结果，不把第一批结束当成全量完成。每组返回结构化 ID、执行状态、证据和报告路径；父 Agent 核对预期 ID 与已返回 ID，补跑遗漏或失败组并明确剩余未完成项。共享浏览器会话、同一账号状态或相互污染的数据不得并发。workflow 不可用时在当前任务内顺序推进，不能虚报全量；create_goal 只有在用户明确要求跨轮持续执行且自动续轮能力已启用时才用于续轮。',
+  })
   const skillFile = new URL('../skills/aitesthub/SKILL.md', import.meta.url)
   const skillText = readFileSync(skillFile, 'utf8')
   const skillBody = skillText.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, '')
