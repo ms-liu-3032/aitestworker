@@ -19,6 +19,22 @@ class AutomationAssetServiceTest {
             mock(DshWorkSessionService.class), mock(DshCaptureService.class));
 
     @Test
+    void batchPublicationRejectsInvalidAndDuplicateTargets() {
+        assertThrows(BusinessException.class, () -> service.publishReusableBatch(1L,
+                new AutomationAssetService.BatchPublicationInput(java.util.List.of()), null));
+        assertThrows(BusinessException.class, () -> service.publishReusableBatch(1L,
+                new AutomationAssetService.BatchPublicationInput(java.util.stream.LongStream.rangeClosed(1, 101)
+                        .mapToObj(id -> new AutomationAssetService.PublicationTarget(id, 1)).toList()), null));
+        assertThrows(BusinessException.class, () -> service.publishReusableBatch(1L,
+                new AutomationAssetService.BatchPublicationInput(java.util.List.of(
+                        new AutomationAssetService.PublicationTarget(7L, 1),
+                        new AutomationAssetService.PublicationTarget(7L, 1))), null));
+        assertThrows(BusinessException.class, () -> service.publishReusableBatch(1L,
+                new AutomationAssetService.BatchPublicationInput(java.util.List.of(
+                        new AutomationAssetService.PublicationTarget(7L, 0))), null));
+    }
+
+    @Test
     void wheelScrollRequiresBoundedNumericDistance() throws Exception {
         JsonNode valid = mapper.readTree("""
                 {"caseNo":"TC-001","page":"/picker","steps":[{"type":"scroll",

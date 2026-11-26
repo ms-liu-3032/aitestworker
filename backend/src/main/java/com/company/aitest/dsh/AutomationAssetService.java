@@ -61,6 +61,9 @@ public class AutomationAssetService {
     public record DispositionInput(String reason) {}
     public record ApprovalTarget(Long assetId, Integer versionNo) {}
     public record BatchApprovalInput(List<ApprovalTarget> targets) {}
+    public record PublicationTarget(Long assetId, Integer versionNo) {}
+    public record BatchPublicationInput(List<PublicationTarget> targets) {}
+    public record PublicationResult(Long assetId, int versionNo, Long publicationId) {}
     public record RunInput(String requestKey, Integer versionNo, String result, Long durationMs,
                            Long evidenceSessionId, Integer failureStepIndex, String failureReason,
                            Long apiEvidenceId, JsonNode logEvidence) {}
@@ -577,8 +580,37 @@ public class AutomationAssetService {
 
     @Transactional
     public Long publishReusable(Long projectId, Long assetId, CurrentUser user) {
+        return publishReusableVersion(projectId, assetId, null, user);
+    }
+
+    @Transactional
+    public List<PublicationResult> publishReusableBatch(Long projectId, BatchPublicationInput input, CurrentUser user) {
+        if (input == null || input.targets() == null || input.targets().isEmpty() || input.targets().size() > 100)
+            throw new BusinessException("每次请选择 1-100 个待发布资产");
+        Set<Long> seen = new java.util.HashSet<>();
+        for (PublicationTarget target : input.targets()) {
+            if (target == null || target.assetId() == null || target.assetId() <= 0
+                    || target.versionNo() == null || target.versionNo() <= 0 || !seen.add(target.assetId()))
+                throw new BusinessException("批量发布目标无效或重复");
+        }
+        List<PublicationTarget> ordered = input.targets().stream()
+                .sorted(java.util.Comparator.comparing(PublicationTarget::assetId)).toList();
+        List<PublicationResult> published = new ArrayList<>();
+        for (PublicationTarget target : ordered) {
+            Long publicationId = publishReusableVersion(projectId, target.assetId(), target.versionNo(), user);
+            published.add(new PublicationResult(target.assetId(), target.versionNo(), publicationId));
+        }
+        return published;
+    }
+
+    private Long publishReusableVersion(Long projectId, Long assetId, Integer expectedVersion, CurrentUser user) {
         access.ensureCanManageProject(projectId, user);
+        jdbc.sql("SELECT id FROM automation_asset WHERE id = :id AND project_id = :projectId FOR UPDATE")
+                .param("id", assetId).param("projectId", projectId).query(Long.class).optional()
+                .orElseThrow(() -> new BusinessException("自动化资产不存在"));
         Asset asset = get(projectId, assetId, user);
+        if (expectedVersion != null && expectedVersion != asset.currentVersion())
+            throw new BusinessException("资产版本已变化，请刷新列表后重新选择");
         if (!"VERIFIED".equals(asset.status())) throw new BusinessException("只有已验证且未阻断的版本可发布复用");
         if (!"APPROVED".equals(version(projectId, assetId, asset.currentVersion(), user).reviewStatus()))
             throw new BusinessException("执行映射须先在 Web 审核通过");

@@ -87,4 +87,10 @@ public class AutomationAssetWebController {
             Authentication auth) {
         return ApiResponse.ok(assets.publishReusable(projectId, assetId, (CurrentUser) auth.getPrincipal()));
     }
+
+    @PostMapping("/batch-publish-reusable")
+    public ApiResponse<List<AutomationAssetService.PublicationResult>> batchPublish(@PathVariable Long projectId,
+            @RequestBody AutomationAssetService.BatchPublicationInput input, Authentication auth) {
+        return ApiResponse.ok(assets.publishReusableBatch(projectId, input, (CurrentUser) auth.getPrincipal()));
+    }
 }

@@ -949,6 +949,12 @@ export function unblockAutomationAsset(projectId: number, assetId: number) {
 export function publishAutomationAsset(projectId: number, assetId: number) {
   return api<number>(`/api/projects/${projectId}/automation-assets/${assetId}/publish-reusable`, { method: 'POST' })
 }
+export function batchPublishAutomationAssets(projectId: number, targets: { assetId: number; versionNo: number }[]) {
+  return api<{ assetId: number; versionNo: number; publicationId: number }[]>(
+    `/api/projects/${projectId}/automation-assets/batch-publish-reusable`, {
+      method: 'POST', body: JSON.stringify({ targets }),
+    })
+}
 export function approveAutomationVersion(projectId: number, assetId: number, versionNo: number) {
   return api<AutomationVersion>(`/api/projects/${projectId}/automation-assets/${assetId}/versions/${versionNo}/approve`, { method: 'POST' })
 }
