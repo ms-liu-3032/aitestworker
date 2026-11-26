@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useApp } from '../../context/AppContext';
 import {
   deprecateAdminAsset,
@@ -8,11 +9,13 @@ import {
   listAdminSummaries,
   listAdminTestPoints,
   listAdminTools,
-  listProjects,
+  listAllProjects,
   restoreAdminAsset,
   type Project,
 } from '../../services/api';
 import WikiAssetManager from './WikiAssetManager';
+import AssetInventoryPanel from './AssetInventoryPanel';
+import UnifiedCatalogPanel from './UnifiedCatalogPanel';
 import { statusLabel } from '../../utils/displayLabels';
 
 type TabKey = 'cases' | 'points' | 'knowledge' | 'wiki' | 'summaries' | 'skills' | 'tools';
@@ -80,32 +83,45 @@ function asArray<T>(value: unknown): T[] {
   return Array.isArray(value) ? value : [];
 }
 
-export default function AssetLibrary() {
+export default function AssetLibrary({ embedded = false }: { embedded?: boolean }) {
   const { showToast } = useApp();
-  const [tab, setTab] = useState<TabKey>('cases');
+  const [params, setParams] = useSearchParams();
+  const requestedType = params.get('assetType');
+  const [tab, setTab] = useState<TabKey>(tabs.some(item => item.key === requestedType) ? requestedType as TabKey : 'cases');
+  const [showLegacy, setShowLegacy] = useState(Boolean(requestedType));
   const [data, setData] = useState<AssetItem[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
   const [actingId, setActingId] = useState<number | null>(null);
   const [projectFilter, setProjectFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [keyword, setKeyword] = useState('');
+  const requestSequence = useRef(0);
 
   const activeTab = tabs.find(item => item.key === tab)!;
 
   useEffect(() => {
-    listProjects({ page: 1, size: 200 })
-      .then(result => setProjects(asArray<Project>((result as any)?.items)))
-      .catch(() => {});
-  }, []);
+    if (tabs.some(item => item.key === requestedType) && requestedType !== tab) setTab(requestedType as TabKey);
+    if (requestedType) setShowLegacy(true);
+  }, [requestedType]);
+
+  useEffect(() => {
+    if (!showLegacy) return;
+    listAllProjects()
+      .then(result => setProjects(asArray<Project>(result)))
+      .catch(error => showToast(error.message || '项目列表加载失败', 'error'));
+  }, [showLegacy]);
 
   const loadData = async () => {
+    const request = ++requestSequence.current;
     if (tab === 'wiki') {
       setData([]);
       setLoading(false);
       return;
     }
     setLoading(true);
+    setLoadError('');
     try {
       const loader = {
         cases: listAdminFormalCases,
@@ -121,17 +137,22 @@ export default function AssetLibrary() {
         projectId: projectFilter ? Number(projectFilter) : undefined,
         status: statusFilter || undefined,
       } as any);
-      setData(asArray<AssetItem>(result));
+      if (request === requestSequence.current) setData(asArray<AssetItem>(result));
     } catch (error: any) {
-      showToast(error.message || '加载失败', 'error');
+      if (request === requestSequence.current) {
+        setData([]);
+        setLoadError(error.message || '资产目录加载失败');
+      }
     } finally {
-      setLoading(false);
+      if (request === requestSequence.current) setLoading(false);
     }
   };
 
   useEffect(() => {
-    loadData();
-  }, [tab, projectFilter, statusFilter]);
+    if (!showLegacy) return;
+    void loadData();
+    return () => { requestSequence.current++; };
+  }, [showLegacy, tab, projectFilter, statusFilter]);
 
   const filteredData = useMemo(() => {
     const term = keyword.trim().toLowerCase();
@@ -201,10 +222,16 @@ export default function AssetLibrary() {
 
   return (
     <div className="p-4 animate-fade-in sm:p-6">
+      <UnifiedCatalogPanel />
+      <section className="rounded-xl border border-gray-200 bg-white p-4">
+        <button type="button" aria-expanded={showLegacy} onClick={() => setShowLegacy(value => !value)}
+          className="text-sm font-medium text-gray-700">{showLegacy ? '收起按类型维护' : '按类型维护已有资产'}</button>
+        {showLegacy && <div className="mt-4">
       <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0">
-          <h1 className="text-xl font-bold text-gray-900 tracking-tight">正式测试资产库</h1>
-          <p className="text-sm text-gray-500 mt-1">按资产类型集中查看、筛选并管理正式资产状态。</p>
+          {embedded ? <h2 className="text-lg font-semibold text-gray-900">资产目录</h2> :
+            <h1 className="text-xl font-bold text-gray-900 tracking-tight">正式测试资产库</h1>}
+          <p className="text-sm text-gray-500 mt-1">按资产类型集中查看、筛选并管理资产状态。</p>
         </div>
         <button
           onClick={loadData}
@@ -218,7 +245,16 @@ export default function AssetLibrary() {
         {tabs.map(item => (
           <button
             key={item.key}
-            onClick={() => setTab(item.key)}
+            onClick={() => {
+              setTab(item.key);
+              setParams(current => {
+                const next = new URLSearchParams(current);
+                next.set('assetType', item.key);
+                next.delete('packId');
+                next.delete('entryId');
+                return next;
+              });
+            }}
             className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${
               tab === item.key ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
             }`}
@@ -227,6 +263,12 @@ export default function AssetLibrary() {
           </button>
         ))}
       </div>
+
+      <AssetInventoryPanel projectId={projectFilter ? Number(projectFilter) : undefined} />
+
+      {loadError && <div role="alert" className="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+        {loadError}。请刷新列表重试。
+      </div>}
 
       {tab === 'wiki' ? <WikiAssetManager /> : <>
 
@@ -324,6 +366,8 @@ export default function AssetLibrary() {
         </div>
       )}
       </>}
+        </div>}
+      </section>
     </div>
   );
 }

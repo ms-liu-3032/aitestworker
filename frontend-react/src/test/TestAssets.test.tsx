@@ -49,6 +49,25 @@ describe('TestAssets', () => {
     })
   })
 
+  it('shows a partial-load warning instead of treating a failed API as an empty asset library', async () => {
+    apiMocks.listProjectSkills.mockRejectedValue(new Error('offline'))
+    render(<TestAssets />)
+    expect(await screen.findByRole('alert')).toHaveTextContent('Skill 模板加载失败')
+    expect(screen.getByRole('alert')).toHaveTextContent('不能作为资产总数')
+  })
+
+  it('keeps the refreshed result when an older request finishes later', async () => {
+    let finishOldRequest!: (value: unknown) => void
+    apiMocks.listProjectSummaries
+      .mockImplementationOnce(() => new Promise(resolve => { finishOldRequest = resolve }))
+      .mockResolvedValueOnce([{ id: 2, overview: '最新摘要' }])
+    render(<TestAssets />)
+    fireEvent.click(screen.getByText('刷新资产'))
+    expect(await screen.findByText('最新摘要')).toBeInTheDocument()
+    finishOldRequest([{ id: 1, overview: '过期摘要' }])
+    await waitFor(() => expect(screen.queryByText('过期摘要')).not.toBeInTheDocument())
+  })
+
   it('shows project Wiki entries and routes maintenance to the knowledge page', async () => {
     const pack = { id: 7, projectId: 1, scope: 'PROJECT', name: '项目自动沉淀', status: 'DRAFT', reviewStatus: 'PENDING', description: '自动候选', createdAt: '', updatedAt: '' }
     const entry = { id: 9, packId: 7, entryType: 'RULE', title: '预约规则', content: '预约需要审批后才允许签到。', reviewStatus: 'PENDING', effectiveStatus: 'INACTIVE', sourceRefsJson: '{"sourceType":"REQUIREMENT_ANALYSIS"}', createdAt: '', updatedAt: '' }

@@ -532,7 +532,7 @@ chmod +x "$BUILD_ROOT/install.sh" "$BUILD_ROOT/start.sh" "$BUILD_ROOT/stop.sh" "
 mkdir -p "$DIST_DIR"
 cp -R "$BUILD_ROOT"/. "$DIST_DIR/"
 
-tar -czf "$OUT_ROOT/$DIST_NAME.tar.gz" -C "$OUT_ROOT" "$DIST_NAME"
+COPYFILE_DISABLE=1 tar -czf "$OUT_ROOT/$DIST_NAME.tar.gz" -C "$OUT_ROOT" "$DIST_NAME"
 
 echo ""
 echo "服务端安装包已生成："

@@ -23,8 +23,8 @@ public class DshCredentialFilter extends OncePerRequestFilter {
 
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
-        return !request.getRequestURI().startsWith("/api/dsh/tools/")
-                && !request.getRequestURI().startsWith("/api/dsh/user/");
+        return !request.getRequestURI().startsWith("/api/aitestwork/dsh/tools/")
+                && !request.getRequestURI().startsWith("/api/aitestwork/dsh/user/");
     }
 
     @Override
@@ -34,7 +34,7 @@ public class DshCredentialFilter extends OncePerRequestFilter {
         SecurityContextHolder.clearContext();
         String header = request.getHeader("Authorization");
         if (header != null && header.startsWith("Bearer ")) {
-            boolean userSession = request.getRequestURI().startsWith("/api/dsh/user/");
+            boolean userSession = request.getRequestURI().startsWith("/api/aitestwork/dsh/user/");
             DshConnectionService.DshPrincipal principal = connections.authenticate(header.substring(7), userSession);
             if (principal != null) {
                 SecurityContextHolder.getContext().setAuthentication(new UsernamePasswordAuthenticationToken(

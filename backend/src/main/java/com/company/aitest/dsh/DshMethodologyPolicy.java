@@ -13,7 +13,7 @@ import com.company.aitest.common.BusinessException;
 import com.company.aitest.generation.FunctionalTestDesignPolicy;
 import com.fasterxml.jackson.databind.JsonNode;
 
-/** Checks the same functional design obligations used by Hub's Web generation path, without invoking an LLM. */
+/** Checks the same functional design obligations used by AITestWork's Web generation path, without invoking an LLM. */
 final class DshMethodologyPolicy {
     private static final Set<String> POINT_TYPES = Set.of("MAIN_FLOW", "BRANCH", "BOUNDARY", "EXCEPTION",
             "STATE", "DATA", "AUTH", "CONCURRENCY", "IDEMPOTENT");

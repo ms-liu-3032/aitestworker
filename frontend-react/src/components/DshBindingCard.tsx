@@ -23,7 +23,7 @@ export default function DshBindingCard() {
   const [copyMessage, setCopyMessage] = useState('');
   const [backendUrl, setBackendUrl] = useState(() => window.location.origin);
   const normalizedBackendUrl = serviceOrigin(backendUrl);
-  const bindCommand = code && normalizedBackendUrl ? `/aitest-bind ${normalizedBackendUrl} ${code.code}` : null;
+  const bindCommand = code && normalizedBackendUrl ? `/aitestwork-bind ${normalizedBackendUrl} ${code.code}` : null;
 
   async function copyCommand() {
     if (!bindCommand) return;
@@ -55,7 +55,7 @@ export default function DshBindingCard() {
 
   async function refresh() {
     try {
-      setConnections(await api<Connection[]>('/api/dsh/connections'));
+      setConnections(await api<Connection[]>('/api/aitestwork/dsh/connections'));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : '读取 DSH 连接失败');
     }
@@ -68,7 +68,7 @@ export default function DshBindingCard() {
     setError('');
     setCopyMessage('');
     try {
-      setCode(await api<BindCode>('/api/dsh/bind-codes', { method: 'POST' }));
+      setCode(await api<BindCode>('/api/aitestwork/dsh/bind-codes', { method: 'POST' }));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : '生成绑定码失败');
     } finally {
@@ -79,7 +79,7 @@ export default function DshBindingCard() {
   async function revoke(connectionId: number) {
     setError('');
     try {
-      await api(`/api/dsh/connections/${connectionId}/revoke`, { method: 'POST' });
+      await api(`/api/aitestwork/dsh/connections/${connectionId}/revoke`, { method: 'POST' });
       await refresh();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : '撤销连接失败');
@@ -101,11 +101,11 @@ export default function DshBindingCard() {
         <div className="mt-4 rounded-lg border border-blue-200 bg-blue-50 p-4">
           <div className="font-mono text-xl font-semibold tracking-widest text-slate-900">{code.code}</div>
           <p className="mt-2 text-xs text-gray-600">有效期至 {code.expiresAt}</p>
-          <label htmlFor="dsh-backend-url" className="mt-3 block text-sm font-medium text-slate-800">AITestHub 后端服务地址</label>
+          <label htmlFor="dsh-backend-url" className="mt-3 block text-sm font-medium text-slate-800">AITestWork 后端服务地址</label>
           <input id="dsh-backend-url" type="url" value={backendUrl} onChange={event => { setBackendUrl(event.target.value); setCopyMessage(''); }}
             className="mt-1 w-full rounded border border-blue-200 bg-white px-3 py-2 text-sm text-slate-900"
             placeholder="https://aitest.example.com" />
-          <p className="mt-1 text-xs text-gray-600">默认使用当前 Web 地址；如果 API 在独立域名，填写可访问 /api/dsh/bind 的服务根地址。</p>
+          <p className="mt-1 text-xs text-gray-600">默认使用当前 Web 地址；如果 API 在独立域名，填写可访问 /api/aitestwork/dsh/bind 的服务根地址。</p>
           {normalizedBackendUrl?.startsWith('http://') && <p role="status" className="mt-2 text-xs text-amber-800">当前使用 HTTP，绑定码和连接凭据会在网络中明文传输，请仅在可信网络使用。</p>}
           {bindCommand
             ? <div className="mt-3 space-y-2">

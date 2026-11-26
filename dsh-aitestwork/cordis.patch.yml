@@ -1,0 +1,3 @@
+- insert:
+    - id: aitestwork
+      name: '@aitestwork/dsh-plugin'

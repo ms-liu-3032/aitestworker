@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import Modal from '../../components/Modal';
 import { useApp } from '../../context/AppContext';
 import BulkReviewPicker from '../../components/BulkReviewPicker';
@@ -83,8 +84,10 @@ type ReferenceItem = {
   createdAt: string;
 };
 
-export default function MiniTomModels() {
+export default function MiniTomModels({ embedded = false }: { embedded?: boolean }) {
   const { showToast } = useApp();
+  const [searchParams] = useSearchParams();
+  const requestedModelId = Number(searchParams.get('modelId'));
   const [projects, setProjects] = useState<Project[]>([]);
   const [models, setModels] = useState<TestObjectModel[]>([]);
   const [loading, setLoading] = useState(true);
@@ -115,6 +118,8 @@ export default function MiniTomModels() {
       });
       setModels(result);
       setSelectedId(prev => {
+        if (Number.isInteger(requestedModelId) && requestedModelId > 0
+            && result.some(item => item.id === requestedModelId)) return requestedModelId;
         if (result.some(item => item.id === prev)) return prev;
         return result[0]?.id ?? null;
       });
@@ -248,7 +253,8 @@ export default function MiniTomModels() {
     <div className="space-y-5 p-4 animate-fade-in sm:p-6">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div className="min-w-0">
-          <h1 className="text-xl font-bold text-gray-900 tracking-tight">Mini-TOM 公共模型</h1>
+          {embedded ? <h2 className="text-lg font-semibold text-gray-900">TOM 模型与关系</h2> :
+            <h1 className="text-xl font-bold text-gray-900 tracking-tight">Mini-TOM 公共模型</h1>}
           <p className="text-sm text-gray-500 mt-1">
             在这里按项目、类型、状态和来源盘点 TOM 模型，并对候选、弃用模型做确认、驳回、恢复等管理动作。
           </p>

@@ -15,7 +15,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
-@RequestMapping("/api/dsh/tools/projects/{projectId}/automation-assets")
+@RequestMapping("/api/aitestwork/dsh/tools/projects/{projectId}/automation-assets")
 public class DshAutomationAssetController {
     private final AutomationAssetService assets;
 
@@ -100,7 +100,7 @@ public class DshAutomationAssetController {
 }
 
 @RestController
-@RequestMapping("/api/dsh/tools/automation-publications")
+@RequestMapping("/api/aitestwork/dsh/tools/automation-publications")
 class DshAutomationPublicationController {
     private final AutomationAssetService assets;
 

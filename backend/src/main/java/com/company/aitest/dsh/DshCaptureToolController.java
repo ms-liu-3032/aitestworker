@@ -12,7 +12,7 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
 @RestController
-@RequestMapping("/api/dsh/tools/projects/{projectId}/captures")
+@RequestMapping("/api/aitestwork/dsh/tools/projects/{projectId}/captures")
 public class DshCaptureToolController {
     private final DshCaptureService captures;
     private final DshCaptureBundleService bundles;

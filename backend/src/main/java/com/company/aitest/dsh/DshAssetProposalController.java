@@ -34,7 +34,7 @@ import com.company.aitest.minitom.TomRelationTypes;
 
 /** DSH can propose project assets; existing Web review remains the only activation path. */
 @RestController
-@RequestMapping("/api/dsh/tools/projects/{projectId}/asset-proposals")
+@RequestMapping("/api/aitestwork/dsh/tools/projects/{projectId}/asset-proposals")
 public class DshAssetProposalController {
     private static final Set<String> TOM_TYPES = Set.of("MODULE", "PAGE", "FIELD", "ROLE", "ACTION", "FLOW", "STATE", "ASSERTION");
     private final JdbcTemplate template;

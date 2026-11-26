@@ -12,6 +12,6 @@ frontend-react/node_modules/
 frontend-react/dist/
 local-browser-worker/node_modules/
 local-browser-worker/dist/
-dsh-aitesthub/node_modules/
-dsh-aitesthub/dist/
+dsh-aitestwork/node_modules/
+dsh-aitestwork/dist/
 .DS_Store

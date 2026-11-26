@@ -12,7 +12,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-/** Existing Hub Web users review blocked assets and publish a frozen verified version. */
+/** Existing AITestWork Web users review blocked assets and publish a frozen verified version. */
 @RestController
 @RequestMapping("/api/projects/{projectId}/automation-assets")
 public class AutomationAssetWebController {

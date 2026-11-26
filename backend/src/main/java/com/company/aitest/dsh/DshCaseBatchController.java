@@ -12,7 +12,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
-@RequestMapping("/api/dsh/tools/projects/{projectId}/case-batch")
+@RequestMapping("/api/aitestwork/dsh/tools/projects/{projectId}/case-batch")
 public class DshCaseBatchController {
     private final DshCaseBatchService batches;
 

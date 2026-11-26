@@ -15,7 +15,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
-@RequestMapping("/api/dsh/user/projects/{projectId}/captures")
+@RequestMapping("/api/aitestwork/dsh/user/projects/{projectId}/captures")
 public class DshCaptureUserController {
     private final DshCaptureService captures;
     private final DshCaptureBundleService bundles;

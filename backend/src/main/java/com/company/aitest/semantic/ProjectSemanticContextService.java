@@ -20,7 +20,10 @@ import com.company.aitest.common.TomUsageMode;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 /**
@@ -31,6 +34,7 @@ import org.springframework.stereotype.Service;
  */
 @Service
 public class ProjectSemanticContextService {
+    private static final Logger log = LoggerFactory.getLogger(ProjectSemanticContextService.class);
 
     private static final Pattern TOKEN_PATTERN = Pattern.compile("[\\p{IsHan}A-Za-z0-9_/#:-]{2,}");
     private static final Set<String> STOPWORDS = Set.of(
@@ -41,6 +45,8 @@ public class ProjectSemanticContextService {
     private final JdbcTemplate jdbcTemplate;
     private final ObjectMapper objectMapper = new ObjectMapper();
     private volatile com.company.aitest.businesspack.BusinessPackService businessPackService;
+    @Value("${aitest.assets.business-pack-auto-refresh:false}")
+    private boolean businessPackAutoRefresh;
 
     public ProjectSemanticContextService(JdbcTemplate jdbcTemplate) {
         this.jdbcTemplate = jdbcTemplate;
@@ -121,8 +127,8 @@ public class ProjectSemanticContextService {
                     businessPackService.recordConsumption(pack.id(), "SEMANTIC_CONTEXT",
                             "build:" + (projectId != null ? projectId : ""), (int) bpCount);
                 }
-            } catch (Exception ignored) {
-                // 消费记录失败不阻塞主链路
+            } catch (Exception exception) {
+                log.warn("业务包消费记录失败：projectId={}", projectId, exception);
             }
         }
     }
@@ -176,8 +182,8 @@ public class ProjectSemanticContextService {
                     safe(signal.title()) + " " + safe(signal.summary())))), buildSourceRef(signal), now, now);
         }
 
-        // 联动刷新 business_pack（best-effort，不阻塞主链路）
-        if (businessPackService != null) {
+        // 旧业务包会复制 TOM 内容；默认停止自动生成，手工生成入口和已激活包仍可用。
+        if (businessPackAutoRefresh && businessPackService != null) {
             try {
                 businessPackService.refreshForProject(projectId);
             } catch (Exception ignored) {
@@ -559,7 +565,8 @@ public class ProjectSemanticContextService {
                     Math.min(1.0, rs.getInt("event_count") * 0.1),
                     null
             ), projectId);
-        } catch (Exception e) {
+        } catch (Exception exception) {
+            log.warn("学习回灌语义信号不可用：projectId={}", projectId, exception);
             return List.of();
         }
     }

@@ -363,9 +363,9 @@ public class WikiService {
         String nextStatus = "APPROVED".equals(reviewStatus) ? "DRAFT" : "INACTIVE";
         int updated = jdbcTemplate.update("""
                 UPDATE wiki_pack SET review_status = ?, status = ?, reviewed_by = ?, reviewed_at = ?, updated_at = ?
-                WHERE id = ?
+                WHERE id = ? AND review_status = 'PENDING'
                 """, reviewStatus, nextStatus, user.id(), now, now, packId);
-        if (updated == 0) throw new BusinessException("Wiki 包不存在");
+        if (updated == 0) throw new BusinessException("Wiki 包不存在或已审核，请刷新后重试");
         if ("REJECTED".equals(reviewStatus)) {
             jdbcTemplate.update("UPDATE wiki_entry SET effective_status = 'INACTIVE', updated_at = ? WHERE pack_id = ?",
                     now, packId);
@@ -441,12 +441,12 @@ public class WikiService {
                     approved_at = CASE WHEN ? = 'APPROVED' THEN ? ELSE approved_at END,
                     rejected_by = CASE WHEN ? = 'REJECTED' THEN ? ELSE rejected_by END,
                     rejected_at = CASE WHEN ? = 'REJECTED' THEN ? ELSE rejected_at END,
-                    updated_at = ? WHERE id = ?
+                    updated_at = ? WHERE id = ? AND review_status = 'PENDING'
                 """, reviewStatus, effectiveStatus,
                 reviewStatus, user.id(), reviewStatus, now,
                 reviewStatus, user.id(), reviewStatus, now, now, entryId);
         if (updated == 0) {
-            throw new BusinessException("Wiki 条目不存在");
+            throw new BusinessException("Wiki 条目不存在或已审核，请刷新后重试");
         }
         if ("APPROVED".equals(reviewStatus)) {
             jdbcTemplate.update("""

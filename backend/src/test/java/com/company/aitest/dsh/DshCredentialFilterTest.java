@@ -25,7 +25,7 @@ class DshCredentialFilterTest {
     void toolRouteRejectsAnExistingWebAuthentication() throws Exception {
         SecurityContextHolder.getContext().setAuthentication(
                 new UsernamePasswordAuthenticationToken(new CurrentUser(1L, "web", "ADMIN"), null));
-        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/dsh/tools/projects");
+        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/aitestwork/dsh/tools/projects");
         request.addHeader("Authorization", "Bearer web-jwt");
         FilterChain chain = mock(FilterChain.class);
 
@@ -40,7 +40,7 @@ class DshCredentialFilterTest {
     void toolRouteAcceptsOnlyBoundDshPrincipal() throws Exception {
         var principal = new DshConnectionService.DshPrincipal(7L, new CurrentUser(3L, "tester", "USER"));
         when(connections.authenticate("dsh_agent_valid", false)).thenReturn(principal);
-        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/dsh/tools/projects");
+        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/aitestwork/dsh/tools/projects");
         request.addHeader("Authorization", "Bearer dsh_agent_valid");
 
         filter.doFilter(request, new MockHttpServletResponse(), mock(FilterChain.class));
@@ -60,7 +60,7 @@ class DshCredentialFilterTest {
     void userRouteRejectsWebJwtAndAgentCredential() throws Exception {
         var principal = new DshConnectionService.DshPrincipal(7L, new CurrentUser(3L, "tester", "USER"));
         when(connections.authenticate("dsh_user_valid", true)).thenReturn(principal);
-        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/api/dsh/user/projects/1/drafts/2/submit");
+        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/api/aitestwork/dsh/user/projects/1/drafts/2/submit");
         request.addHeader("Authorization", "Bearer dsh_user_valid");
 
         filter.doFilter(request, new MockHttpServletResponse(), mock(FilterChain.class));

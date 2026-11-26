@@ -919,7 +919,7 @@ class RequirementAnalysisServiceTest {
         assertTrue(prompt.contains("## 用例编排计划"));
         assertTrue(prompt.contains("CP1"));
         assertTrue(prompt.contains("仅作背景/前置参考的测试点"));
-        assertTrue(prompt.contains("前序测试点所需状态写成可独立准备的前置条件"));
+        assertTrue(prompt.contains("前序测试点只能写在前置条件"));
     }
 
     @Test

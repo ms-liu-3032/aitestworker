@@ -22,7 +22,8 @@ class BusinessPackControllerAccessTest {
     private final BusinessPackService packs = mock(BusinessPackService.class);
     private final ProjectAccessService access = mock(ProjectAccessService.class);
     private final JdbcClient jdbc = mock(JdbcClient.class);
-    private final BusinessPackController controller = new BusinessPackController(packs, access, jdbc);
+    private final BusinessPackAccessService guard = new BusinessPackAccessService(access, jdbc);
+    private final BusinessPackController controller = new BusinessPackController(packs, guard);
     private final CurrentUser user = new CurrentUser(9L, "tester", "USER");
     private final UsernamePasswordAuthenticationToken auth = new UsernamePasswordAuthenticationToken(user, null);
 

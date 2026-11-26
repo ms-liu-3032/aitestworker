@@ -1,104 +1,18 @@
-const TOKEN_KEY = 'aitest_token'
-const API_BASE = ''
+import { requestBlob, requestJson, requestText } from './httpClient'
+export { getToken, setToken, clearToken, HttpError } from './httpClient'
 
-export function getToken() {
-  return localStorage.getItem(TOKEN_KEY)
+export function api<T>(url: string, options: RequestInit = {}): Promise<T> {
+  return requestJson<T>(url, options)
 }
 
-export function setToken(token: string) {
-  localStorage.setItem(TOKEN_KEY, token)
+export function apiText(url: string, options: RequestInit = {}): Promise<string> {
+  return requestText(url, options)
 }
 
-export function clearToken() {
-  localStorage.removeItem(TOKEN_KEY)
-}
-
-export async function api<T>(url: string, options: RequestInit = {}): Promise<T> {
-  const headers = new Headers(options.headers)
-  headers.set('Content-Type', 'application/json')
-  const token = getToken()
-  if (token) {
-    headers.set('Authorization', `Bearer ${token}`)
-  }
-  const response = await fetch(`${API_BASE}${url}`, { ...options, headers })
-  const rawText = await response.text()
-  let body: any = null
-  if (rawText && rawText.trim().length > 0) {
-    try {
-      body = JSON.parse(rawText)
-    } catch {
-      throw new Error(`服务返回非 JSON 响应（HTTP ${response.status}）`)
-    }
-  }
-  if (!response.ok) {
-    if (response.status === 401) {
-      clearToken()
-      if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
-        setTimeout(() => {
-          window.location.href = '/login'
-        }, 0)
-      }
-      throw new Error((body?.message || '登录已失效，请重新登录') + `（${options.method || 'GET'} ${url}）`)
-    }
-    if (response.status === 403) {
-      throw new Error((body?.message || '无权限访问该资源') + `（${options.method || 'GET'} ${url}）`)
-    }
-    throw new Error((body?.message || `请求失败（HTTP ${response.status}）`) + `（${options.method || 'GET'} ${url}）`)
-  }
-  if (!body || body.success !== true) {
-    throw new Error(body?.message || '请求失败')
-  }
-  return body.data as T
-}
-
-export async function apiText(url: string, options: RequestInit = {}): Promise<string> {
-  const headers = new Headers(options.headers)
-  const token = getToken()
-  if (token) {
-    headers.set('Authorization', `Bearer ${token}`)
-  }
-  const response = await fetch(`${API_BASE}${url}`, { ...options, headers })
-  const text = await response.text()
-  if (!response.ok) {
-    if (response.status === 401) {
-      clearToken()
-      if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
-        setTimeout(() => {
-          window.location.href = '/login'
-        }, 0)
-      }
-      throw new Error(`登录已失效，请重新登录（${options.method || 'GET'} ${url}）`)
-    }
-    throw new Error((text || `请求失败（HTTP ${response.status}）`) + `（${options.method || 'GET'} ${url}）`)
-  }
-  return text
-}
-
-export async function uploadFile<T>(url: string, file: File): Promise<T> {
+export function uploadFile<T>(url: string, file: File): Promise<T> {
   const formData = new FormData()
   formData.append('file', file)
-  const headers = new Headers()
-  const token = getToken()
-  if (token) {
-    headers.set('Authorization', `Bearer ${token}`)
-  }
-  const response = await fetch(`${API_BASE}${url}`, { method: 'POST', headers, body: formData })
-  const rawText = await response.text()
-  let body: any = null
-  if (rawText && rawText.trim().length > 0) {
-    try {
-      body = JSON.parse(rawText)
-    } catch {
-      throw new Error(`服务返回非 JSON 响应（HTTP ${response.status}）`)
-    }
-  }
-  if (!response.ok) {
-    throw new Error(body?.message || `上传失败（HTTP ${response.status}）`)
-  }
-  if (!body || body.success !== true) {
-    throw new Error(body?.message || '上传失败')
-  }
-  return body.data as T
+  return requestJson<T>(url, { method: 'POST', body: formData })
 }
 
 // ===== Common =====
@@ -128,6 +42,19 @@ export function listProjects(params: { page?: number; size?: number; keyword?: s
   if (params.status) qs.set('status', params.status)
   const query = qs.toString()
   return api<PageResult<Project>>(`/api/projects/page${query ? '?' + query : ''}`)
+}
+
+/** Load every project for filters; a fixed first page silently hides projects after the limit. */
+export async function listAllProjects(): Promise<Project[]> {
+  const pageSize = 200
+  const first = await listProjects({ page: 1, size: pageSize })
+  const projects = [...first.items]
+  const pages = Math.ceil(first.total / pageSize)
+  for (let page = 2; page <= pages; page++) {
+    const next = await listProjects({ page, size: pageSize })
+    projects.push(...next.items)
+  }
+  return projects
 }
 
 export function getProject(projectId: number) {
@@ -476,13 +403,9 @@ export async function uploadHistoricalCases(projectId: number, file: File, batch
   formData.append('file', file)
   if (batchName) formData.append('batchName', batchName)
   if (businessDomain) formData.append('businessDomain', businessDomain)
-  const headers = new Headers()
-  const token = getToken()
-  if (token) headers.set('Authorization', `Bearer ${token}`)
-  const response = await fetch(`${API_BASE}/api/mini-tom/historical-case-imports/upload`, { method: 'POST', headers, body: formData })
-  const body = await response.json().catch(() => null)
-  if (!response.ok || !body?.success) throw new Error(body?.message || '历史用例文件导入失败')
-  return body.data as HistoricalCaseImportResult
+  return requestJson<HistoricalCaseImportResult>('/api/mini-tom/historical-case-imports/upload', {
+    method: 'POST', body: formData,
+  })
 }
 
 export function listHistoricalCaseImports(projectId: number) {
@@ -694,19 +617,10 @@ export function deleteFormalCases(projectId: number, caseIds: number[]) {
 }
 
 async function exportCases(url: string, caseIds?: number[]) {
-  const response = await fetch(url, {
+  return requestBlob(url, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${getToken()}`,
-    },
     body: JSON.stringify(caseIds || []),
   })
-  if (!response.ok) {
-    const body = await response.json().catch(() => null)
-    throw new Error(body?.message || '导出失败')
-  }
-  return response.blob()
 }
 
 export function exportFormalCasesToXmind(projectId: number, caseIds?: number[]) {
@@ -762,6 +676,19 @@ export function createBindCode() {
 }
 
 // ===== Admin Asset API =====
+export interface AssetInventoryRow {
+  assetType: string
+  scope: string
+  status: string
+  sourceType: string | null
+  count: number
+}
+
+export function listAssetInventory(projectId?: number, signal?: AbortSignal) {
+  const query = projectId === undefined ? '' : `?projectId=${encodeURIComponent(String(projectId))}`
+  return api<AssetInventoryRow[]>(`/api/admin/assets/inventory${query}`, { signal })
+}
+
 type AdminAssetParams = {
   projectId?: number
   status?: string
@@ -778,6 +705,38 @@ function buildAssetQuery(params?: AdminAssetParams & { moduleName?: string }) {
 
 export function listAdminFormalCases(params?: AdminAssetParams & { moduleName?: string }) {
   return api<any[]>(`/api/admin/assets/formal-cases${buildAssetQuery(params)}`)
+}
+
+export interface CatalogAsset {
+  assetType: string
+  id: number
+  projectId: number
+  title: string | null
+  scope: string | null
+  lifecycleStatus: string | null
+  reviewStatus: string | null
+  sourceType: string | null
+  sourceId: number | null
+  parentId: number | null
+  createdAt: string | null
+}
+
+export function listAssetCatalog(filters: {
+  projectId?: number
+  type?: string
+  status?: string
+  keyword?: string
+  page?: number
+  size?: number
+}) {
+  const query = new URLSearchParams()
+  if (filters.projectId) query.set('projectId', String(filters.projectId))
+  if (filters.type) query.set('type', filters.type)
+  if (filters.status) query.set('status', filters.status)
+  if (filters.keyword) query.set('keyword', filters.keyword)
+  query.set('page', String(filters.page || 1))
+  query.set('size', String(filters.size || 50))
+  return api<PageResult<CatalogAsset>>(`/api/admin/assets/catalog?${query}`)
 }
 
 export function listAdminTestPoints(params?: AdminAssetParams) {
@@ -876,6 +835,19 @@ export function listCandidates(params?: { type?: string; projectId?: number; sta
   return api<any[]>(`/api/admin/candidates${query ? '?' + query : ''}`)
 }
 
+export function listCandidatesPage(params: {
+  type?: string; projectId?: number; status?: string; keyword?: string; page: number; size?: number
+}) {
+  const qs = new URLSearchParams()
+  if (params.type) qs.set('type', params.type)
+  if (params.projectId) qs.set('projectId', String(params.projectId))
+  if (params.status) qs.set('status', params.status)
+  if (params.keyword) qs.set('keyword', params.keyword)
+  qs.set('page', String(params.page))
+  qs.set('size', String(params.size || 50))
+  return api<PageResult<any>>(`/api/admin/candidates/page?${qs}`)
+}
+
 export function confirmCandidate(type: string, id: number) {
   return api<void>(`/api/admin/candidates/${type}/${id}/confirm`, { method: 'POST' })
 }
@@ -910,6 +882,7 @@ export type AutomationAsset = {
 export type AutomationRun = {
   id: number; assetId: number; versionNo: number; result: string; durationMs: number;
   evidenceSessionId?: number | null; apiEvidenceId?: number | null;
+  logEvidence?: { ruleId: string; purpose: string; result: string; reason: string; serviceName?: string; instances: unknown[] }[] | null;
   failureStepIndex?: number | null; failureReason?: string | null;
 }
 
@@ -922,6 +895,33 @@ export type AutomationVersion = {
   assetId: number; versionNo: number; mapping: Record<string, unknown>; status: string;
   changeReason: string; revisionKind: string; sourceRunId?: number | null; verifiedRunId?: number | null;
   reviewStatus: string; reviewedBy?: number | null; reviewReason?: string | null;
+}
+
+export type UiCoverageVerdict = {
+  taskId: number; taskKey: string; targetOrigin: string; inventoryStatus: string;
+  result: string; requiredCount: number; coveredCount: number;
+  rules: { ruleCode: string; ruleVersion: number; checkKind: string;
+    applicability: string; reason?: string | null; status: string }[];
+  obligations: { id: number; fieldKey: string; pagePath: string; fieldLabel: string;
+    ruleCode: string; sourceBasis: string; applicability: string; positiveRunId?: number | null;
+    negativeRunId?: number | null; status: string }[];
+}
+
+export type UiExecutionRule = { id: number; projectId: number; ruleCode: string;
+  versionNo: number; title: string; checkKind: string; status: string };
+
+export function listPendingUiExecutionRules(projectId: number) {
+  return api<UiExecutionRule[]>(`/api/projects/${projectId}/ui-coverage/rules/pending`)
+}
+export function approveUiExecutionRule(projectId: number, ruleId: number) {
+  return api<UiExecutionRule>(`/api/projects/${projectId}/ui-coverage/rules/${ruleId}/approve`, { method: 'POST' })
+}
+
+export function listUiCoverageTasks(projectId: number) {
+  return api<UiCoverageVerdict[]>(`/api/projects/${projectId}/ui-coverage`)
+}
+export function confirmUiCoverageTask(projectId: number, taskId: number) {
+  return api<UiCoverageVerdict>(`/api/projects/${projectId}/ui-coverage/${taskId}/confirm`, { method: 'POST' })
 }
 
 export function listAutomationAssets(projectId: number) {

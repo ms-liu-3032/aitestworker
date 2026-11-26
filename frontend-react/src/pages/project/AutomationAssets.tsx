@@ -1,11 +1,13 @@
-import { useCallback, useEffect, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { useParams, useSearchParams } from 'react-router-dom';
 import { useApp } from '../../context/AppContext';
 import {
   approveAutomationVersion, batchApproveAutomationVersions, archiveAutomationAsset, discardAutomationCandidate,
   getAutomationApiEvidence, getAutomationVersion, listAutomationAssets, listAutomationRuns,
   proposeAutomationVersion, publishAutomationAsset, unblockAutomationAsset,
+  listUiCoverageTasks, confirmUiCoverageTask, listPendingUiExecutionRules, approveUiExecutionRule,
   type AutomationApiEvidence, type AutomationAsset, type AutomationRun, type AutomationVersion,
+  type UiCoverageVerdict, type UiExecutionRule,
 } from '../../services/api';
 
 const colors: Record<string, string> = {
@@ -29,6 +31,9 @@ function approvalBlocker(asset: AutomationAsset): string | null {
 
 export default function AutomationAssets() {
   const { projectId } = useParams<{ projectId: string }>();
+  const [params] = useSearchParams();
+  const requestedAssetId = Number(params.get('assetId'));
+  const openedFromLink = useRef<number | null>(null);
   const project = Number(projectId);
   const { showToast } = useApp();
   const [items, setItems] = useState<AutomationAsset[]>([]);
@@ -44,12 +49,17 @@ export default function AutomationAssets() {
   const [editJson, setEditJson] = useState('');
   const [changeReason, setChangeReason] = useState('');
   const [checkedIds, setCheckedIds] = useState<number[]>([]);
+  const [coverageTasks, setCoverageTasks] = useState<UiCoverageVerdict[]>([]);
+  const [pendingRules, setPendingRules] = useState<UiExecutionRule[]>([]);
 
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const latest = await listAutomationAssets(project);
+      const [latest, coverage, rules] = await Promise.all([listAutomationAssets(project), listUiCoverageTasks(project),
+        listPendingUiExecutionRules(project).catch(() => [] as UiExecutionRule[])]);
       setItems(latest);
+      setCoverageTasks(coverage);
+      setPendingRules(rules);
       setCheckedIds(ids => ids.filter(id => latest.some(asset => asset.id === id && asset.status === 'VERIFIED'
         && asset.reviewStatus === 'PENDING' && !asset.caseStale)));
     }
@@ -79,6 +89,15 @@ export default function AutomationAssets() {
       setRuns(history);
     } catch (error: any) { showToast(error.message || '加载版本或运行记录失败', 'error'); }
   };
+
+  useEffect(() => {
+    if (loading || requestedAssetId <= 0 || openedFromLink.current === requestedAssetId) return;
+    const target = items.find(item => item.id === requestedAssetId);
+    if (target) {
+      openedFromLink.current = requestedAssetId;
+      void open(target);
+    }
+  }, [loading, items, requestedAssetId]);
 
   const showApiEvidence = async (assetId: number, evidenceId: number) => {
     try { setApiEvidence(await getAutomationApiEvidence(project, assetId, evidenceId)); }
@@ -175,6 +194,37 @@ export default function AutomationAssets() {
         <p className="mt-1 text-sm text-gray-500">仅已验证且关联用例未变更的映射可以审核。其他资产请先按状态提示复验；历史版本、运行和证据可回看。</p></div>
       <div className="flex gap-2"><select aria-label="资产类型" value={typeFilter} onChange={event => { setTypeFilter(event.target.value as 'ALL' | 'UI' | 'API'); setCheckedIds([]); }} className="rounded-lg border px-3 py-2 text-sm"><option value="ALL">全部类型</option><option value="UI">UI 自动化</option><option value="API">接口自动化</option></select><button disabled={busy || checkedIds.length === 0} onClick={batchApprove} className="rounded-lg bg-green-700 px-3 py-2 text-sm text-white disabled:opacity-50">批量审核已选（{checkedIds.length}）</button><button onClick={refresh} className="rounded-lg border px-3 py-2 text-sm">刷新</button></div>
     </div>
+    <section className="mb-5 rounded-xl border bg-white p-5" aria-label="UI 规则覆盖任务">
+      <h2 className="font-semibold">UI 规则覆盖任务</h2>
+      <p className="mt-1 text-sm text-gray-500">逐条核对规则、适用性和场景来源后确认清单。单条自动化用例通过不会自动代表本轮规则覆盖完成。</p>
+      {pendingRules.length > 0 && <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm">
+        <strong>待审核规则</strong>{pendingRules.map(rule => <div key={rule.id} className="mt-2 flex items-center justify-between gap-2">
+          <span>{rule.ruleCode} v{rule.versionNo} · {rule.title} · {rule.checkKind}</span>
+          <button disabled={busy} onClick={async () => { setBusy(true); try { await approveUiExecutionRule(project, rule.id); await refresh(); showToast('规则已审核生效，后续新任务将使用'); }
+            catch (error: any) { showToast(error.message || '审核失败', 'error'); } finally { setBusy(false); } }}
+            className="rounded bg-amber-700 px-3 py-1 text-white disabled:opacity-50">审核生效</button>
+        </div>)}</div>}
+      {coverageTasks.length === 0 ? <p className="mt-3 text-sm text-gray-500">暂无覆盖任务，可在 DSH 发起 UI 测试时创建。</p>
+        : <div className="mt-3 space-y-3">{coverageTasks.map(task => <div key={task.taskId} className="rounded-lg border p-3 text-sm">
+          <div className="flex flex-wrap items-center justify-between gap-2"><strong>任务 #{task.taskId} · {task.taskKey}</strong>
+            <span>{task.result === 'PASS' ? '已确认清单覆盖完成' : task.result === 'INVENTORY_UNCONFIRMED' ? '清单待确认' : '覆盖未完成'} · {task.coveredCount}/{task.requiredCount}</span></div>
+          <p className="mt-1 text-gray-500">目标：{task.targetOrigin}</p>
+          <ul className="mt-2 space-y-1">{task.rules.map(rule => <li key={rule.ruleCode}>
+            {rule.ruleCode} v{rule.ruleVersion} · {rule.applicability} · {rule.status}
+            {rule.reason && <span className="ml-2 text-gray-500">依据：{rule.reason}</span>}
+          </li>)}</ul>
+          <ul className="mt-2 space-y-1">{task.obligations.map(item => <li key={item.id}>
+            {item.ruleCode} · {item.fieldLabel} · {item.pagePath} · {item.applicability === 'UNKNOWN' ? '适用性待核实' : item.status === 'COVERED' ? '已有运行证据' : '待执行'}
+            <span className="ml-2 text-gray-500">来源：{item.sourceBasis}</span>
+          </li>)}</ul>
+          {task.inventoryStatus === 'UNCONFIRMED' && <button disabled={busy || task.rules.some(rule => rule.applicability === 'UNKNOWN')
+            || task.rules.some(rule => rule.applicability === 'APPLICABLE' && !task.obligations.some(item => item.ruleCode === rule.ruleCode))
+            || task.obligations.some(item => item.applicability === 'UNKNOWN')}
+            onClick={async () => { setBusy(true); try { await confirmUiCoverageTask(project, task.taskId); await refresh(); showToast('已确认必填项清单'); }
+              catch (error: any) { showToast(error.message || '确认失败', 'error'); } finally { setBusy(false); } }}
+            className="mt-3 rounded bg-blue-700 px-3 py-2 text-white disabled:opacity-50">确认本轮规则与场景清单</button>}
+        </div>)}</div>}
+    </section>
     {loading ? <p className="text-sm text-gray-500">加载中…</p> : items.length === 0
       ? <div className="rounded-xl border bg-white p-8 text-center text-sm text-gray-500">暂无自动化资产。可在 DSH 中对已有用例提出执行映射，跑通后会显示为已验证。</div>
       : <div className="overflow-x-auto rounded-xl border bg-white"><table className="w-full min-w-[860px] text-left text-sm">
@@ -229,6 +279,11 @@ export default function AutomationAssets() {
         <span className="font-medium">#{run.id} · v{run.versionNo} · {run.result}</span>
         <span className="ml-3 text-gray-500">{run.durationMs} ms · {run.evidenceSessionId ? `浏览器证据会话 #${run.evidenceSessionId}` : `接口证据 #${run.apiEvidenceId}`}</span>
         {run.apiEvidenceId && <button onClick={() => showApiEvidence(selected.id, run.apiEvidenceId!)} className="ml-3 text-blue-700 hover:underline">查看接口证据</button>}
+        {!!run.logEvidence?.length && <details className="mt-2"><summary>日志断言：{run.logEvidence.filter(item => item.result === 'PASS').length}/{run.logEvidence.length} 通过</summary>
+          {run.logEvidence.map(item => <div key={item.ruleId} className="mt-1 text-sm"><strong>{item.ruleId}</strong> · {item.serviceName || '服务未确认'} · {item.result}
+            <span className="ml-2">{item.purpose === 'REQUEST_ASSOCIATION' ? '请求关联证据' : '业务事件证据'}</span>
+            <pre className="overflow-auto whitespace-pre-wrap">{JSON.stringify(item, null, 2)}</pre></div>)}
+        </details>}
         {run.failureReason && <p className="mt-1 text-red-700">{run.failureReason}</p>}
       </div>)}</div>}
       {apiEvidence && <div className="mt-4 rounded-lg border bg-gray-50 p-3 text-sm"><div className="flex justify-between"><strong>接口证据 #{apiEvidence.id} · {apiEvidence.result}</strong><button onClick={() => setApiEvidence(null)}>关闭</button></div><pre className="mt-2 max-h-80 overflow-auto whitespace-pre-wrap break-all text-xs">{JSON.stringify(apiEvidence.evidence, null, 2)}</pre></div>}

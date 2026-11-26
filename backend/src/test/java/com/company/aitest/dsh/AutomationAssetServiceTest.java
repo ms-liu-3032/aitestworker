@@ -18,6 +18,40 @@ class AutomationAssetServiceTest {
             mock(JdbcTemplate.class), mapper, mock(TimeProvider.class), mock(ProjectAccessService.class),
             mock(DshWorkSessionService.class), mock(DshCaptureService.class));
 
+    @Test
+    void wheelScrollRequiresBoundedNumericDistance() throws Exception {
+        JsonNode valid = mapper.readTree("""
+                {"caseNo":"TC-001","page":"/picker","steps":[{"type":"scroll",
+                 "locator":{"by":"css","value":".am-picker-col"},"deltaY":120,"repeat":2}],
+                 "assertions":[{"by":"text","value":"已选择日期"}]}
+                """);
+        assertDoesNotThrow(() -> service.canonical(valid, "TC-001"));
+        var invalid = valid.deepCopy();
+        ((com.fasterxml.jackson.databind.node.ObjectNode) invalid.path("steps").get(0)).put("deltaY", 0);
+        assertThrows(BusinessException.class, () -> service.canonical(invalid, "TC-001"));
+        ((com.fasterxml.jackson.databind.node.ObjectNode) invalid.path("steps").get(0)).put("deltaY", 2001);
+        assertThrows(BusinessException.class, () -> service.canonical(invalid, "TC-001"));
+    }
+
+    @Test
+    void dragRequiresBoundedDisplacementAndMoveCount() throws Exception {
+        JsonNode valid = mapper.readTree("""
+                {"caseNo":"TC-001","page":"/picker","steps":[{"type":"drag",
+                 "locator":{"by":"css","value":".picker-column"},"deltaY":-120,"dragSteps":12}],
+                 "assertions":[{"by":"text","value":"已选择日期"}]}
+                """);
+        assertDoesNotThrow(() -> service.canonical(valid, "TC-001"));
+        var step = (com.fasterxml.jackson.databind.node.ObjectNode) valid.path("steps").get(0);
+        step.put("deltaY", 0);
+        assertThrows(BusinessException.class, () -> service.canonical(valid, "TC-001"));
+        step.put("deltaY", -120);
+        step.put("dragSteps", 51);
+        assertThrows(BusinessException.class, () -> service.canonical(valid, "TC-001"));
+        step.put("dragSteps", 12);
+        step.put("deltaX", 2001);
+        assertThrows(BusinessException.class, () -> service.canonical(valid, "TC-001"));
+    }
+
     private JsonNode mapping(String stepLocator, String data, String assertionText) throws Exception {
         return mapper.readTree("""
                 {"caseNo":"TC-001","page":"/visit/newInvitation","steps":[
@@ -34,6 +68,29 @@ class AutomationAssetServiceTest {
         assertThrows(BusinessException.class, () -> service.canonical(valid, "TC-002"));
         assertThrows(BusinessException.class, () -> service.canonical(
                 mapping("请添加访客", "13800138000", "邀请成功"), "TC-001"));
+    }
+
+    @Test
+    void requiredFieldMappingNeedsAnActualEmptyInputAndTwoObservableAssertions() throws Exception {
+        JsonNode negative = mapper.readTree("""
+                {"caseNo":"TC-001","page":"/form","steps":[
+                  {"type":"fill","locator":{"by":"label","value":"姓名"},"data":""},
+                  {"type":"click","locator":{"by":"role","value":"button","name":"提交"}}],
+                 "assertions":[{"by":"text","value":"姓名必填","state":"visible"},
+                   {"by":"text","value":"提交成功","state":"hidden"}],
+                 "uiCoverage":{"ruleCode":"UI_REQUIRED_FIELD","fieldKey":"name","role":"NEGATIVE",
+                   "fieldStepIndex":0,"submitStepIndex":1,"errorAssertionIndex":0,"noSuccessAssertionIndex":1}}
+                """);
+        assertDoesNotThrow(() -> service.canonical(negative, "TC-001"));
+        JsonNode missingNoSuccess = negative.deepCopy();
+        ((com.fasterxml.jackson.databind.node.ObjectNode) missingNoSuccess.path("assertions").get(1)).put("state", "visible");
+        assertThrows(BusinessException.class, () -> service.canonical(missingNoSuccess, "TC-001"));
+        JsonNode notEmpty = negative.deepCopy();
+        ((com.fasterxml.jackson.databind.node.ObjectNode) notEmpty.path("steps").get(0)).put("data", "张三");
+        assertThrows(BusinessException.class, () -> service.canonical(notEmpty, "TC-001"));
+        JsonNode genericBlank = negative.deepCopy();
+        ((com.fasterxml.jackson.databind.node.ObjectNode) genericBlank).remove("uiCoverage");
+        assertThrows(BusinessException.class, () -> service.canonical(genericBlank, "TC-001"));
     }
 
     @Test
@@ -160,4 +217,17 @@ class AutomationAssetServiceTest {
                 """);
         assertThrows(BusinessException.class, () -> service.canonical(nested, "TC-001"));
     }
+    @Test
+    void logRuleChangesCannotMasqueradeAsLocatorSelfHealing() throws Exception {
+        JsonNode original = mapping("旧入口", "${phone13}", "邀请成功");
+        var rule = mapper.createObjectNode().put("id", "request").put("stepIndex", 0)
+                .put("purpose", "REQUEST_ASSOCIATION").put("expected", "POST /api/invitations");
+        ((com.fasterxml.jackson.databind.node.ObjectNode) original).putArray("logAssertions").add(rule);
+        JsonNode changed = original.deepCopy();
+        ((com.fasterxml.jackson.databind.node.ObjectNode) changed.path("steps").get(0).path("locator")).put("value", "新入口");
+        assertTrue(service.sameExceptLocators(original, changed));
+        ((com.fasterxml.jackson.databind.node.ObjectNode) changed.path("logAssertions").get(0)).put("expected", "anything");
+        assertFalse(service.sameExceptLocators(original, changed));
+    }
+
 }

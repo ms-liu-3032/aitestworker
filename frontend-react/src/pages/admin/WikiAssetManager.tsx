@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useApp } from '../../context/AppContext';
 import {
   createWikiEntry,
   createWikiPack,
   listAdminWikiPacks,
-  listProjects,
+  listAllProjects,
   listWikiEntries,
   reviewWikiEntry,
   reviewWikiPack,
@@ -31,11 +32,16 @@ function asArray<T>(value: unknown): T[] { return Array.isArray(value) ? value :
 
 export default function WikiAssetManager() {
   const { showToast } = useApp();
+  const [params, setParams] = useSearchParams();
+  const requestedPackId = Number(params.get('packId'));
+  const requestedEntryId = Number(params.get('entryId'));
   const [packs, setPacks] = useState<WikiPack[]>([]);
   const [entries, setEntries] = useState<WikiEntry[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedPack, setSelectedPack] = useState<WikiPack | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
+  const requestSequence = useRef(0);
   const [projectId, setProjectId] = useState('');
   const [scope, setScope] = useState('');
   const [reviewStatus, setReviewStatus] = useState('');
@@ -52,13 +58,15 @@ export default function WikiAssetManager() {
   const projectNames = useMemo(() => new Map(projects.map(project => [project.id, project.projectName])), [projects]);
 
   useEffect(() => {
-    listProjects({ page: 1, size: 200 })
-      .then(result => setProjects(asArray<Project>((result as any)?.items)))
+    listAllProjects()
+      .then(result => setProjects(asArray<Project>(result)))
       .catch(() => setProjects([]));
   }, []);
 
   const loadPacks = async () => {
+    const request = ++requestSequence.current;
     setLoading(true);
+    setLoadError('');
     try {
       const result = await listAdminWikiPacks({
         projectId: projectId ? Number(projectId) : undefined,
@@ -66,19 +74,27 @@ export default function WikiAssetManager() {
         reviewStatus: reviewStatus || undefined,
       });
       const next = asArray<WikiPack>(result);
-      setPacks(next);
-      if (selectedPack && !next.some(pack => pack.id === selectedPack.id)) {
-        setSelectedPack(null);
-        setEntries([]);
+      if (request === requestSequence.current) {
+        setPacks(next);
+        if (selectedPack && !next.some(pack => pack.id === selectedPack.id)) {
+          setSelectedPack(null);
+          setEntries([]);
+        }
       }
     } catch (error: any) {
-      showToast(error.message || '加载 Wiki 资产失败', 'error');
+      if (request === requestSequence.current) {
+        setPacks([]);
+        setLoadError(error.message || '加载 Wiki 资产失败');
+      }
     } finally {
-      setLoading(false);
+      if (request === requestSequence.current) setLoading(false);
     }
   };
 
-  useEffect(() => { void loadPacks(); }, [projectId, scope, reviewStatus]);
+  useEffect(() => {
+    void loadPacks();
+    return () => { requestSequence.current++; };
+  }, [projectId, scope, reviewStatus]);
 
   const selectPack = async (pack: WikiPack) => {
     setSelectedPack(pack);
@@ -86,6 +102,21 @@ export default function WikiAssetManager() {
     try { setEntries(asArray<WikiEntry>(await listWikiEntries(pack.id))); }
     catch (error: any) { showToast(error.message || '加载知识条目失败', 'error'); }
   };
+
+  useEffect(() => {
+    if (!loading && requestedPackId > 0 && selectedPack?.id !== requestedPackId) {
+      const pack = packs.find(item => item.id === requestedPackId);
+      if (pack) void selectPack(pack);
+      else setLoadError(`知识包 #${requestedPackId} 不在当前列表中；请清除筛选后重试`);
+    }
+  }, [loading, requestedPackId, packs, selectedPack?.id]);
+
+  useEffect(() => {
+    if (requestedEntryId > 0 && entries.length > 0) {
+      const entry = entries.find(item => item.id === requestedEntryId);
+      if (entry) setViewingEntry(entry);
+    }
+  }, [requestedEntryId, entries]);
 
   const replacePack = (updated: WikiPack) => {
     setPacks(current => current.map(pack => pack.id === updated.id ? updated : pack));
@@ -215,6 +246,7 @@ export default function WikiAssetManager() {
         <div className="text-xs text-gray-500">共 {filteredPacks.length} 个知识包</div>
         <button onClick={() => setShowCreate(current => !current)} className="rounded-lg bg-slate-900 px-3 py-2 text-xs font-semibold text-white">新建 Wiki 知识包</button>
       </div>
+      {loadError && <div role="alert" className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">{loadError}</div>}
       <BulkReviewPicker title="知识包" items={filteredPacks.filter(pack => pack.reviewStatus === 'PENDING').map(pack => ({ id: pack.id, name: pack.name }))}
         onReview={async (id, approved) => replacePack(await reviewWikiPack(id, approved ? 'APPROVED' : 'REJECTED'))} />
 
@@ -236,7 +268,15 @@ export default function WikiAssetManager() {
         <div className="grid min-h-[420px] grid-cols-1 gap-4 xl:grid-cols-[minmax(320px,0.9fr)_minmax(420px,1.4fr)]">
           <div className="space-y-2">
             {filteredPacks.map(pack => (
-              <button key={pack.id} onClick={() => void selectPack(pack)} className={`w-full rounded-lg border p-3 text-left ${selectedPack?.id === pack.id ? 'border-slate-400 bg-slate-50' : 'border-gray-200 bg-white'}`}>
+              <button key={pack.id} onClick={() => {
+                setParams(current => {
+                  const next = new URLSearchParams(current);
+                  next.set('packId', String(pack.id));
+                  next.delete('entryId');
+                  return next;
+                });
+                void selectPack(pack);
+              }} className={`w-full rounded-lg border p-3 text-left ${selectedPack?.id === pack.id ? 'border-slate-400 bg-slate-50' : 'border-gray-200 bg-white'}`}>
                 <div className="flex flex-wrap gap-1.5">
                   {[pack.scope, pack.status, pack.reviewStatus].map((value, index) => <span key={`${value}-${index}`} className={`rounded px-1.5 py-0.5 text-[10px] ${badgeTone[value] || 'bg-gray-100 text-gray-600'}`}>{index === 0 ? wikiScopeLabel(value) : statusLabel(value)}</span>)}
                 </div>

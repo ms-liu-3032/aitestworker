@@ -6,8 +6,6 @@ import java.util.Set;
 
 import com.company.aitest.common.BusinessException;
 import com.company.aitest.common.CurrentUser;
-import com.company.aitest.project.ProjectAccessService;
-import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
@@ -20,14 +18,12 @@ public class BusinessPackController {
     private static final Set<String> VALID_RULE_TYPES = Set.of("TRACE_RULE", "CLEANING_PATTERN", "DESCRIPTION_RULE");
 
     private final BusinessPackService businessPackService;
-    private final ProjectAccessService projectAccess;
-    private final JdbcClient jdbc;
+    private final BusinessPackAccessService access;
 
     public BusinessPackController(BusinessPackService businessPackService,
-                                  ProjectAccessService projectAccess, JdbcClient jdbc) {
+                                  BusinessPackAccessService access) {
         this.businessPackService = businessPackService;
-        this.projectAccess = projectAccess;
-        this.jdbc = jdbc;
+        this.access = access;
     }
 
     /** Apply the same project boundary to every legacy business-pack route. */
@@ -35,24 +31,7 @@ public class BusinessPackController {
     public void authorize(@PathVariable Long projectId, @PathVariable Map<String, String> pathVariables,
                           Authentication auth, jakarta.servlet.http.HttpServletRequest request) {
         CurrentUser user = (CurrentUser) auth.getPrincipal();
-        projectAccess.ensureCanAccess(projectId, user);
-        if (!"GET".equals(request.getMethod())) projectAccess.ensureCanManageProject(projectId, user);
-        checkOwner(projectId, pathVariables.get("packId"), "business_pack", "id", null);
-        checkOwner(projectId, pathVariables.get("itemId"), "business_pack_item", "id", pathVariables.get("packId"));
-        checkOwner(projectId, pathVariables.get("relationId"), "business_pack_relation", "id", null);
-        checkOwner(projectId, pathVariables.get("snapshotId"), "business_pack_snapshot", "id", null);
-    }
-
-    private void checkOwner(Long projectId, String rawId, String table, String column, String rawPackId) {
-        if (rawId == null) return;
-        long id;
-        try { id = Long.parseLong(rawId); }
-        catch (NumberFormatException exception) { throw new BusinessException("业务包资产编号无效"); }
-        String sql = "SELECT COUNT(*) FROM " + table + " WHERE " + column + " = :id AND project_id = :projectId";
-        if (rawPackId != null) sql += " AND pack_id = :packId";
-        var query = jdbc.sql(sql).param("id", id).param("projectId", projectId);
-        if (rawPackId != null) query = query.param("packId", Long.parseLong(rawPackId));
-        if (query.query(Integer.class).single() == 0) throw new BusinessException("业务包资产不属于当前项目");
+        access.authorize(projectId, pathVariables, user, request.getMethod());
     }
 
     @GetMapping

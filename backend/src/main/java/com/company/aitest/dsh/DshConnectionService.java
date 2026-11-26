@@ -144,7 +144,7 @@ public class DshConnectionService {
     }
 
     public record BindCode(String code, LocalDateTime expiresAt) {}
-    // Both credentials authenticate requests sent by local DSH to this AITestHub backend.
+    // Both credentials authenticate requests sent by local DSH to this AITestWork backend.
     // userToken carries the bound user's authority; agentToken is restricted to model-facing tool routes.
     public record Binding(Long connectionId, String userToken, String agentToken, Long userId) {}
     public record ConnectionView(Long id, String deviceName, String status,

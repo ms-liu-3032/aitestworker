@@ -7,7 +7,7 @@ import ProjectLayout from './layouts/ProjectLayout';
 import AdminLayout from './layouts/AdminLayout';
 import LoginPage from './pages/LoginPage';
 
-// 模块 A：Workspace Hub
+// 模块 A：Workspace AITestWork
 const ProjectList = lazy(() => import('./pages/workspace/ProjectList'));
 const CollectorManager = lazy(() => import('./pages/CollectorManager'));
 const Settings = lazy(() => import('./pages/Settings'));
@@ -31,9 +31,7 @@ const AutomationAssets = lazy(() => import('./pages/project/AutomationAssets'));
 const UserManagement = lazy(() => import('./pages/admin/UserManagement'));
 const ModelConfig = lazy(() => import('./pages/admin/ModelConfig'));
 const PromptLibrary = lazy(() => import('./pages/admin/PromptLibrary'));
-const MiniTomModels = lazy(() => import('./pages/admin/MiniTomModels'));
-const AssetLibrary = lazy(() => import('./pages/admin/AssetLibrary'));
-const CandidateReview = lazy(() => import('./pages/admin/CandidateReview'));
+const AssetCenter = lazy(() => import('./pages/admin/AssetCenter'));
 const SystemConfig = lazy(() => import('./pages/admin/SystemConfig'));
 const LoopConfig = lazy(() => import('./pages/admin/LoopConfig'));
 const RuntimeDiagnostics = lazy(() => import('./pages/admin/RuntimeDiagnostics'));
@@ -142,7 +140,7 @@ function ProtectedApp() {
       <GlobalHeader />
       <RouteShell>
         <Routes>
-          {/* 模块 A：Workspace Hub */}
+          {/* 模块 A：Workspace AITestWork */}
           <Route path="/" element={<ProjectList />} />
           <Route path="/collectors" element={<CollectorManager />} />
           <Route path="/settings" element={<Settings />} />
@@ -171,9 +169,10 @@ function ProtectedApp() {
             <Route path="users" element={<UserManagement />} />
             <Route path="models" element={<ModelConfig />} />
             <Route path="prompts" element={<PromptLibrary />} />
-            <Route path="mini-tom" element={<MiniTomModels />} />
-            <Route path="assets" element={<AssetLibrary />} />
-            <Route path="candidates" element={<CandidateReview />} />
+            <Route path="asset-center" element={<AssetCenter />} />
+            <Route path="mini-tom" element={<Navigate to="/admin/asset-center?tab=tom" replace />} />
+            <Route path="assets" element={<Navigate to="/admin/asset-center?tab=catalog" replace />} />
+            <Route path="candidates" element={<Navigate to="/admin/asset-center?tab=review" replace />} />
             <Route path="scan" element={<SystemConfig />} />
             <Route path="loop" element={<LoopConfig />} />
             <Route path="diagnostics" element={<RuntimeDiagnostics />} />

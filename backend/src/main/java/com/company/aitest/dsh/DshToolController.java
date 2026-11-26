@@ -30,7 +30,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
-@RequestMapping("/api/dsh/tools")
+@RequestMapping("/api/aitestwork/dsh/tools")
 public class DshToolController {
     private final ProjectService projects;
     private final ProjectAccessService access;

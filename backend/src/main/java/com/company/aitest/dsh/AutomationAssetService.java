@@ -28,7 +28,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class AutomationAssetService {
-    private static final Set<String> ACTIONS = Set.of("click", "fill", "press", "select", "check", "uncheck", "waitFor");
+    private static final Set<String> ACTIONS = Set.of("click", "fill", "press", "select", "check", "uncheck", "waitFor", "scroll", "drag");
     private static final Set<String> LOCATORS = Set.of("testId", "role", "label", "placeholder", "text", "css", "nth");
     private static final Set<String> RESULTS = Set.of("PASS", "LOCATOR_FAILURE", "ASSERTION_FAILURE",
             "ENVIRONMENT_FAILURE", "DATA_FAILURE", "OTHER_FAILURE");
@@ -63,7 +63,7 @@ public class AutomationAssetService {
     public record BatchApprovalInput(List<ApprovalTarget> targets) {}
     public record RunInput(String requestKey, Integer versionNo, String result, Long durationMs,
                            Long evidenceSessionId, Integer failureStepIndex, String failureReason,
-                           Long apiEvidenceId) {}
+                           Long apiEvidenceId, JsonNode logEvidence) {}
     public record ApiEvidenceInput(String requestKey, Integer versionNo, String result, JsonNode evidence) {}
     public record ApiEvidence(Long id, Long assetId, int versionNo, String result, JsonNode evidence) {}
     public record Asset(Long id, Long projectId, String caseKind, Long caseId, String caseNo,
@@ -75,7 +75,7 @@ public class AutomationAssetService {
                           String changeReason, String revisionKind, Long sourceRunId, Long verifiedRunId,
                           String reviewStatus, Long reviewedBy, String reviewReason) {}
     public record Run(Long id, Long assetId, int versionNo, String result, long durationMs,
-                      Long evidenceSessionId, Integer failureStepIndex, String failureReason, Long apiEvidenceId) {}
+                      Long evidenceSessionId, Integer failureStepIndex, String failureReason, Long apiEvidenceId, JsonNode logEvidence) {}
 
     @Transactional
     public Asset create(Long projectId, CreateInput input, CurrentUser user) {
@@ -248,13 +248,16 @@ public class AutomationAssetService {
             throw new BusinessException("失败原因最多 2000 字");
         if (input.failureStepIndex() != null && (input.failureStepIndex() < 0 || input.failureStepIndex() > 100))
             throw new BusinessException("失败步骤编号无效");
+        Version evidenceVersion = version(projectId, assetId, input.versionNo(), user);
+        JsonNode logEvidence = LogAssertionPolicy.evidence(mapper, evidenceVersion.mapping(), input.result(), input.logEvidence());
         List<Run> existing = jdbc.sql("SELECT * FROM automation_run WHERE asset_id = :id AND request_key = :key")
                 .param("id", assetId).param("key", input.requestKey()).query(this::mapRun).list();
         if (!existing.isEmpty()) {
             Run run = existing.get(0);
             if (run.versionNo() != input.versionNo() || !run.result().equals(input.result())
                     || !Objects.equals(run.evidenceSessionId(), input.evidenceSessionId())
-                    || !Objects.equals(run.apiEvidenceId(), input.apiEvidenceId()))
+                    || !Objects.equals(run.apiEvidenceId(), input.apiEvidenceId())
+                    || !Objects.equals(run.logEvidence(), logEvidence))
                 throw new BusinessException("幂等键已用于其他运行结果");
             return run;
         }
@@ -288,10 +291,10 @@ public class AutomationAssetService {
         LocalDateTime now = clock.now();
         template.update("""
                 INSERT INTO automation_run(asset_id, version_no, result, duration_ms, evidence_session_id, api_evidence_id,
-                    failure_step_index, failure_reason, request_key, created_by, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    failure_step_index, failure_reason, request_key, created_by, created_at, log_evidence_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, assetId, input.versionNo(), input.result(), input.durationMs(), input.evidenceSessionId(), input.apiEvidenceId(),
-                input.failureStepIndex(), input.failureReason(), input.requestKey(), user.id(), now);
+                input.failureStepIndex(), input.failureReason(), input.requestKey(), user.id(), now, logEvidence == null ? null : json(logEvidence));
         Long runId = lastId();
         if ("PASS".equals(input.result())) {
             template.update("""
@@ -651,7 +654,7 @@ public class AutomationAssetService {
         return new Run(rs.getLong("id"), rs.getLong("asset_id"), rs.getInt("version_no"),
                 rs.getString("result"), rs.getLong("duration_ms"), rs.getObject("evidence_session_id", Long.class),
                 rs.getObject("failure_step_index", Integer.class), rs.getString("failure_reason"),
-                rs.getObject("api_evidence_id", Long.class));
+                rs.getObject("api_evidence_id", Long.class), rs.getString("log_evidence_json") == null ? null : parse(rs.getString("log_evidence_json")));
     }
 
     private String caseNo(Long projectId, String kind, Long caseId, CurrentUser user) {
@@ -689,19 +692,64 @@ public class AutomationAssetService {
         if (mapping == null || !mapping.isObject()) throw new BusinessException("执行映射必须是 JSON 对象");
         if (caseNo == null || caseNo.isBlank()) throw new BusinessException("归属用例缺少编号");
         if (!caseNo.equals(text(mapping, "caseNo"))) throw new BusinessException("执行映射的 caseNo 与归属用例不一致");
+        LogAssertionPolicy.validateMapping(mapping, "API".equals(type));
         if ("API".equals(type)) return canonicalApi(mapping);
         String page = text(mapping, "page");
         if (page == null || !page.startsWith("/") || page.startsWith("//") || page.length() > 1024)
             throw new BusinessException("页面须为被测站点内的相对路径");
         JsonNode steps = mapping.path("steps");
         JsonNode assertions = mapping.path("assertions");
+        JsonNode uiCoverage = mapping.path("uiCoverage");
+        if (!uiCoverage.isMissingNode()) {
+            if (!uiCoverage.isObject() || text(uiCoverage, "ruleCode") == null
+                    || !text(uiCoverage, "ruleCode").matches("[A-Z][A-Z0-9_]{2,63}")
+                    || text(uiCoverage, "fieldKey") == null
+                    || !text(uiCoverage, "fieldKey").matches("[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
+                    || !Set.of("POSITIVE", "NEGATIVE").contains(text(uiCoverage, "role"))
+                    || !uiCoverage.path("fieldStepIndex").canConvertToInt()
+                    || !uiCoverage.path("submitStepIndex").canConvertToInt())
+                throw new BusinessException("UI 必填项覆盖声明无效");
+        }
+        JsonNode ruleCoverage = mapping.path("ruleCoverage");
+        if (!ruleCoverage.isMissingNode() && (!ruleCoverage.isObject()
+                || text(ruleCoverage, "ruleCode") == null
+                || !text(ruleCoverage, "ruleCode").matches("[A-Z][A-Z0-9_]{2,63}")
+                || text(ruleCoverage, "subjectKey") == null
+                || !text(ruleCoverage, "subjectKey").matches("[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
+                || !ruleCoverage.path("assertionIndex").canConvertToInt()))
+            throw new BusinessException("UI 规则覆盖声明无效");
         if (!steps.isArray() || steps.isEmpty() || steps.size() > 100 || !assertions.isArray()
                 || assertions.isEmpty() || assertions.size() > 30) throw new BusinessException("步骤须为 1-100 条，断言须为 1-30 条");
         for (JsonNode step : steps) {
             if (!step.isObject() || text(step, "type") == null || !ACTIONS.contains(text(step, "type")))
-                throw new BusinessException("步骤须使用 type（click/fill/press/select/check/uncheck/waitFor），不能使用 action");
+                throw new BusinessException("步骤须使用 type（click/fill/press/select/check/uncheck/waitFor/scroll/drag），不能使用 action");
             validateLocator(step.path("locator"));
             waitMs(step.path("waitBefore"));
+            if ("scroll".equals(text(step, "type"))) {
+                JsonNode dy = step.path("deltaY");
+                JsonNode dx = step.path("deltaX");
+                JsonNode repeat = step.path("repeat");
+                if (!dy.isIntegralNumber() || !dy.canConvertToInt() || dy.asInt() == 0
+                        || dy.asInt() < -2000 || dy.asInt() > 2000
+                        || (!dx.isMissingNode() && (!dx.isIntegralNumber() || !dx.canConvertToInt()
+                            || dx.asInt() < -2000 || dx.asInt() > 2000))
+                        || (!repeat.isMissingNode() && (!repeat.isIntegralNumber() || !repeat.canConvertToInt()
+                            || repeat.asInt() < 1 || repeat.asInt() > 10)))
+                    throw new BusinessException("滚动步骤需要非零 deltaY（-2000 至 2000），deltaX 须在 ±2000 内，repeat 须为 1–10");
+            }
+            if ("drag".equals(text(step, "type"))) {
+                JsonNode dx = step.path("deltaX");
+                JsonNode dy = step.path("deltaY");
+                JsonNode moves = step.path("dragSteps");
+                if ((!dx.isMissingNode() && (!dx.isIntegralNumber() || !dx.canConvertToInt()
+                        || dx.asInt() < -2000 || dx.asInt() > 2000))
+                        || (!dy.isMissingNode() && (!dy.isIntegralNumber() || !dy.canConvertToInt()
+                            || dy.asInt() < -2000 || dy.asInt() > 2000))
+                        || (dx.asInt(0) == 0 && dy.asInt(0) == 0)
+                        || (!moves.isMissingNode() && (!moves.isIntegralNumber() || !moves.canConvertToInt()
+                            || moves.asInt() < 2 || moves.asInt() > 50)))
+                    throw new BusinessException("拖拽步骤需要非零 deltaX 或 deltaY（各在 ±2000 内），dragSteps 须为 2–50");
+            }
             if (step.has("waitForResponse")) {
                 if (!Set.of("click", "press").contains(text(step, "type")))
                     throw new BusinessException("业务响应等待只支持 click 或 press 步骤");
@@ -734,7 +782,11 @@ public class AutomationAssetService {
             }
             if (Set.of("fill", "press", "select").contains(text(step, "type"))) {
                 String data = text(step, "data");
-                if (data == null || data.isBlank() || data.length() > 1000)
+                int stepIndex = 0;
+                for (JsonNode previous : steps) { if (previous == step) break; stepIndex++; }
+                boolean negativeClear = "fill".equals(text(step, "type")) && "NEGATIVE".equals(text(uiCoverage, "role"))
+                        && stepIndex == uiCoverage.path("fieldStepIndex").asInt(-1) && "".equals(data);
+                if (data == null || !negativeClear && data.isBlank() || data.length() > 1000)
                     throw new BusinessException("输入步骤须使用 data，不能使用 value，且数据不能为空或过长");
                 if (data.matches("1[3-9]\\d{9}")) throw new BusinessException("真实格式手机号须改为运行时受控测试数据参数");
             }
@@ -752,9 +804,36 @@ public class AutomationAssetService {
             waitMs(assertion.path("waitBefore"));
             if (assertion.has("timeout") && (assertion.path("timeout").asInt(-1) < 0 || assertion.path("timeout").asInt() > 30000))
                 throw new BusinessException("断言超时须为 0-30000 毫秒");
+            if (assertion.has("state") && !Set.of("visible", "hidden").contains(text(assertion, "state")))
+                throw new BusinessException("断言状态只能是 visible 或 hidden");
+            if ("hidden".equals(text(assertion, "state")) && assertion.has("expected"))
+                throw new BusinessException("隐藏断言不能同时检查文本");
+        }
+        if (!uiCoverage.isMissingNode()) {
+            int fieldIndex = uiCoverage.path("fieldStepIndex").asInt(-1);
+            int submitIndex = uiCoverage.path("submitStepIndex").asInt(-1);
+            if (fieldIndex < 0 || fieldIndex >= steps.size() || submitIndex <= fieldIndex || submitIndex >= steps.size()
+                    || !"fill".equals(text(steps.get(fieldIndex), "type"))
+                    || !"click".equals(text(steps.get(submitIndex), "type")))
+                throw new BusinessException("必填项覆盖映射缺少清空/输入字段与提交动作");
+            String data = text(steps.get(fieldIndex), "data");
+            if ("NEGATIVE".equals(text(uiCoverage, "role"))) {
+                int errorIndex = uiCoverage.path("errorAssertionIndex").asInt(-1);
+                int noSuccessIndex = uiCoverage.path("noSuccessAssertionIndex").asInt(-1);
+                if (!"".equals(data) || errorIndex < 0 || errorIndex >= assertions.size()
+                        || noSuccessIndex < 0 || noSuccessIndex >= assertions.size()
+                        || !"hidden".equals(text(assertions.get(noSuccessIndex), "state"))
+                        || "hidden".equals(text(assertions.get(errorIndex), "state")))
+                    throw new BusinessException("单项留空映射须包含错误提示与无成功结果断言");
+            } else if (data == null || data.isBlank()) throw new BusinessException("必填项正向映射须提供有效输入");
+        }
+        if (!ruleCoverage.isMissingNode()) {
+            int index = ruleCoverage.path("assertionIndex").asInt(-1);
+            if (index < 0 || index >= assertions.size() || "hidden".equals(text(assertions.get(index), "state")))
+                throw new BusinessException("规则覆盖映射须引用可观察断言");
         }
         if (mapping.has("assetVersion") || mapping.has("healCount") || mapping.has("verified") || mapping.has("healedAt"))
-            throw new BusinessException("版本、验证状态和自愈次数由 Hub 管理，不得由模型填写");
+            throw new BusinessException("版本、验证状态和自愈次数由 AITestWork 管理，不得由模型填写");
         String json = json(mapping);
         if (json.length() > 100000) throw new BusinessException("执行映射最多 100000 字");
         return json;
@@ -845,7 +924,7 @@ public class AutomationAssetService {
                 throw new BusinessException("HTTP 状态断言须为 100-599 整数");
         }
         if (mapping.has("assetVersion") || mapping.has("healCount") || mapping.has("verified") || mapping.has("healedAt"))
-            throw new BusinessException("版本、验证状态和自愈次数由 Hub 管理");
+            throw new BusinessException("版本、验证状态和自愈次数由 AITestWork 管理");
         String json = json(mapping);
         if (json.length() > 100_000) throw new BusinessException("接口映射最多 100000 字");
         return json;

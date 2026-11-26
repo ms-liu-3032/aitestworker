@@ -15,7 +15,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
-@RequestMapping("/api/dsh/tools/projects/{projectId}")
+@RequestMapping("/api/aitestwork/dsh/tools/projects/{projectId}")
 public class DshDesignContextController {
     private final ProjectAccessService access;
     private final DshDesignContextService designContext;

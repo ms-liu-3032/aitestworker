@@ -12,7 +12,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
-@RequestMapping("/api/dsh/tools/projects/{projectId}/local-cases")
+@RequestMapping("/api/aitestwork/dsh/tools/projects/{projectId}/local-cases")
 public class DshLocalCaseController {
     private final DshLocalCaseService localCases;
 

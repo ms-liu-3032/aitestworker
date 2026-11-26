@@ -62,6 +62,6 @@ class EmailToolTest {
         ToolGenerateRequest req = new ToolGenerateRequest(10, null);
         ToolGenerateResponse resp = tool.generate(req);
         long distinct = resp.results().stream().distinct().count();
-        assertEquals(10, distinct, "All emails should be unique due to timestamp");
+        assertEquals(10, distinct, "All generated emails should be unique");
     }
 }

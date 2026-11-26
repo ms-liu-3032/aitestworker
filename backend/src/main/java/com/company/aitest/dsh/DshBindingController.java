@@ -15,7 +15,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
-@RequestMapping("/api/dsh")
+@RequestMapping("/api/aitestwork/dsh")
 public class DshBindingController {
     private final DshConnectionService connections;
 

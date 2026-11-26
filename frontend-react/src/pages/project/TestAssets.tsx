@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { useApp } from '../../context/AppContext';
 import {
@@ -22,7 +22,6 @@ const tabs: Array<{ key: TabKey; label: string }> = [
   { key: 'skills', label: 'Skill 模板' }, { key: 'tools', label: 'Tool 模板' },
 ];
 
-const asArray = <T,>(value: unknown): T[] => Array.isArray(value) ? value : [];
 const fmtDate = (value?: string | null) => value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '-';
 
 function StatCard({ title, value, subtitle }: { title: string; value: string; subtitle: string }) {
@@ -36,6 +35,8 @@ export default function TestAssets() {
   const [tab, setTab] = useState<TabKey>('summaries');
   const [keyword, setKeyword] = useState('');
   const [loading, setLoading] = useState(true);
+  const [loadErrors, setLoadErrors] = useState<string[]>([]);
+  const loadSequence = useRef(0);
   const [localCases, setLocalCases] = useState<LocalCaseDraft[]>([]);
   const [formalCases, setFormalCases] = useState<FormalCase[]>([]);
   const [summaries, setSummaries] = useState<SummaryAsset[]>([]);
@@ -46,27 +47,67 @@ export default function TestAssets() {
   const [editing, setEditing] = useState<Editor | null>(null);
 
   const loadAssets = async () => {
-    if (!pid) return;
+    const sequence = ++loadSequence.current;
+    if (!Number.isInteger(pid) || pid <= 0) {
+      setLoadErrors(['项目编号无效']);
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     try {
-      const [drafts, formal, summary, skill, tool, packs] = await Promise.all([
-        listLocalCases(pid).catch(() => []), listFormalCases(pid).catch(() => []),
-        listProjectSummaries(pid).catch(() => []), listProjectSkills(pid).catch(() => []),
-        listProjectTools(pid).catch(() => []), listWikiPacks(pid).catch(() => []),
+      const results = await Promise.allSettled([
+        listLocalCases(pid), listFormalCases(pid), listProjectSummaries(pid),
+        listProjectSkills(pid), listProjectTools(pid), listWikiPacks(pid),
       ]);
-      setLocalCases(asArray<LocalCaseDraft>(drafts));
-      setFormalCases(asArray<FormalCase>(formal));
-      setSummaries(asArray<SummaryAsset>(summary));
-      setSkills(asArray<ProjectSkillAsset>(skill));
-      setTools(asArray<ProjectToolAsset>(tool));
-      const projectPacks = asArray<WikiPack>(packs);
-      setWikiPacks(await Promise.all(projectPacks.map(async pack => ({ ...pack, entries: asArray<WikiEntry>(await listWikiEntries(pack.id).catch(() => [])) }))));
+      if (sequence !== loadSequence.current) return;
+      const errors: string[] = [];
+      const readList = <T,>(index: number, label: string): T[] => {
+        const result = results[index];
+        if (result.status === 'fulfilled' && Array.isArray(result.value)) return result.value as T[];
+        errors.push(`${label}加载失败`);
+        return [];
+      };
+      const drafts = readList<LocalCaseDraft>(0, '草稿用例');
+      const formal = readList<FormalCase>(1, '正式用例');
+      const summary = readList<SummaryAsset>(2, '轨迹摘要');
+      const skill = readList<ProjectSkillAsset>(3, 'Skill 模板');
+      const tool = readList<ProjectToolAsset>(4, 'Tool 模板');
+      const projectPacks = readList<WikiPack>(5, '项目 Wiki');
+      const packsWithEntries: WikiAssetPack[] = [];
+      for (let offset = 0; offset < projectPacks.length; offset += 4) {
+        const batch = projectPacks.slice(offset, offset + 4);
+        const entryResults = await Promise.allSettled(batch.map(pack => listWikiEntries(pack.id)));
+        if (sequence !== loadSequence.current) return;
+        batch.forEach((pack, index) => {
+          const result = entryResults[index];
+          if (result.status === 'fulfilled' && Array.isArray(result.value)) {
+            packsWithEntries.push({ ...pack, entries: result.value });
+          } else {
+            errors.push(`知识包 #${pack.id} 条目加载失败`);
+            packsWithEntries.push({ ...pack, entries: [] });
+          }
+        });
+      }
+      setLocalCases(drafts);
+      setFormalCases(formal);
+      setSummaries(summary);
+      setSkills(skill);
+      setTools(tool);
+      setWikiPacks(packsWithEntries);
+      setLoadErrors(errors);
     } catch (error: any) {
-      showToast(error.message || '加载测试资产失败', 'error');
-    } finally { setLoading(false); }
+      if (sequence === loadSequence.current) {
+        setLoadErrors([error.message || '加载测试资产失败']);
+      }
+    } finally {
+      if (sequence === loadSequence.current) setLoading(false);
+    }
   };
 
-  useEffect(() => { void loadAssets(); }, [pid]);
+  useEffect(() => {
+    void loadAssets();
+    return () => { loadSequence.current += 1; };
+  }, [pid]);
 
   const stats = useMemo(() => ({ summaries: summaries.length, drafts: localCases.length, formal: formalCases.length, wiki: wikiPacks.length, skills: skills.length, tools: tools.length }), [summaries, localCases, formalCases, wikiPacks, skills, tools]);
   const activeItems = useMemo((): any[] => ({ summaries, drafts: localCases, formal: formalCases, wiki: wikiPacks, skills, tools })[tab] || [], [tab, summaries, localCases, formalCases, wikiPacks, skills, tools]);
@@ -119,8 +160,16 @@ export default function TestAssets() {
         <span className="text-gray-400">→</span>
         <Link to={`/projects/${pid}/trace`} className="rounded bg-slate-50 px-2 py-1 text-slate-700">运行证据</Link>
       </div>
+      <div className="mt-3 border-t border-gray-100 pt-3 text-xs text-gray-600">
+        <span className="font-medium">待处理入口：</span>
+        <Link to={`/projects/${pid}/mini-tom`} className="ml-2 text-sky-700">TOM 候选与关系审核</Link>
+        <Link to={`/projects/${pid}/wiki`} className="ml-3 text-sky-700">Wiki 包与条目审核</Link>
+        <Link to={`/projects/${pid}/local-cases`} className="ml-3 text-sky-700">草稿确认与提交</Link>
+        <Link to={`/projects/${pid}/automation-assets`} className="ml-3 text-sky-700">自动化版本审核</Link>
+      </div>
     </div>
     <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between"><div><h1 className="text-xl font-bold tracking-tight text-gray-900">资产总览</h1><p className="mt-1 text-sm text-gray-500">集中查看项目资产；TOM、Wiki、用例和自动化映射在各自页面维护与审核。</p></div><div className="flex gap-3"><Link to={`/projects/${pid}/trace`} className="text-sm text-gray-500 hover:text-gray-900">返回轨迹页</Link><button onClick={loadAssets} className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">刷新资产</button></div></div>
+    {loadErrors.length > 0 && <div role="alert" className="mb-4 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">{loadErrors.join('；')}。下方数字仅代表成功加载的数据，不能作为资产总数。<button onClick={loadAssets} className="ml-2 font-semibold underline">重试</button></div>}
     <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-6"><StatCard title="轨迹摘要" value={`${stats.summaries}`} subtitle="已沉淀摘要" /><StatCard title="草稿用例" value={`${stats.drafts}`} subtitle="待整理草稿" /><StatCard title="正式用例" value={`${stats.formal}`} subtitle="已提交正式库" /><StatCard title="项目 Wiki" value={`${stats.wiki}`} subtitle="待审核知识包" /><StatCard title="Skill 模板" value={`${stats.skills}`} subtitle="可复用操作模板" /><StatCard title="Tool 模板" value={`${stats.tools}`} subtitle="可复用工具模板" /></div>
     <div className="mb-4 flex w-fit max-w-full flex-wrap gap-1 rounded-lg bg-gray-100 p-0.5">{tabs.map(item => <button key={item.key} onClick={() => setTab(item.key)} className={`rounded-md px-3 py-1.5 text-xs font-medium ${tab === item.key ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>{item.label} <span className="ml-1 text-[10px] text-gray-400">{stats[item.key]}</span></button>)}</div>
     <div className="mb-4 rounded-xl border border-gray-200 bg-white p-4"><div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between"><div><div className="text-sm font-semibold text-gray-900">{tabs.find(item => item.key === tab)?.label}</div><div className="mt-1 text-xs text-gray-500">当前展示 {items.length} / {stats[tab]} 条，按关键词定位资产。</div></div><input value={keyword} onChange={event => setKeyword(event.target.value)} placeholder="搜索名称、内容、模块、状态..." className="h-10 w-full rounded-lg border border-gray-200 bg-gray-50 px-3 text-sm outline-none md:w-80" /></div></div>

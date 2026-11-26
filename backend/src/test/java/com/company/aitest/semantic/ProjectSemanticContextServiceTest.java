@@ -23,6 +23,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -141,6 +142,23 @@ class ProjectSemanticContextServiceTest {
         assertEquals(0, result.termCount());
         verify(jdbcTemplate).update(anyString(), eq(9L), eq(0), eq(0), anyString(), any(), any(), any());
         verify(jdbcTemplate).update("delete from semantic_pack_item where pack_id = ?", 7L);
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    void refreshSnapshot_doesNotCreateDuplicatedBusinessPackItemsByDefault() {
+        JdbcTemplate jdbcTemplate = mock(JdbcTemplate.class);
+        var service = new ProjectSemanticContextService(jdbcTemplate);
+        var businessPacks = mock(com.company.aitest.businesspack.BusinessPackService.class);
+        service.setBusinessPackService(businessPacks);
+        when(jdbcTemplate.query(anyString(), any(RowMapper.class), anyLong(), anyLong())).thenReturn(List.of());
+        when(jdbcTemplate.query(anyString(), any(RowMapper.class), anyLong())).thenReturn(List.of());
+        doNothing().when(jdbcTemplate).query(anyString(), any(RowCallbackHandler.class), anyLong());
+        when(jdbcTemplate.queryForObject(anyString(), eq(Long.class), anyLong())).thenReturn(7L);
+
+        service.refreshSnapshot(9L);
+
+        verify(businessPacks, never()).refreshForProject(anyLong());
     }
 
     @Test

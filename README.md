@@ -78,9 +78,10 @@ npm run dev
 
 ### DeepSeek Harness 本机插件
 - DSH 负责需求分析、用例设计、工具编排和 UI/API 自动化；后端提供同一套项目、TOM、Wiki、用例、自动化资产与证据服务
-- 无需 Hub 绑定即可在本机设计测试点和独立用例，用 Playwright 执行 UI 自动化并保存截图报告与 trace
+- 无需 AITestWork 绑定即可在本机设计测试点和独立用例，用 Playwright 执行 UI 自动化并保存截图报告与 trace
 - 需要项目 TOM、Wiki、正式用例或证据回写时，用户在原 Web 登录后生成一次性绑定码，在本机 DSH 中绑定；原 Web 端继续可用
-- 插件内含跨业务 Skill 和浏览器采集模块；每次自动化执行生成本地 HTML 报告，原始证据回写 Hub
+- 插件内含跨业务 Skill 和浏览器采集模块；每次自动化执行生成本地 HTML 报告，原始证据回写 AITestWork
+- UI 映射支持滚轮 `scroll` 和指针拖拽 `drag`，可用于日期滚轮等控件；每次执行仍须用页面断言核对实际选中值。完成的 UI/API 报告会更新同一个本地报告首页
 - 在仓库根目录运行 `./packaging/build-dsh-plugin-package.sh`，分享 `release/dsh-plugin/` 中的 `.tgz` 和安装说明
 
 ### 需求分析与用例生成主链路
@@ -124,7 +125,7 @@ npm run dev
 ```text
 backend/          Spring Boot 3.x 后端
 frontend-react/   React 18 + TypeScript + Vite 前端
-dsh-aitesthub/    本机 DeepSeek Harness 插件与跨业务 Skill
+dsh-aitestwork/    本机 DeepSeek Harness 插件与跨业务 Skill
 local-browser-worker/  插件复用的浏览器采集模块及旧版独立客户端
 packaging/        打包与部署脚本
 ```
@@ -176,7 +177,7 @@ AITEST_GENERATION_TASK_MAX_RUNTIME_SECONDS=14400
 
 ### 数据库
 
-Flyway 迁移文件位于 `backend/src/main/resources/db/migration/`，按版本号递增管理。开源版保留已发布的 V1–V54 校验和；Hub 后续功能迁移在本仓库从 V55 接续，语雀集成表由 V73 创建。不要把另一个部署分支的同号迁移直接覆盖到此仓库。
+Flyway 迁移文件位于 `backend/src/main/resources/db/migration/`，按版本号递增管理。开源版保留已发布的 V1–V54 校验和；AITestWork 后续功能迁移在本仓库从 V55 接续，语雀集成表由 V73 创建。不要把另一个部署分支的同号迁移直接覆盖到此仓库。
 
 ## 业务接入
 
@@ -189,7 +190,7 @@ Flyway 迁移文件位于 `backend/src/main/resources/db/migration/`，按版本
 5. **人工审核**：确认、合并、拆分业务包
 6. **持续演化**：后续使用过程中持续更新
 
-自动沉淀不会直接污染正式知识：Wiki 候选需要先审核条目、再审核知识包并激活；TOM 候选需要人工确认。服务端仍保留原 Web 的模型生成能力；通过 DSH 插件发起的设计由本机 DSH 模型完成，Hub 后端在这条路径上只提供数据、确定性校验和治理，不需要为 DSH 路径另配后端推理 Token。
+自动沉淀不会直接污染正式知识：Wiki 候选需要先审核条目、再审核知识包并激活；TOM 候选需要人工确认。服务端仍保留原 Web 的模型生成能力；通过 DSH 插件发起的设计由本机 DSH 模型完成，AITestWork 后端在这条路径上只提供数据、确定性校验和治理，不需要为 DSH 路径另配后端推理 Token。
 
 ## 开发
 

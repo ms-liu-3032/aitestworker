@@ -12,14 +12,14 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
-@RequestMapping("/api/dsh/tools/telemetry")
+@RequestMapping("/api/aitestwork/dsh/tools/telemetry")
 public class DshTelemetryController {
     private static final Logger log = LoggerFactory.getLogger(DshTelemetryController.class);
 
     @PostMapping
     public ApiResponse<Void> record(@Valid @RequestBody Event event, Authentication auth) {
         var principal = (DshConnectionService.DshPrincipal) auth.getPrincipal();
-        if (!event.toolName().matches("aitest_[a-z_]{1,80}")
+        if (!event.toolName().matches("aitestwork_[a-z_]{1,80}")
                 || !event.state().matches("STARTED|SUCCEEDED|FAILED|ABORTED")
                 || event.callId().length() > 128 || (event.errorCode() != null && event.errorCode().length() > 80)) {
             throw new IllegalArgumentException("DSH 运行事件格式错误");
