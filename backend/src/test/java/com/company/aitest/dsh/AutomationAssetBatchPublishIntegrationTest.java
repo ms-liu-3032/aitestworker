@@ -15,9 +15,91 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 @SpringBootTest
 class AutomationAssetBatchPublishIntegrationTest {
     @Autowired AutomationAssetService assets;
+    @Autowired AutomationAssetPromotionService promotions;
+    @Autowired com.company.aitest.generation.session.GenerationCaseLibraryService caseLibrary;
     @Autowired DshWorkSessionService sessions;
     @Autowired com.company.aitest.review.AssetReviewInboxQuery reviewInbox;
     @Autowired JdbcClient jdbc;
+
+    @Test
+    void personalDraftsCanBePromotedInOneBatchWithoutLosingVerifiedMapping() {
+        CurrentUser owner = new CurrentUser(1L, "promotion-owner", "ADMIN");
+        jdbc.sql("INSERT INTO project(project_name, status, created_at, updated_at) VALUES ('草稿升级测试', 'ACTIVE', NOW(), NOW())")
+                .update();
+        long projectId = lastId();
+        try {
+            long first = personalAsset(projectId, "PROMOTE-1", "VERIFIED");
+            long second = personalAsset(projectId, "PROMOTE-2", "VERIFIED");
+            long invalid = personalAsset(projectId, "PROMOTE-3", "DRAFT");
+            CurrentUser anotherAdmin = new CurrentUser(2L, "other-admin", "ADMIN");
+            assertEquals(0, assets.page(projectId, 1, 50, anotherAdmin).total(),
+                    "个人草稿映射在提交前仅本人可见");
+            assertThrows(BusinessException.class, () -> assets.get(projectId, first, anotherAdmin));
+            var selected = new AutomationAssetPromotionService.BatchInput(List.of(
+                    new AutomationAssetPromotionService.Target(first, 1),
+                    new AutomationAssetPromotionService.Target(invalid, 1)));
+            assertThrows(BusinessException.class, () -> promotions.promote(projectId, selected, owner));
+            assertEquals(0, jdbc.sql("SELECT COUNT(*) FROM test_case_asset WHERE project_id=:id")
+                    .param("id", projectId).query(Integer.class).single(), "任一映射无效时整批回滚");
+            assertEquals("DRAFT", assets.get(projectId, first, owner).caseKind());
+            assertThrows(BusinessException.class, () -> promotions.promote(projectId,
+                    new AutomationAssetPromotionService.BatchInput(List.of(
+                            new AutomationAssetPromotionService.Target(first, 1))),
+                    new CurrentUser(2L, "other", "USER")));
+
+            long secondDraft = jdbc.sql("SELECT case_id FROM automation_asset WHERE id=:id")
+                    .param("id", second).query(Long.class).single();
+            caseLibrary.submitToFormal(projectId, secondDraft, owner);
+
+            var promoted = promotions.promote(projectId, new AutomationAssetPromotionService.BatchInput(List.of(
+                    new AutomationAssetPromotionService.Target(second, 1),
+                    new AutomationAssetPromotionService.Target(first, 1))), owner);
+            assertEquals(2, promoted.size());
+            assertEquals("FORMAL", assets.get(projectId, first, owner).caseKind());
+            assertEquals(2, assets.page(projectId, 1, 50, anotherAdmin).total(),
+                    "升级后的项目正式资产对项目管理员可见");
+            assertEquals("VERIFIED", assets.get(projectId, first, owner).status());
+            assertEquals("APPROVED", assets.get(projectId, first, owner).reviewStatus());
+            assertEquals(first, assets.get(projectId, first, owner).id());
+            assertEquals(1, jdbc.sql("SELECT COUNT(*) FROM automation_asset_version WHERE asset_id=:id")
+                    .param("id", first).query(Integer.class).single());
+            assertEquals(1, jdbc.sql("SELECT COUNT(*) FROM test_case_asset WHERE id=:id AND case_status='SUBMITTED'")
+                    .param("id", promoted.get(0).formalCaseId()).query(Integer.class).single());
+            var published = assets.publishReusableBatch(projectId, new AutomationAssetService.BatchPublicationInput(List.of(
+                    new AutomationAssetService.PublicationTarget(first, 1),
+                    new AutomationAssetService.PublicationTarget(second, 1))), owner);
+            assertEquals(2, published.size());
+            assertThrows(BusinessException.class, () -> assets.requestSystemBatch(projectId,
+                    new AutomationAssetService.BatchPublicationInput(List.of(
+                            new AutomationAssetService.PublicationTarget(first, 1),
+                            new AutomationAssetService.PublicationTarget(invalid, 1))), owner));
+            assertEquals(0, jdbc.sql("SELECT COUNT(*) FROM automation_publication WHERE project_id=:id AND scope='SYSTEM'")
+                    .param("id", projectId).query(Integer.class).single(), "系统级申请整批回滚");
+            assertEquals(2, assets.requestSystemBatch(projectId,
+                    new AutomationAssetService.BatchPublicationInput(List.of(
+                            new AutomationAssetService.PublicationTarget(first, 1),
+                            new AutomationAssetService.PublicationTarget(second, 1))), owner).size());
+            var pending = assets.publications(projectId, first, owner).stream()
+                    .filter(item -> "SYSTEM".equals(item.scope())).findFirst().orElseThrow();
+            var otherPending = assets.publications(projectId, second, owner).stream()
+                    .filter(item -> "SYSTEM".equals(item.scope())).findFirst().orElseThrow();
+            var reviews = new AutomationAssetService.BatchSystemReviewInput(List.of(
+                    new AutomationAssetService.SystemReviewTarget(first, pending.id()),
+                    new AutomationAssetService.SystemReviewTarget(second, otherPending.id())));
+            assertThrows(BusinessException.class, () -> assets.approveSystemBatch(projectId, reviews,
+                    new CurrentUser(2L, "member", "USER")));
+            assertEquals(2, assets.approveSystemBatch(projectId, reviews, owner).size());
+            assertEquals(2, assets.page(projectId, 1, 50, "SYSTEM", "UI", owner).total());
+        } finally {
+            jdbc.sql("DELETE FROM automation_publication WHERE project_id=:id").param("id", projectId).update();
+            jdbc.sql("DELETE v FROM automation_asset_version v JOIN automation_asset a ON a.id=v.asset_id WHERE a.project_id=:id")
+                    .param("id", projectId).update();
+            jdbc.sql("DELETE FROM automation_asset WHERE project_id=:id").param("id", projectId).update();
+            jdbc.sql("DELETE FROM test_case_asset WHERE project_id=:id").param("id", projectId).update();
+            jdbc.sql("DELETE FROM test_case_draft WHERE project_id=:id").param("id", projectId).update();
+            jdbc.sql("DELETE FROM project WHERE id=:id").param("id", projectId).update();
+        }
+    }
 
     @Test
     void batchIsAtomicVersionBoundAndIdempotent() {
@@ -194,6 +276,32 @@ class AutomationAssetBatchPublishIntegrationTest {
                 VALUES (:assetId, 1, '{}', REPEAT('0', 64), '批量发布测试', 'INITIAL', 'VERIFIED', :caseNo,
                     1, NOW(), 'APPROVED')
                 """).param("assetId", assetId).param("caseNo", caseNo).update();
+        return assetId;
+    }
+
+    private long personalAsset(long projectId, String caseNo, String status) {
+        jdbc.sql("""
+                INSERT INTO test_case_draft(task_id, project_id, case_no, case_title, module_name,
+                    precondition, steps, expected_result, created_by, created_at, updated_at)
+                VALUES (1, :projectId, :caseNo, :caseNo, '访客', '已有登录账号', '打开邀请页', '页面显示',
+                    1, NOW(), NOW())
+                """).param("projectId", projectId).param("caseNo", caseNo).update();
+        long caseId = lastId();
+        jdbc.sql("""
+                INSERT INTO automation_asset(project_id, case_kind, case_id, asset_type, source_work_session_id,
+                    source_case_version, scope, status, current_version, heal_count, request_key, created_by,
+                    created_at, updated_at)
+                VALUES (:projectId, 'DRAFT', :caseId, 'UI', 1, 1, 'PROJECT', :status, 1, 0, :caseNo, 1,
+                    NOW(), NOW())
+                """).param("projectId", projectId).param("caseId", caseId).param("status", status)
+                .param("caseNo", caseNo).update();
+        long assetId = lastId();
+        jdbc.sql("""
+                INSERT INTO automation_asset_version(asset_id, version_no, mapping_json, mapping_hash, change_reason,
+                    revision_kind, status, request_key, created_by, created_at, review_status)
+                VALUES (:assetId, 1, '{}', REPEAT('0', 64), '升级测试', 'INITIAL', :status, :caseNo,
+                    1, NOW(), 'APPROVED')
+                """).param("assetId", assetId).param("status", status).param("caseNo", caseNo).update();
         return assetId;
     }
 

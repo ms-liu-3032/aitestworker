@@ -2,7 +2,9 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { useApp } from '../../context/AppContext';
 import {
-  approveAutomationVersion, batchApproveAutomationVersions, batchPublishAutomationAssets, archiveAutomationAsset, discardAutomationCandidate,
+  approveAutomationVersion, batchApproveAutomationVersions, batchApproveSystemAutomation,
+  batchPromoteAutomationDrafts, batchPublishAutomationAssets,
+  batchRequestSystemAutomation, archiveAutomationAsset, discardAutomationCandidate,
   getAutomationApiEvidence, getAutomationVersion, getAutomationAsset, getAutomationPermissions, listAutomationAssetsPage,
   listAutomationPublications, listAutomationAdoptions, requestSystemAutomationPublication, reviewSystemAutomationPublication,
   withdrawAutomationPublication, listAutomationRuns,
@@ -41,6 +43,33 @@ function publicationBlocker(asset: AutomationAsset): string | null {
   return null;
 }
 
+function promotionBlocker(asset: AutomationAsset): string | null {
+  const blocker = approvalBlocker(asset);
+  if (blocker) return blocker;
+  if (asset.caseKind !== 'DRAFT') return '已属于项目正式用例';
+  if (asset.reviewStatus !== 'APPROVED') return '请先审核执行映射';
+  if (asset.latestVersion > asset.currentVersion) return '请先处理待验证候选版';
+  return null;
+}
+
+function systemRequestBlocker(asset: AutomationAsset): string | null {
+  const blocker = approvalBlocker(asset);
+  if (blocker) return blocker;
+  if (!asset.reusablePublicationId) return '请先发布跨项目复用版';
+  if (asset.systemPublicationId) return '系统级已生效';
+  if (asset.systemRequestId) return '系统级申请待审核';
+  return null;
+}
+
+type SelectionMode = 'PROMOTE' | 'REVIEW' | 'PUBLISH' | 'SYSTEM' | 'SYSTEM_REVIEW';
+function selectionBlocker(asset: AutomationAsset, mode: SelectionMode): string | null {
+  if (mode === 'PROMOTE') return promotionBlocker(asset);
+  if (mode === 'REVIEW') return approvalBlocker(asset) || (asset.reviewStatus === 'PENDING' ? null : '当前版本无需审核');
+  if (mode === 'PUBLISH') return publicationBlocker(asset);
+  if (mode === 'SYSTEM_REVIEW') return asset.systemRequestId ? null : '没有系统级待审申请';
+  return systemRequestBlocker(asset);
+}
+
 export default function AutomationAssets() {
   const { projectId } = useParams<{ projectId: string }>();
   const [params] = useSearchParams();
@@ -67,7 +96,7 @@ export default function AutomationAssets() {
   const [editJson, setEditJson] = useState('');
   const [changeReason, setChangeReason] = useState('');
   const [checkedIds, setCheckedIds] = useState<number[]>([]);
-  const [selectionMode, setSelectionMode] = useState<'REVIEW' | 'PUBLISH'>('REVIEW');
+  const [selectionMode, setSelectionMode] = useState<SelectionMode>('PROMOTE');
   const [coverageTasks, setCoverageTasks] = useState<UiCoverageVerdict[]>([]);
   const [pendingRules, setPendingRules] = useState<UiExecutionRule[]>([]);
 
@@ -84,8 +113,7 @@ export default function AutomationAssets() {
       setCoverageTasks(coverage);
       setPendingRules(rules);
       setCheckedIds(ids => ids.filter(id => result.items.some(asset => asset.id === id
-        && (selectionMode === 'REVIEW' ? !approvalBlocker(asset) && asset.reviewStatus === 'PENDING'
-          : !publicationBlocker(asset)))));
+        && !selectionBlocker(asset, selectionMode))));
     }
     catch (error: any) { showToast(error.message || '加载自动化资产失败', 'error'); }
     finally { setLoading(false); }
@@ -226,10 +254,26 @@ export default function AutomationAssets() {
     finally { setBusy(false); }
   };
 
-  const eligible = items.filter(asset => (selectionMode === 'REVIEW'
-    ? (permissions.canManage || asset.caseKind === 'DRAFT') && !approvalBlocker(asset) && asset.reviewStatus === 'PENDING'
-    : permissions.canManage && !publicationBlocker(asset))
-    );
+  const eligible = items.filter(asset => !selectionBlocker(asset, selectionMode)
+    && (selectionMode === 'PROMOTE' || selectionMode === 'REVIEW'
+      ? selectionMode === 'PROMOTE' || permissions.canManage || asset.caseKind === 'DRAFT'
+      : selectionMode === 'SYSTEM_REVIEW' ? permissions.canReviewSystem : permissions.canManage));
+  const selectedTargets = () => eligible.filter(asset => checkedIds.includes(asset.id))
+    .map(asset => ({ assetId: asset.id, versionNo: asset.currentVersion }));
+  const batchPromote = async () => {
+    const targets = selectedTargets();
+    if (!targets.length || !window.confirm(`将 ${targets.length} 条个人草稿用例及其已验证映射提交为项目正式资产？提交后项目成员可见。`)) return;
+    setBusy(true);
+    try {
+      await batchPromoteAutomationDrafts(project, targets);
+      setCheckedIds([]);
+      setSelectionMode('PUBLISH');
+      showToast(`已提交 ${targets.length} 项到项目正式资产；现在可批量发布复用版`);
+      if (selected && targets.some(target => target.assetId === selected.id)) setSelected(await getAutomationAsset(project, selected.id));
+      await refresh();
+    } catch (error: any) { showToast(error.message || '批量提交失败；未升级任何资产', 'error'); }
+    finally { setBusy(false); }
+  };
   const batchApprove = async () => {
     const targets = eligible.filter(asset => checkedIds.includes(asset.id))
       .map(asset => ({ assetId: asset.id, versionNo: asset.currentVersion }));
@@ -258,11 +302,51 @@ export default function AutomationAssets() {
     finally { setBusy(false); }
   };
 
+  const batchRequestSystem = async () => {
+    const targets = selectedTargets();
+    if (!targets.length) return;
+    setBusy(true);
+    try {
+      await batchRequestSystemAutomation(project, targets);
+      setCheckedIds([]);
+      showToast(`已提交 ${targets.length} 项系统级审核申请`);
+      await refresh();
+    } catch (error: any) { showToast(error.message || '批量申请失败；未提交任何资产', 'error'); }
+    finally { setBusy(false); }
+  };
+  const batchApproveSystem = async () => {
+    const targets = eligible.filter(asset => checkedIds.includes(asset.id) && asset.systemRequestId)
+      .map(asset => ({ assetId: asset.id, publicationId: asset.systemRequestId! }));
+    if (!targets.length) return;
+    setBusy(true);
+    try {
+      await batchApproveSystemAutomation(project, targets);
+      setCheckedIds([]);
+      showToast(`已审核通过 ${targets.length} 项系统级发布申请`);
+      await refresh();
+    } catch (error: any) { showToast(error.message || '系统级批量审核失败；未通过任何申请', 'error'); }
+    finally { setBusy(false); }
+  };
+
   return <div className="p-4 sm:p-6">
     <div className="mb-5 flex items-start justify-between gap-3">
       <div><h1 className="text-xl font-bold text-gray-900">自动化资产</h1>
-        <p className="mt-1 text-sm text-gray-500">仅已验证且关联用例未变更的映射可以审核。审核通过的正式用例映射可批量发布冻结复用版，每批最多 100 项；历史版本、运行和证据可回看。</p></div>
-      <div className="flex flex-wrap gap-2"><select aria-label="资产类型" value={typeFilter} onChange={event => { setTypeFilter(event.target.value as 'ALL' | 'UI' | 'API'); setPage(1); setCheckedIds([]); }} className="rounded-lg border px-3 py-2 text-sm"><option value="ALL">全部类型</option><option value="UI">UI 自动化</option><option value="API">接口自动化</option></select><select aria-label="升级层级" value={scopeFilter} onChange={event => { setScopeFilter(event.target.value as typeof scopeFilter); setPage(1); setCheckedIds([]); }} className="rounded-lg border px-3 py-2 text-sm"><option value="ALL">全部层级</option><option value="PROJECT">仅项目级</option><option value="REUSABLE">已发布复用级</option><option value="PENDING_SYSTEM">系统级待审核</option><option value="SYSTEM">系统级已生效</option></select><select aria-label="批量操作" value={selectionMode} onChange={event => { setSelectionMode(event.target.value as 'REVIEW' | 'PUBLISH'); setCheckedIds([]); }} className="rounded-lg border px-3 py-2 text-sm"><option value="REVIEW">选择待审核资产</option><option value="PUBLISH">选择可发布复用资产</option></select>{selectionMode === 'REVIEW' ? <button disabled={busy || checkedIds.length === 0} onClick={batchApprove} className="rounded-lg bg-green-700 px-3 py-2 text-sm text-white disabled:opacity-50">批量审核已选（{checkedIds.length}）</button> : <button disabled={busy || checkedIds.length === 0} onClick={batchPublish} className="rounded-lg bg-blue-700 px-3 py-2 text-sm text-white disabled:opacity-50">批量发布复用版（{checkedIds.length}）</button>}<button onClick={refresh} className="rounded-lg border px-3 py-2 text-sm">刷新</button></div>
+        <p className="mt-1 text-sm text-gray-500">升级路径：个人草稿 → 项目正式资产 → 跨项目复用版 → 系统级审核。每一步均支持批量选择，单次最多 100 项；原执行版本、运行与证据保留。</p></div>
+      <div className="flex flex-wrap gap-2">
+        <select aria-label="资产类型" value={typeFilter} onChange={event => { setTypeFilter(event.target.value as 'ALL' | 'UI' | 'API'); setPage(1); setCheckedIds([]); }} className="rounded-lg border px-3 py-2 text-sm"><option value="ALL">全部类型</option><option value="UI">UI 自动化</option><option value="API">接口自动化</option></select>
+        <select aria-label="升级层级" value={scopeFilter} onChange={event => { setScopeFilter(event.target.value as typeof scopeFilter); setPage(1); setCheckedIds([]); }} className="rounded-lg border px-3 py-2 text-sm"><option value="ALL">全部层级</option><option value="PROJECT">仅项目级</option><option value="REUSABLE">已发布复用级</option><option value="PENDING_SYSTEM">系统级待审核</option><option value="SYSTEM">系统级已生效</option></select>
+        <select aria-label="批量操作" value={selectionMode} onChange={event => { setSelectionMode(event.target.value as SelectionMode); setCheckedIds([]); }} className="rounded-lg border px-3 py-2 text-sm">
+          <option value="PROMOTE">① 草稿提交项目正式资产</option><option value="REVIEW">审核待审映射</option>
+          <option value="PUBLISH">② 项目资产发布复用版</option><option value="SYSTEM">③ 复用版申请系统级</option>
+          {permissions.canReviewSystem && <option value="SYSTEM_REVIEW">④ 系统级申请批量审核</option>}
+        </select>
+        {selectionMode === 'PROMOTE' && <button disabled={busy || checkedIds.length === 0} onClick={batchPromote} className="rounded-lg bg-indigo-700 px-3 py-2 text-sm text-white disabled:opacity-50">批量提交项目正式资产（{checkedIds.length}）</button>}
+        {selectionMode === 'REVIEW' && <button disabled={busy || checkedIds.length === 0} onClick={batchApprove} className="rounded-lg bg-green-700 px-3 py-2 text-sm text-white disabled:opacity-50">批量审核已选（{checkedIds.length}）</button>}
+        {selectionMode === 'PUBLISH' && <button disabled={busy || checkedIds.length === 0} onClick={batchPublish} className="rounded-lg bg-blue-700 px-3 py-2 text-sm text-white disabled:opacity-50">批量发布复用版（{checkedIds.length}）</button>}
+        {selectionMode === 'SYSTEM' && <button disabled={busy || checkedIds.length === 0} onClick={batchRequestSystem} className="rounded-lg bg-purple-700 px-3 py-2 text-sm text-white disabled:opacity-50">批量申请系统级审核（{checkedIds.length}）</button>}
+        {selectionMode === 'SYSTEM_REVIEW' && <button disabled={busy || checkedIds.length === 0} onClick={batchApproveSystem} className="rounded-lg bg-green-700 px-3 py-2 text-sm text-white disabled:opacity-50">批量通过系统级申请（{checkedIds.length}）</button>}
+        <button onClick={refresh} className="rounded-lg border px-3 py-2 text-sm">刷新</button>
+      </div>
     </div>
     <section className="mb-5 rounded-xl border bg-white p-5" aria-label="UI 规则覆盖任务">
       <h2 className="font-semibold">UI 规则覆盖任务</h2>
@@ -298,9 +382,9 @@ export default function AutomationAssets() {
     {loading ? <p className="text-sm text-gray-500">加载中…</p> : items.length === 0
       ? <div className="rounded-xl border bg-white p-8 text-center text-sm text-gray-500">暂无自动化资产。可在 DSH 中对已有用例提出执行映射，跑通后会显示为已验证。</div>
       : <div className="overflow-x-auto rounded-xl border bg-white"><table className="w-full min-w-[860px] text-left text-sm">
-          <thead className="bg-gray-50 text-gray-500"><tr><th className="p-3"><input type="checkbox" aria-label={selectionMode === 'REVIEW' ? '选择全部可审核资产' : '选择全部可发布资产'} checked={eligible.length > 0 && eligible.slice(0, 100).every(asset => checkedIds.includes(asset.id))} onChange={event => setCheckedIds(event.target.checked ? eligible.slice(0, 100).map(asset => asset.id) : [])} /></th><th className="p-3">用例</th><th className="p-3">类型</th><th className="p-3">归属</th><th className="p-3">提交人</th><th className="p-3">执行状态</th><th className="p-3">审核</th><th className="p-3">当前版本</th><th className="p-3">自愈次数</th><th className="p-3">操作</th></tr></thead>
+          <thead className="bg-gray-50 text-gray-500"><tr><th className="p-3"><input type="checkbox" aria-label={selectionMode === 'PROMOTE' ? '选择全部可提交草稿资产' : selectionMode === 'REVIEW' ? '选择全部可审核资产' : selectionMode === 'SYSTEM' ? '选择全部可申请系统级资产' : selectionMode === 'SYSTEM_REVIEW' ? '选择全部待审系统级申请' : '选择全部可发布资产'} checked={eligible.length > 0 && eligible.slice(0, 100).every(asset => checkedIds.includes(asset.id))} onChange={event => setCheckedIds(event.target.checked ? eligible.slice(0, 100).map(asset => asset.id) : [])} /></th><th className="p-3">用例</th><th className="p-3">类型</th><th className="p-3">归属</th><th className="p-3">提交人</th><th className="p-3">执行状态</th><th className="p-3">审核</th><th className="p-3">当前版本</th><th className="p-3">自愈次数</th><th className="p-3">操作</th></tr></thead>
           <tbody>{items.map(asset => <tr key={asset.id} className="border-t">
-            <td className="p-3" title={(selectionMode === 'REVIEW' ? approvalBlocker(asset) : publicationBlocker(asset)) || undefined}><input type="checkbox" aria-label={`选择资产 ${asset.caseNo || asset.id}`} disabled={!eligible.some(item => item.id === asset.id) || (checkedIds.length >= 100 && !checkedIds.includes(asset.id))} checked={checkedIds.includes(asset.id)} onChange={event => setCheckedIds(ids => event.target.checked ? [...ids, asset.id] : ids.filter(id => id !== asset.id))} /></td>
+            <td className="p-3" title={selectionBlocker(asset, selectionMode) || undefined}><input type="checkbox" aria-label={`选择资产 ${asset.caseNo || asset.id}`} disabled={!eligible.some(item => item.id === asset.id) || (checkedIds.length >= 100 && !checkedIds.includes(asset.id))} checked={checkedIds.includes(asset.id)} onChange={event => setCheckedIds(ids => event.target.checked ? [...ids, asset.id] : ids.filter(id => id !== asset.id))} /></td>
             <td className="p-3 font-medium">{asset.caseNo || `#${asset.caseId}`}</td>
             <td className="p-3">{asset.assetType === 'API' ? '接口' : 'UI'}</td>
             <td className="p-3">{asset.caseKind === 'FORMAL' ? '正式用例' : '个人草稿'}</td>

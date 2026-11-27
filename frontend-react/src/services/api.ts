@@ -995,6 +995,22 @@ export function batchPublishAutomationAssets(projectId: number, targets: { asset
       method: 'POST', body: JSON.stringify({ targets }),
     })
 }
+export function batchPromoteAutomationDrafts(projectId: number, targets: { assetId: number; versionNo: number }[]) {
+  return api<{ assetId: number; formalCaseId: number; versionNo: number }[]>(
+    `/api/projects/${projectId}/automation-assets/batch-promote-drafts`, {
+      method: 'POST', body: JSON.stringify({ targets }),
+    })
+}
+export function batchRequestSystemAutomation(projectId: number, targets: { assetId: number; versionNo: number }[]) {
+  return api<AutomationPublication[]>(`/api/projects/${projectId}/automation-assets/batch-request-system`, {
+    method: 'POST', body: JSON.stringify({ targets }),
+  })
+}
+export function batchApproveSystemAutomation(projectId: number, targets: { assetId: number; publicationId: number }[]) {
+  return api<AutomationPublication[]>(`/api/projects/${projectId}/automation-assets/batch-approve-system`, {
+    method: 'POST', body: JSON.stringify({ targets }),
+  })
+}
 export function approveAutomationVersion(projectId: number, assetId: number, versionNo: number) {
   return api<AutomationVersion>(`/api/projects/${projectId}/automation-assets/${assetId}/versions/${versionNo}/approve`, { method: 'POST' })
 }

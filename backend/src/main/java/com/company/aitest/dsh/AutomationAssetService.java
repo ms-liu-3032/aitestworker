@@ -64,6 +64,8 @@ public class AutomationAssetService {
     public record BatchApprovalInput(List<ApprovalTarget> targets) {}
     public record PublicationTarget(Long assetId, Integer versionNo) {}
     public record BatchPublicationInput(List<PublicationTarget> targets) {}
+    public record SystemReviewTarget(Long assetId, Long publicationId) {}
+    public record BatchSystemReviewInput(List<SystemReviewTarget> targets) {}
     public record PublicationResult(Long assetId, int versionNo, Long publicationId) {}
     public record Publication(Long id, Long assetId, Long projectId, int versionNo, String scope,
                               String status, Long publishedBy, LocalDateTime publishedAt,
@@ -162,10 +164,9 @@ public class AutomationAssetService {
         if (page < 1 || size < 1 || size > 200) throw new BusinessException("页码或每页数量无效");
         if (!Set.of("ALL", "PROJECT", "REUSABLE", "SYSTEM", "PENDING_SYSTEM").contains(scope)
                 || !Set.of("ALL", "UI", "API").contains(type)) throw new BusinessException("资产筛选条件无效");
-        int manage = canManageProject(projectId, user) ? 1 : 0;
         String filter = """
                 WHERE a.project_id = :projectId
-                  AND (a.case_kind = 'FORMAL' OR a.created_by = :userId OR :manage = 1)
+                  AND (a.case_kind = 'FORMAL' OR a.created_by = :userId)
                   AND (:assetType = 'ALL' OR a.asset_type = :assetType)
                   AND (:scope = 'ALL'
                     OR (:scope = 'PROJECT' AND NOT EXISTS (SELECT 1 FROM automation_publication p
@@ -177,7 +178,7 @@ public class AutomationAssetService {
                     OR (:scope = 'PENDING_SYSTEM' AND EXISTS (SELECT 1 FROM automation_publication p
                         WHERE p.asset_id=a.id AND p.scope='SYSTEM' AND p.status='PENDING_REVIEW')))
                 """;
-        var params = Map.<String, Object>of("projectId", projectId, "userId", user.id(), "manage", manage,
+        var params = Map.<String, Object>of("projectId", projectId, "userId", user.id(),
                 "scope", scope, "assetType", type);
         int total = jdbc.sql("SELECT COUNT(*) FROM automation_asset a " + filter).params(params)
                 .query(Integer.class).single();
@@ -205,7 +206,6 @@ public class AutomationAssetService {
 
     public Asset get(Long projectId, Long assetId, CurrentUser user) {
         access.ensureCanAccess(projectId, user);
-        int manage = canManageProject(projectId, user) ? 1 : 0;
         return jdbc.sql("""
                 SELECT a.*, (SELECT MAX(v.version_no) FROM automation_asset_version v WHERE v.asset_id = a.id) latest_version,
                        (SELECT v.review_status FROM automation_asset_version v WHERE v.asset_id = a.id AND v.version_no = a.current_version) review_status,
@@ -223,9 +223,8 @@ public class AutomationAssetService {
                 LEFT JOIN test_case_draft d ON a.case_kind = 'DRAFT' AND d.id = a.case_id
                 LEFT JOIN test_case_asset c ON a.case_kind = 'FORMAL' AND c.id = a.case_id
                 WHERE a.id = :id AND a.project_id = :projectId
-                  AND (a.case_kind = 'FORMAL' OR a.created_by = :userId OR :manage = 1)
+                  AND (a.case_kind = 'FORMAL' OR a.created_by = :userId)
                 """).param("id", assetId).param("projectId", projectId).param("userId", user.id())
-                .param("manage", manage)
                 .query(this::mapAsset).optional().orElseThrow(() -> new BusinessException("自动化资产不存在或无权访问"));
     }
 
@@ -800,6 +799,20 @@ public class AutomationAssetService {
     }
 
     @Transactional
+    public List<Publication> requestSystemBatch(Long projectId, BatchPublicationInput input, CurrentUser user) {
+        if (input == null || input.targets() == null || input.targets().isEmpty() || input.targets().size() > 100)
+            throw new BusinessException("每批请选择 1-100 个复用版资产");
+        Set<Long> seen = new java.util.HashSet<>();
+        for (PublicationTarget target : input.targets()) {
+            if (target == null || target.assetId() == null || target.assetId() < 1
+                    || target.versionNo() == null || target.versionNo() < 1 || !seen.add(target.assetId()))
+                throw new BusinessException("系统级批量申请目标无效或重复");
+        }
+        return input.targets().stream().sorted(java.util.Comparator.comparing(PublicationTarget::assetId))
+                .map(target -> requestSystem(projectId, target.assetId(), target.versionNo(), user)).toList();
+    }
+
+    @Transactional
     public Publication reviewSystem(Long projectId, Long assetId, Long publicationId,
                                     boolean approve, DispositionInput input, CurrentUser user) {
         if (!access.isPlatformAdmin(user)) throw new BusinessException("只有平台管理员可以审核系统级自动化资产");
@@ -836,6 +849,22 @@ public class AutomationAssetService {
                 """, approve ? "ACTIVE" : "REJECTED", user.id(), clock.now(), reason, publicationId);
         return publications(projectId, assetId, user).stream()
                 .filter(item -> item.id().equals(publicationId)).findFirst().orElseThrow();
+    }
+
+    @Transactional
+    public List<Publication> approveSystemBatch(Long projectId, BatchSystemReviewInput input, CurrentUser user) {
+        if (!access.isPlatformAdmin(user)) throw new BusinessException("只有平台管理员可以审核系统级自动化资产");
+        if (input == null || input.targets() == null || input.targets().isEmpty() || input.targets().size() > 100)
+            throw new BusinessException("每批请选择 1-100 个系统级待审申请");
+        Set<Long> seen = new java.util.HashSet<>();
+        for (SystemReviewTarget target : input.targets()) {
+            if (target == null || target.assetId() == null || target.assetId() < 1
+                    || target.publicationId() == null || target.publicationId() < 1 || !seen.add(target.assetId()))
+                throw new BusinessException("系统级批量审核目标无效或重复");
+        }
+        return input.targets().stream().sorted(java.util.Comparator.comparing(SystemReviewTarget::assetId))
+                .map(target -> reviewSystem(projectId, target.assetId(), target.publicationId(), true, null, user))
+                .toList();
     }
 
     @Transactional

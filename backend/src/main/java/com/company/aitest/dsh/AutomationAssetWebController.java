@@ -20,8 +20,12 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/api/projects/{projectId}/automation-assets")
 public class AutomationAssetWebController {
     private final AutomationAssetService assets;
+    private final AutomationAssetPromotionService promotions;
 
-    public AutomationAssetWebController(AutomationAssetService assets) { this.assets = assets; }
+    public AutomationAssetWebController(AutomationAssetService assets, AutomationAssetPromotionService promotions) {
+        this.assets = assets;
+        this.promotions = promotions;
+    }
 
     @GetMapping
     public ApiResponse<List<AutomationAssetService.Asset>> list(@PathVariable Long projectId, Authentication auth) {
@@ -164,5 +168,23 @@ public class AutomationAssetWebController {
     public ApiResponse<List<AutomationAssetService.PublicationResult>> batchPublish(@PathVariable Long projectId,
             @RequestBody AutomationAssetService.BatchPublicationInput input, Authentication auth) {
         return ApiResponse.ok(assets.publishReusableBatch(projectId, input, (CurrentUser) auth.getPrincipal()));
+    }
+
+    @PostMapping("/batch-promote-drafts")
+    public ApiResponse<List<AutomationAssetPromotionService.Result>> batchPromoteDrafts(@PathVariable Long projectId,
+            @RequestBody AutomationAssetPromotionService.BatchInput input, Authentication auth) {
+        return ApiResponse.ok(promotions.promote(projectId, input, (CurrentUser) auth.getPrincipal()));
+    }
+
+    @PostMapping("/batch-request-system")
+    public ApiResponse<List<AutomationAssetService.Publication>> batchRequestSystem(@PathVariable Long projectId,
+            @RequestBody AutomationAssetService.BatchPublicationInput input, Authentication auth) {
+        return ApiResponse.ok(assets.requestSystemBatch(projectId, input, (CurrentUser) auth.getPrincipal()));
+    }
+
+    @PostMapping("/batch-approve-system")
+    public ApiResponse<List<AutomationAssetService.Publication>> batchApproveSystem(@PathVariable Long projectId,
+            @RequestBody AutomationAssetService.BatchSystemReviewInput input, Authentication auth) {
+        return ApiResponse.ok(assets.approveSystemBatch(projectId, input, (CurrentUser) auth.getPrincipal()));
     }
 }

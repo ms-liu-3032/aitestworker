@@ -6,7 +6,8 @@ const apiMocks = vi.hoisted(() => ({
   listAutomationPublications: vi.fn(), listAutomationAdoptions: vi.fn(),
   requestSystemAutomationPublication: vi.fn(), reviewSystemAutomationPublication: vi.fn(),
   withdrawAutomationPublication: vi.fn(), listUiCoverageTasks: vi.fn(), listPendingUiExecutionRules: vi.fn(),
-  batchPublishAutomationAssets: vi.fn(), batchApproveAutomationVersions: vi.fn(),
+  batchPromoteAutomationDrafts: vi.fn(), batchPublishAutomationAssets: vi.fn(),
+  batchRequestSystemAutomation: vi.fn(), batchApproveSystemAutomation: vi.fn(), batchApproveAutomationVersions: vi.fn(),
   getAutomationVersion: vi.fn(), listAutomationRuns: vi.fn(), getAutomationApiEvidence: vi.fn(),
   proposeAutomationVersion: vi.fn(), publishAutomationAsset: vi.fn(), unblockAutomationAsset: vi.fn(),
   approveAutomationVersion: vi.fn(), archiveAutomationAsset: vi.fn(), discardAutomationCandidate: vi.fn(),
@@ -48,6 +49,10 @@ beforeEach(() => {
     { assetId: 1, versionNo: 2, publicationId: 11 },
     { assetId: 2, versionNo: 2, publicationId: 12 },
   ]);
+  apiMocks.batchPromoteAutomationDrafts.mockResolvedValue([{ assetId: 3, formalCaseId: 103, versionNo: 2 }]);
+  apiMocks.batchRequestSystemAutomation.mockResolvedValue([{ id: 77 }]);
+  apiMocks.batchApproveSystemAutomation.mockResolvedValue([{ id: 77, status: 'ACTIVE' }]);
+  vi.spyOn(window, 'confirm').mockReturnValue(true);
 });
 
 describe('AutomationAssets detail navigation', () => {
@@ -79,6 +84,18 @@ describe('AutomationAssets system publication review', () => {
 })
 
 describe('AutomationAssets bulk reusable publication', () => {
+  it('exposes the missing draft-to-project batch path for verified personal assets', async () => {
+    render(<AutomationAssets />);
+    await screen.findByText('CASE-3');
+    expect(screen.getByLabelText('批量操作')).toHaveValue('PROMOTE');
+    expect(screen.getByLabelText('选择资产 CASE-3')).toBeEnabled();
+    fireEvent.click(screen.getByLabelText('选择全部可提交草稿资产'));
+    fireEvent.click(screen.getByRole('button', { name: '批量提交项目正式资产（1）' }));
+    await waitFor(() => expect(apiMocks.batchPromoteAutomationDrafts).toHaveBeenCalledWith(1, [
+      { assetId: 3, versionNo: 2 },
+    ]));
+  });
+
   it('submits only approved formal versions in one batch', async () => {
     render(<AutomationAssets />);
     await screen.findByText('CASE-1');
@@ -92,5 +109,30 @@ describe('AutomationAssets bulk reusable publication', () => {
       { assetId: 1, versionNo: 2 }, { assetId: 2, versionNo: 2 },
     ]));
     expect(showToast).toHaveBeenCalledWith('已提交 2 项冻结复用版');
+  });
+
+  it('submits reusable mappings for system review in one batch', async () => {
+    render(<AutomationAssets />);
+    await screen.findByText('CASE-4');
+    fireEvent.change(screen.getByLabelText('批量操作'), { target: { value: 'SYSTEM' } });
+    fireEvent.click(await screen.findByLabelText('选择全部可申请系统级资产'));
+    fireEvent.click(screen.getByRole('button', { name: '批量申请系统级审核（1）' }));
+    await waitFor(() => expect(apiMocks.batchRequestSystemAutomation).toHaveBeenCalledWith(1, [
+      { assetId: 4, versionNo: 2 },
+    ]));
+  });
+
+  it('lets platform admin approve pending system applications in one batch', async () => {
+    apiMocks.listAutomationAssetsPage.mockResolvedValue({
+      items: [asset(5, { reusablePublicationId: 44, systemRequestId: 77 })], total: 1, page: 1, pageSize: 50,
+    });
+    render(<AutomationAssets />);
+    await screen.findByText('CASE-5');
+    fireEvent.change(screen.getByLabelText('批量操作'), { target: { value: 'SYSTEM_REVIEW' } });
+    fireEvent.click(await screen.findByLabelText('选择全部待审系统级申请'));
+    fireEvent.click(screen.getByRole('button', { name: '批量通过系统级申请（1）' }));
+    await waitFor(() => expect(apiMocks.batchApproveSystemAutomation).toHaveBeenCalledWith(1, [
+      { assetId: 5, publicationId: 77 },
+    ]));
   });
 });
