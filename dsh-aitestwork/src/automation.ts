@@ -9,9 +9,9 @@ import type { CaptureRuntime } from './capture.js'
 type LocatorSpec = { by: 'testId' | 'role' | 'label' | 'placeholder' | 'text' | 'css' | 'nth';
   value?: string; name?: string; base?: string; index?: number; fallback?: LocatorSpec[]; within?: LocatorSpec }
 type ResponseSpec = { path: string; method?: string; status?: number; timeout?: number }
-type Step = { type: 'click' | 'fill' | 'press' | 'select' | 'check' | 'uncheck' | 'waitFor' | 'scroll' | 'drag'; locator: LocatorSpec;
+type Step = { type: 'click' | 'fill' | 'press' | 'select' | 'check' | 'uncheck' | 'waitFor' | 'wait' | 'scroll' | 'drag'; locator?: LocatorSpec;
   data?: string; waitBefore?: number; state?: 'visible' | 'hidden'; expected?: string; timeout?: number;
-  waitForResponse?: ResponseSpec; deltaX?: number; deltaY?: number; repeat?: number; dragSteps?: number }
+  timeoutMs?: number; waitForResponse?: ResponseSpec; deltaX?: number; deltaY?: number; repeat?: number; dragSteps?: number }
 type Assertion = LocatorSpec & { locator?: LocatorSpec; expected?: string; match?: 'contains' | 'equals';
   timeout?: number; waitBefore?: number; state?: 'visible' | 'hidden' }
 export type Mapping = { caseNo: string; page: string; steps: Step[]; assertions: Assertion[]; logAssertions?: LogRule[];
@@ -154,6 +154,7 @@ export async function runUiMapping(page: BrowserPage, mapping: Mapping, pageUrl:
   let reason: string | undefined
   let failureContext: { url: string; body: string } | undefined
   let stage: 'NAVIGATION' | 'STEP' | 'ASSERTION' = 'NAVIGATION'
+  let fixedWaitTotalMs = 0
   try {
     const response = await page.goto(pageUrl.href, { waitUntil: 'domcontentloaded', timeout: 30_000 })
     if (response && response.status() >= 500) throw new Error(`被测服务 HTTP ${response.status()}`)
@@ -166,7 +167,16 @@ export async function runUiMapping(page: BrowserPage, mapping: Mapping, pageUrl:
       const data = ['fill', 'press', 'select'].includes(step.type) ? resolveData(step.data, params) : undefined
       if (mapping.uiCoverage?.role === 'POSITIVE' && index === mapping.uiCoverage.fieldStepIndex
           && !data?.trim()) throw new Error('必填项正向运行未提供有效输入')
-      const candidates = [step.locator, ...(step.locator.fallback || [])]
+      if (step.type === 'wait') {
+        if (Object.keys(step).some(key => key !== 'type' && key !== 'timeoutMs')
+            || !Number.isInteger(step.timeoutMs) || step.timeoutMs! < 100 || step.timeoutMs! > 30_000)
+          throw new Error('wait 仅接受 type 和 timeoutMs，等待时长须为 100-30000 毫秒')
+        fixedWaitTotalMs += step.timeoutMs!
+        if (fixedWaitTotalMs > 60_000) throw new Error('固定等待总时长不能超过 60000 毫秒')
+        await page.waitForTimeout(step.timeoutMs!)
+        continue
+      }
+      const candidates = [step.locator!, ...(step.locator!.fallback || [])]
       for (let attempt = 0; attempt < candidates.length; attempt++) {
         try {
           const targetLocator = locator(page, candidates[attempt])

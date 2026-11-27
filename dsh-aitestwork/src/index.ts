@@ -196,7 +196,7 @@ export function apply(ctx: Context) {
     parameters: { designId: { type: 'string', required: true }, caseId: { type: 'string', required: true },
       expectedVersion: { type: 'number', required: true },
       mapping: { type: 'object', required: true, additionalProperties: true,
-        description: 'page、steps[{type,locator,data?,waitBefore?,waitForResponse?}]、assertions[{by,value,expected?}]；滚轮可用 type=scroll + deltaY；拖拽可用 type=drag + deltaX/deltaY（至少一项非零），可选 dragSteps；均需 locator 和选中结果断言，选择器来自当前页面' } },
+        description: 'page、steps[{type,locator?,data?,waitBefore?,waitForResponse?}]、assertions[{by,value,expected?}]；无可观察状态的异步重置可用 {type:"wait",timeoutMs:500}（100–30000 毫秒，整份映射累计最多 60000 毫秒，无 locator）；滚轮用 scroll + deltaY，拖拽用 drag + deltaX/deltaY；其他动作需 locator，最后仍须断言' } },
     output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] },
     async execute({ designId, caseId, expectedVersion, mapping }) {
       return asText(await localDesigns.setMapping(designId, caseId, expectedVersion, mapping as Mapping))
@@ -1069,7 +1069,7 @@ export function apply(ctx: Context) {
 
   ctx.tools.register(defineTool({
     name: 'aitestwork_create_auto_asset',
-    description: '为用例创建执行映射 v1。先检索目标项目及已发布的复用/系统级候选；有候选须先检查适配。UI 支持 click/fill/press/select/check/uncheck/waitFor/scroll/drag；滚轮用 scroll + locator + deltaY；拖拽用 drag + locator + 非零 deltaX/deltaY（可选 dragSteps=2–50）；随后用 waitFor 或断言核对选择结果。同名按钮用 locator.within 限定抽屉或弹窗。assetType=API 时使用 steps:[{method:"GET|POST|PUT|PATCH|DELETE|HEAD",path:"/相对路径",headers?:{},body?:{},extract?:{变量:"$.data.id"}}] 和 assertions:[{stepIndex:0,target:"STATUS|HEADER|JSON",path?:"$.data.id",operator:"EQ|CONTAINS|EXISTS",expected?:200}]。API 密钥只能用 {secretRef:"NAME"} 或 ${secret:NAME} 引用，不能写明文。caseNo 须等于归属用例编号。',
+    description: '为用例创建执行映射 v1。先检索目标项目及已发布的复用/系统级候选；有候选须先检查适配。UI 支持 click/fill/press/select/check/uncheck/waitFor/wait/scroll/drag；优先用 waitFor 或 waitForResponse 等可观察条件，只有无可观察状态的异步重置才用 {type:"wait",timeoutMs:500}（100–30000 毫秒、累计最多 60000 毫秒，无 locator）；滚轮用 scroll + locator + deltaY；拖拽用 drag + locator + 非零 deltaX/deltaY（可选 dragSteps=2–50）；等待后仍须断言核对结果。同名按钮用 locator.within 限定抽屉或弹窗。assetType=API 时使用 steps:[{method:"GET|POST|PUT|PATCH|DELETE|HEAD",path:"/相对路径",headers?:{},body?:{},extract?:{变量:"$.data.id"}}] 和 assertions:[{stepIndex:0,target:"STATUS|HEADER|JSON",path?:"$.data.id",operator:"EQ|CONTAINS|EXISTS",expected?:200}]。API 密钥只能用 {secretRef:"NAME"} 或 ${secret:NAME} 引用，不能写明文。caseNo 须等于归属用例编号。',
     parameters: {
       projectId: { type: 'number', required: true },
       workSessionId: { type: 'number', required: true },

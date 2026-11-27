@@ -57,7 +57,17 @@ export function validateLocalMapping(mapping: Mapping): void {
       || mapping.steps.length > 100 || !Array.isArray(mapping.assertions) || mapping.assertions.length === 0
       || mapping.assertions.length > 30) throw new Error('本地 UI 映射需要站内页面、1–100 个步骤和 1–30 个断言')
   validateLogMapping(mapping)
+  let fixedWaitTotalMs = 0
   for (const step of mapping.steps) {
+    if (step.type === 'wait') {
+      if (Object.keys(step).some(key => key !== 'type' && key !== 'timeoutMs')
+          || !Number.isInteger(step.timeoutMs) || step.timeoutMs! < 100 || step.timeoutMs! > 30_000) {
+        throw new Error('wait 仅接受 type 和 timeoutMs，等待时长须为 100-30000 毫秒')
+      }
+      fixedWaitTotalMs += step.timeoutMs!
+      if (fixedWaitTotalMs > 60_000) throw new Error('固定等待总时长不能超过 60000 毫秒')
+      continue
+    }
     if (!['click', 'fill', 'press', 'select', 'check', 'uncheck', 'waitFor', 'scroll', 'drag'].includes(step.type)
         || !step.locator || typeof step.locator !== 'object') throw new Error('本地 UI 映射步骤无效')
     if (step.type === 'scroll' && (typeof step.deltaY !== 'number' || !Number.isInteger(step.deltaY) || step.deltaY === 0

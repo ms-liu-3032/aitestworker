@@ -29,7 +29,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class AutomationAssetService {
-    private static final Set<String> ACTIONS = Set.of("click", "fill", "press", "select", "check", "uncheck", "waitFor", "scroll", "drag");
+    private static final Set<String> ACTIONS = Set.of("click", "fill", "press", "select", "check", "uncheck", "waitFor", "wait", "scroll", "drag");
     private static final Set<String> LOCATORS = Set.of("testId", "role", "label", "placeholder", "text", "css", "nth");
     private static final Set<String> RESULTS = Set.of("PASS", "LOCATOR_FAILURE", "ASSERTION_FAILURE",
             "ENVIRONMENT_FAILURE", "DATA_FAILURE", "OTHER_FAILURE");
@@ -1130,9 +1130,19 @@ public class AutomationAssetService {
             throw new BusinessException("UI 规则覆盖声明无效");
         if (!steps.isArray() || steps.isEmpty() || steps.size() > 100 || !assertions.isArray()
                 || assertions.isEmpty() || assertions.size() > 30) throw new BusinessException("步骤须为 1-100 条，断言须为 1-30 条");
+        int fixedWaitTotalMs = 0;
         for (JsonNode step : steps) {
             if (!step.isObject() || text(step, "type") == null || !ACTIONS.contains(text(step, "type")))
-                throw new BusinessException("步骤须使用 type（click/fill/press/select/check/uncheck/waitFor/scroll/drag），不能使用 action");
+                throw new BusinessException("步骤须使用 type（click/fill/press/select/check/uncheck/waitFor/wait/scroll/drag），不能使用 action");
+            if ("wait".equals(text(step, "type"))) {
+                JsonNode duration = step.path("timeoutMs");
+                if (step.size() != 2 || !duration.isIntegralNumber() || !duration.canConvertToInt()
+                        || duration.asInt() < 100 || duration.asInt() > 30_000)
+                    throw new BusinessException("wait 仅接受 type 和 timeoutMs，等待时长须为 100-30000 毫秒");
+                fixedWaitTotalMs += duration.asInt();
+                if (fixedWaitTotalMs > 60_000) throw new BusinessException("固定等待总时长不能超过 60000 毫秒");
+                continue;
+            }
             validateLocator(step.path("locator"));
             waitMs(step.path("waitBefore"));
             if ("scroll".equals(text(step, "type"))) {

@@ -68,6 +68,39 @@ class AutomationAssetServiceTest {
         assertThrows(BusinessException.class, () -> service.canonical(valid, "TC-001"));
     }
 
+    @Test
+    void fixedWaitNeedsBoundedDurationWithoutLocatorAndHasTotalBudget() throws Exception {
+        JsonNode valid = mapper.readTree("""
+                {"caseNo":"TC-001","page":"/async-reset","steps":[
+                  {"type":"click","locator":{"by":"text","value":"重置"}},
+                  {"type":"wait","timeoutMs":500}],
+                 "assertions":[{"by":"text","value":"重置完成"}]}
+                """);
+        assertDoesNotThrow(() -> service.canonical(valid, "TC-001"));
+        var step = (com.fasterxml.jackson.databind.node.ObjectNode) valid.path("steps").get(1);
+        step.put("timeoutMs", "500");
+        assertThrows(BusinessException.class, () -> service.canonical(valid, "TC-001"));
+        step.put("timeoutMs", 30_001);
+        assertThrows(BusinessException.class, () -> service.canonical(valid, "TC-001"));
+        step.put("timeoutMs", 500);
+        step.set("locator", mapper.readTree("{\"by\":\"css\",\"value\":\"body\"}"));
+        assertThrows(BusinessException.class, () -> service.canonical(valid, "TC-001"));
+        step.remove("locator");
+        var many = (com.fasterxml.jackson.databind.node.ArrayNode) valid.path("steps");
+        many.add(mapper.readTree("{\"type\":\"wait\",\"timeoutMs\":30000}"));
+        many.add(mapper.readTree("{\"type\":\"wait\",\"timeoutMs\":30000}"));
+        assertThrows(BusinessException.class, () -> service.canonical(valid, "TC-001"));
+    }
+
+    @Test
+    void reuseDiscoveryRejectsMissingScenarioAndUnboundedPages() {
+        var user = mock(com.company.aitest.common.CurrentUser.class);
+        assertThrows(BusinessException.class, () -> service.reuseCandidates(18L, "", "UI", 0, 50, user));
+        assertThrows(BusinessException.class, () -> service.reuseCandidates(18L, "访客", "UI", -1, 50, user));
+        assertThrows(BusinessException.class, () -> service.reuseCandidates(18L, "访客", "UI", 0, 101, user));
+        assertThrows(BusinessException.class, () -> service.adoptReusable(18L, 7L, null, user));
+    }
+
     private JsonNode mapping(String stepLocator, String data, String assertionText) throws Exception {
         return mapper.readTree("""
                 {"caseNo":"TC-001","page":"/visit/newInvitation","steps":[
