@@ -16,6 +16,7 @@ import com.company.aitest.common.BusinessException;
 import com.company.aitest.common.CurrentUser;
 import com.company.aitest.common.TimeProvider;
 import com.company.aitest.project.ProjectAccessService;
+import com.company.aitest.project.PageResult;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -64,16 +65,26 @@ public class AutomationAssetService {
     public record PublicationTarget(Long assetId, Integer versionNo) {}
     public record BatchPublicationInput(List<PublicationTarget> targets) {}
     public record PublicationResult(Long assetId, int versionNo, Long publicationId) {}
+    public record Publication(Long id, Long assetId, Long projectId, int versionNo, String scope,
+                              String status, Long publishedBy, LocalDateTime publishedAt,
+                              Long reviewedBy, LocalDateTime reviewedAt, Long retiredBy,
+                              LocalDateTime retiredAt, String retirementReason, Long supersededBy,
+                              int adoptionCount) {}
     public record RunInput(String requestKey, Integer versionNo, String result, Long durationMs,
                            Long evidenceSessionId, Integer failureStepIndex, String failureReason,
                            Long apiEvidenceId, JsonNode logEvidence) {}
     public record ApiEvidenceInput(String requestKey, Integer versionNo, String result, JsonNode evidence) {}
     public record ApiEvidence(Long id, Long assetId, int versionNo, String result, JsonNode evidence) {}
+    public record AdoptionInput(Long workSessionId, String requestKey, String caseKind, Long caseId) {}
+    public record Adoption(Long targetAssetId, Long targetProjectId, String targetStatus,
+                           int targetVersion, LocalDateTime adoptedAt) {}
     public record Asset(Long id, Long projectId, String caseKind, Long caseId, String caseNo,
                         String status, int currentVersion, int latestVersion, int healCount,
                         String blockedReason, Long createdBy, int sourceCaseVersion, int caseVersion,
                         boolean caseStale, boolean caseMissing, String reviewStatus, String archiveReason,
-                        Long archivedBy, LocalDateTime archivedAt, String assetType) {}
+                        Long archivedBy, LocalDateTime archivedAt, String assetType,
+                        Long reusablePublicationId, Long systemPublicationId, Long systemRequestId,
+                        boolean caseUnavailable) {}
     public record Version(Long assetId, int versionNo, JsonNode mapping, String status,
                           String changeReason, String revisionKind, Long sourceRunId, Long verifiedRunId,
                           String reviewStatus, Long reviewedBy, String reviewReason) {}
@@ -131,21 +142,65 @@ public class AutomationAssetService {
         return get(projectId, id, user);
     }
 
-    public List<Asset> list(Long projectId, CurrentUser user) {
+    public Map<String, Boolean> permissions(Long projectId, CurrentUser user) {
         access.ensureCanAccess(projectId, user);
+        return Map.of("canManage", canManageProject(projectId, user),
+                "canReviewSystem", access.isPlatformAdmin(user));
+    }
+
+    public List<Asset> list(Long projectId, CurrentUser user) {
+        return page(projectId, 1, 200, user).items();
+    }
+
+    public PageResult<Asset> page(Long projectId, int page, int size, CurrentUser user) {
+        return page(projectId, page, size, "ALL", "ALL", user);
+    }
+
+    public PageResult<Asset> page(Long projectId, int page, int size, String scope,
+                                  String type, CurrentUser user) {
+        access.ensureCanAccess(projectId, user);
+        if (page < 1 || size < 1 || size > 200) throw new BusinessException("页码或每页数量无效");
+        if (!Set.of("ALL", "PROJECT", "REUSABLE", "SYSTEM", "PENDING_SYSTEM").contains(scope)
+                || !Set.of("ALL", "UI", "API").contains(type)) throw new BusinessException("资产筛选条件无效");
         int manage = canManageProject(projectId, user) ? 1 : 0;
-        return jdbc.sql("""
+        String filter = """
+                WHERE a.project_id = :projectId
+                  AND (a.case_kind = 'FORMAL' OR a.created_by = :userId OR :manage = 1)
+                  AND (:assetType = 'ALL' OR a.asset_type = :assetType)
+                  AND (:scope = 'ALL'
+                    OR (:scope = 'PROJECT' AND NOT EXISTS (SELECT 1 FROM automation_publication p
+                        WHERE p.asset_id=a.id AND p.status='ACTIVE'))
+                    OR (:scope = 'REUSABLE' AND EXISTS (SELECT 1 FROM automation_publication p
+                        WHERE p.asset_id=a.id AND p.scope='REUSABLE' AND p.status='ACTIVE'))
+                    OR (:scope = 'SYSTEM' AND EXISTS (SELECT 1 FROM automation_publication p
+                        WHERE p.asset_id=a.id AND p.scope='SYSTEM' AND p.status='ACTIVE'))
+                    OR (:scope = 'PENDING_SYSTEM' AND EXISTS (SELECT 1 FROM automation_publication p
+                        WHERE p.asset_id=a.id AND p.scope='SYSTEM' AND p.status='PENDING_REVIEW')))
+                """;
+        var params = Map.<String, Object>of("projectId", projectId, "userId", user.id(), "manage", manage,
+                "scope", scope, "assetType", type);
+        int total = jdbc.sql("SELECT COUNT(*) FROM automation_asset a " + filter).params(params)
+                .query(Integer.class).single();
+        List<Asset> items = jdbc.sql("""
                 SELECT a.*, (SELECT MAX(v.version_no) FROM automation_asset_version v WHERE v.asset_id = a.id) latest_version,
                        (SELECT v.review_status FROM automation_asset_version v WHERE v.asset_id = a.id AND v.version_no = a.current_version) review_status,
+                       (SELECT p.id FROM automation_publication p WHERE p.asset_id=a.id AND p.version_no=a.current_version
+                          AND p.scope='REUSABLE' AND p.status='ACTIVE' LIMIT 1) reusable_publication_id,
+                       (SELECT p.id FROM automation_publication p WHERE p.asset_id=a.id AND p.version_no=a.current_version
+                          AND p.scope='SYSTEM' AND p.status='ACTIVE' LIMIT 1) system_publication_id,
+                       (SELECT p.id FROM automation_publication p WHERE p.asset_id=a.id AND p.version_no=a.current_version
+                          AND p.scope='SYSTEM' AND p.status='PENDING_REVIEW' LIMIT 1) system_request_id,
                        CASE a.case_kind WHEN 'DRAFT' THEN d.case_no ELSE c.case_no END case_no,
-                       CASE a.case_kind WHEN 'DRAFT' THEN d.version_no ELSE c.version END case_version
+                       CASE a.case_kind WHEN 'DRAFT' THEN d.version_no ELSE c.version END case_version,
+                       CASE WHEN a.case_kind='FORMAL' AND (c.case_status <> 'SUBMITTED'
+                           OR c.deprecated_at IS NOT NULL) THEN 1 ELSE 0 END case_unavailable
                 FROM automation_asset a
                 LEFT JOIN test_case_draft d ON a.case_kind = 'DRAFT' AND d.id = a.case_id
                 LEFT JOIN test_case_asset c ON a.case_kind = 'FORMAL' AND c.id = a.case_id
-                WHERE a.project_id = :projectId AND (a.case_kind = 'FORMAL' OR a.created_by = :userId OR :manage = 1)
-                ORDER BY a.id DESC LIMIT 200
-                """).param("projectId", projectId).param("userId", user.id()).param("manage", manage)
+                """ + filter + " ORDER BY a.id DESC LIMIT :size OFFSET :offset")
+                .params(params).param("size", size).param("offset", (long) (page - 1) * size)
                 .query(this::mapAsset).list();
+        return new PageResult<>(items, total, page, size);
     }
 
     public Asset get(Long projectId, Long assetId, CurrentUser user) {
@@ -154,8 +209,16 @@ public class AutomationAssetService {
         return jdbc.sql("""
                 SELECT a.*, (SELECT MAX(v.version_no) FROM automation_asset_version v WHERE v.asset_id = a.id) latest_version,
                        (SELECT v.review_status FROM automation_asset_version v WHERE v.asset_id = a.id AND v.version_no = a.current_version) review_status,
+                       (SELECT p.id FROM automation_publication p WHERE p.asset_id=a.id AND p.version_no=a.current_version
+                          AND p.scope='REUSABLE' AND p.status='ACTIVE' LIMIT 1) reusable_publication_id,
+                       (SELECT p.id FROM automation_publication p WHERE p.asset_id=a.id AND p.version_no=a.current_version
+                          AND p.scope='SYSTEM' AND p.status='ACTIVE' LIMIT 1) system_publication_id,
+                       (SELECT p.id FROM automation_publication p WHERE p.asset_id=a.id AND p.version_no=a.current_version
+                          AND p.scope='SYSTEM' AND p.status='PENDING_REVIEW' LIMIT 1) system_request_id,
                        CASE a.case_kind WHEN 'DRAFT' THEN d.case_no ELSE c.case_no END case_no,
-                       CASE a.case_kind WHEN 'DRAFT' THEN d.version_no ELSE c.version END case_version
+                       CASE a.case_kind WHEN 'DRAFT' THEN d.version_no ELSE c.version END case_version,
+                       CASE WHEN a.case_kind='FORMAL' AND (c.case_status <> 'SUBMITTED'
+                           OR c.deprecated_at IS NOT NULL) THEN 1 ELSE 0 END case_unavailable
                 FROM automation_asset a
                 LEFT JOIN test_case_draft d ON a.case_kind = 'DRAFT' AND d.id = a.case_id
                 LEFT JOIN test_case_asset c ON a.case_kind = 'FORMAL' AND c.id = a.case_id
@@ -584,6 +647,12 @@ public class AutomationAssetService {
     }
 
     @Transactional
+    public Long publishReusableVersionBound(Long projectId, Long assetId, int versionNo, CurrentUser user) {
+        if (versionNo < 1) throw new BusinessException("资产版本无效");
+        return publishReusableVersion(projectId, assetId, versionNo, user);
+    }
+
+    @Transactional
     public List<PublicationResult> publishReusableBatch(Long projectId, BatchPublicationInput input, CurrentUser user) {
         if (input == null || input.targets() == null || input.targets().isEmpty() || input.targets().size() > 100)
             throw new BusinessException("每次请选择 1-100 个待发布资产");
@@ -616,15 +685,290 @@ public class AutomationAssetService {
             throw new BusinessException("执行映射须先在 Web 审核通过");
         if (asset.caseStale()) throw new BusinessException("用例已有新版本，须重新验证映射后发布");
         if (!"FORMAL".equals(asset.caseKind())) throw new BusinessException("个人草稿映射不能跨项目发布，请先提交正式用例");
+        ensurePublishedCaseAvailable(asset);
         List<Long> existing = jdbc.sql("""
                 SELECT id FROM automation_publication WHERE asset_id = :id AND version_no = :version AND scope = 'REUSABLE'
                 """).param("id", assetId).param("version", asset.currentVersion()).query(Long.class).list();
-        if (!existing.isEmpty()) return existing.get(0);
+        if (!existing.isEmpty()) {
+            String status = jdbc.sql("SELECT status FROM automation_publication WHERE id = :id")
+                    .param("id", existing.get(0)).query(String.class).single();
+            if (!"ACTIVE".equals(status)) throw new BusinessException("该冻结版本已退役，请验证并发布新版本");
+            return existing.get(0);
+        }
+        template.update("""
+                UPDATE automation_publication SET status = 'SUPERSEDED', retired_by = ?, retired_at = ?,
+                    retirement_reason = '新版复用映射已发布'
+                WHERE asset_id = ? AND scope = 'REUSABLE' AND status = 'ACTIVE'
+                """, user.id(), clock.now(), assetId);
+        template.update("""
+                UPDATE automation_publication SET status='SUPERSEDED', retired_by=?, retired_at=?,
+                    retirement_reason='来源映射已发布新版本'
+                WHERE asset_id=? AND scope='SYSTEM' AND status='PENDING_REVIEW'
+                  AND version_no<>?
+                """, user.id(), clock.now(), assetId, asset.currentVersion());
         template.update("""
                 INSERT INTO automation_publication(asset_id, project_id, version_no, scope, status, published_by, published_at)
                 VALUES (?, ?, ?, 'REUSABLE', 'ACTIVE', ?, ?)
                 """, assetId, projectId, asset.currentVersion(), user.id(), clock.now());
-        return lastId();
+        Long publicationId = lastId();
+        template.update("""
+                UPDATE automation_publication SET superseded_by = ?
+                WHERE asset_id = ? AND scope = 'REUSABLE' AND status = 'SUPERSEDED'
+                  AND superseded_by IS NULL
+                """, publicationId, assetId);
+        return publicationId;
+    }
+
+    private void ensurePublishedCaseAvailable(Asset asset) {
+        int available = jdbc.sql("""
+                SELECT COUNT(*) FROM test_case_asset
+                WHERE id = :caseId AND project_id = :projectId
+                  AND case_status = 'SUBMITTED' AND deprecated_at IS NULL
+                """).param("caseId", asset.caseId()).param("projectId", asset.projectId())
+                .query(Integer.class).single();
+        if (available != 1) throw new BusinessException("正式用例未提交或已废弃，不能发布自动化映射");
+    }
+
+    public List<Publication> publications(Long projectId, Long assetId, CurrentUser user) {
+        get(projectId, assetId, user);
+        return jdbc.sql("""
+                SELECT p.*, (SELECT COUNT(*) FROM automation_adoption ad
+                    WHERE ad.source_publication_id = p.id) adoption_count
+                FROM automation_publication p
+                WHERE p.project_id = :projectId AND p.asset_id = :assetId
+                ORDER BY p.id DESC
+                """).param("projectId", projectId).param("assetId", assetId)
+                .query((rs, row) -> new Publication(rs.getLong("id"), rs.getLong("asset_id"),
+                        rs.getLong("project_id"), rs.getInt("version_no"), rs.getString("scope"),
+                        rs.getString("status"), rs.getLong("published_by"),
+                        rs.getObject("published_at", LocalDateTime.class),
+                        rs.getObject("reviewed_by", Long.class), rs.getObject("reviewed_at", LocalDateTime.class),
+                        rs.getObject("retired_by", Long.class), rs.getObject("retired_at", LocalDateTime.class),
+                        rs.getString("retirement_reason"), rs.getObject("superseded_by", Long.class),
+                        rs.getInt("adoption_count"))).list();
+    }
+
+    public List<Adoption> adoptions(Long projectId, Long assetId, Long publicationId, CurrentUser user) {
+        boolean found = publications(projectId, assetId, user).stream()
+                .anyMatch(item -> item.id().equals(publicationId));
+        if (!found) throw new BusinessException("发布记录不存在");
+        return jdbc.sql("""
+                SELECT ad.target_asset_id, a.project_id, a.status, a.current_version, ad.adopted_at
+                FROM automation_adoption ad JOIN automation_asset a ON a.id=ad.target_asset_id
+                WHERE ad.source_publication_id=:publicationId
+                  AND (:admin=1 OR EXISTS (SELECT 1 FROM project_member pm
+                    WHERE pm.project_id=a.project_id AND pm.user_id=:userId))
+                ORDER BY ad.target_asset_id DESC LIMIT 100
+                """).param("publicationId", publicationId).param("admin", access.isPlatformAdmin(user) ? 1 : 0)
+                .param("userId", user.id()).query((rs, row) -> new Adoption(
+                        rs.getLong("target_asset_id"), rs.getLong("project_id"),
+                        rs.getString("status"), rs.getInt("current_version"),
+                        rs.getObject("adopted_at", LocalDateTime.class))).list();
+    }
+
+    @Transactional
+    public Publication requestSystem(Long projectId, Long assetId, int versionNo, CurrentUser user) {
+        access.ensureCanManageProject(projectId, user);
+        jdbc.sql("SELECT id FROM automation_asset WHERE id = :id AND project_id = :projectId FOR UPDATE")
+                .param("id", assetId).param("projectId", projectId).query(Long.class).optional()
+                .orElseThrow(() -> new BusinessException("自动化资产不存在"));
+        Asset asset = get(projectId, assetId, user);
+        if (asset.currentVersion() != versionNo || !"VERIFIED".equals(asset.status()) || asset.caseStale()
+                || !"FORMAL".equals(asset.caseKind()) || !"APPROVED".equals(asset.reviewStatus()))
+            throw new BusinessException("只有当前已审核、已验证的正式用例映射可提交系统级审核");
+        ensurePublishedCaseAvailable(asset);
+        int reusable = jdbc.sql("""
+                SELECT COUNT(*) FROM automation_publication WHERE asset_id = :assetId
+                  AND version_no = :versionNo AND scope = 'REUSABLE' AND status = 'ACTIVE'
+                """).param("assetId", assetId).param("versionNo", versionNo).query(Integer.class).single();
+        if (reusable == 0) throw new BusinessException("请先发布当前版本为跨项目复用版");
+        List<Long> existing = jdbc.sql("""
+                SELECT id FROM automation_publication WHERE asset_id = :assetId
+                  AND version_no = :versionNo AND scope = 'SYSTEM'
+                """).param("assetId", assetId).param("versionNo", versionNo).query(Long.class).list();
+        if (!existing.isEmpty()) {
+            Publication publication = publications(projectId, assetId, user).stream()
+                    .filter(item -> item.id().equals(existing.get(0))).findFirst().orElseThrow();
+            if ("PENDING_REVIEW".equals(publication.status()) || "ACTIVE".equals(publication.status())) return publication;
+            throw new BusinessException("该系统级申请已处理，请验证并提交新版本");
+        }
+        template.update("""
+                INSERT INTO automation_publication(asset_id, project_id, version_no, scope, status, published_by, published_at)
+                VALUES (?, ?, ?, 'SYSTEM', 'PENDING_REVIEW', ?, ?)
+                """, assetId, projectId, versionNo, user.id(), clock.now());
+        return publications(projectId, assetId, user).get(0);
+    }
+
+    @Transactional
+    public Publication reviewSystem(Long projectId, Long assetId, Long publicationId,
+                                    boolean approve, DispositionInput input, CurrentUser user) {
+        if (!access.isPlatformAdmin(user)) throw new BusinessException("只有平台管理员可以审核系统级自动化资产");
+        jdbc.sql("SELECT id FROM automation_asset WHERE id = :id AND project_id = :projectId FOR UPDATE")
+                .param("id", assetId).param("projectId", projectId).query(Long.class).optional()
+                .orElseThrow(() -> new BusinessException("自动化资产不存在"));
+        Publication selected = publications(projectId, assetId, user).stream()
+                .filter(item -> item.id().equals(publicationId)).findFirst()
+                .orElseThrow(() -> new BusinessException("系统级申请不存在"));
+        if (!"SYSTEM".equals(selected.scope()) || !"PENDING_REVIEW".equals(selected.status()))
+            throw new BusinessException("只能审核待处理的系统级申请");
+        if (approve) {
+            Asset asset = get(projectId, assetId, user);
+            if (asset.currentVersion() != selected.versionNo() || !"VERIFIED".equals(asset.status())
+                    || asset.caseStale() || !"APPROVED".equals(asset.reviewStatus()))
+                throw new BusinessException("映射已变化，请重新验证并提交系统级申请");
+            ensurePublishedCaseAvailable(asset);
+            int reusable = jdbc.sql("""
+                    SELECT COUNT(*) FROM automation_publication WHERE asset_id=:assetId
+                      AND version_no=:versionNo AND scope='REUSABLE' AND status='ACTIVE'
+                    """).param("assetId", assetId).param("versionNo", selected.versionNo())
+                    .query(Integer.class).single();
+            if (reusable == 0) throw new BusinessException("复用版已撤回或替代，请重新提交系统级申请");
+            template.update("""
+                    UPDATE automation_publication SET status = 'SUPERSEDED', retired_by = ?, retired_at = ?,
+                        retirement_reason = '新版系统级映射已审核通过', superseded_by = ?
+                    WHERE asset_id = ? AND scope = 'SYSTEM' AND status = 'ACTIVE'
+                    """, user.id(), clock.now(), publicationId, assetId);
+        }
+        String reason = approve ? null : dispositionReason(input);
+        template.update("""
+                UPDATE automation_publication SET status = ?, reviewed_by = ?, reviewed_at = ?,
+                    retirement_reason = ? WHERE id = ?
+                """, approve ? "ACTIVE" : "REJECTED", user.id(), clock.now(), reason, publicationId);
+        return publications(projectId, assetId, user).stream()
+                .filter(item -> item.id().equals(publicationId)).findFirst().orElseThrow();
+    }
+
+    @Transactional
+    public Publication withdrawPublication(Long projectId, Long assetId, Long publicationId,
+                                           DispositionInput input, CurrentUser user) {
+        access.ensureCanAccess(projectId, user);
+        String reason = dispositionReason(input);
+        jdbc.sql("SELECT id FROM automation_asset WHERE id = :id AND project_id = :projectId FOR UPDATE")
+                .param("id", assetId).param("projectId", projectId).query(Long.class).optional()
+                .orElseThrow(() -> new BusinessException("自动化资产不存在"));
+        Publication selected = publications(projectId, assetId, user).stream()
+                .filter(item -> item.id().equals(publicationId)).findFirst()
+                .orElseThrow(() -> new BusinessException("发布记录不存在"));
+        if ("SYSTEM".equals(selected.scope())) {
+            if (!access.isPlatformAdmin(user)) throw new BusinessException("系统级发布只能由平台管理员撤回");
+        } else access.ensureCanManageProject(projectId, user);
+        if (!"ACTIVE".equals(selected.status())) throw new BusinessException("只能撤回当前有效的发布版");
+        int updated = template.update("""
+                UPDATE automation_publication SET status = 'WITHDRAWN', retired_by = ?, retired_at = ?,
+                    retirement_reason = ? WHERE id = ? AND status = 'ACTIVE'
+                """, user.id(), clock.now(), reason, publicationId);
+        if (updated != 1) throw new BusinessException("发布版状态已变化，请刷新后重试");
+        return publications(projectId, assetId, user).stream()
+                .filter(item -> item.id().equals(publicationId)).findFirst().orElseThrow();
+    }
+
+    /** Read-only discovery across the target project and published frozen versions. */
+    public List<Map<String, Object>> reuseCandidates(Long projectId, String query, String type, int offset,
+            int limit, CurrentUser user) {
+        access.ensureCanAccess(projectId, user);
+        if (query == null || query.isBlank() || query.length() > 500) throw new BusinessException("请提供测试场景描述");
+        if (offset < 0 || limit < 1 || limit > 100) throw new BusinessException("候选分页参数无效");
+        String assetType = assetType(type);
+        String normalized = query.strip();
+        // Chinese bigrams let a full natural-language task retrieve shorter case titles.
+        List<String> terms = new ArrayList<>();
+        for (String word : normalized.split("[^\\p{IsHan}A-Za-z0-9]+")) {
+            if (word.isBlank()) continue;
+            if (word.codePoints().allMatch(cp -> Character.UnicodeScript.of(cp) == Character.UnicodeScript.HAN)) {
+                int[] chars = word.codePoints().toArray();
+                for (int i = 0; i < chars.length - 1 && terms.size() < 12; i++)
+                    terms.add(new String(chars, i, 2));
+            } else if (word.length() >= 2) terms.add(word);
+            if (terms.size() >= 12) break;
+        }
+        if (terms.isEmpty()) terms.add(normalized);
+        StringBuilder where = new StringBuilder();
+        StringBuilder ranking = new StringBuilder();
+        Map<String, Object> params = new LinkedHashMap<>();
+        for (int i = 0; i < terms.size(); i++) {
+            if (i > 0) where.append(" OR ");
+            if (i > 0) ranking.append(" + ");
+            where.append("(case_no LIKE :q").append(i).append(" ESCAPE '!' OR case_title LIKE :q")
+                    .append(i).append(" ESCAPE '!' OR module_name LIKE :q").append(i).append(" ESCAPE '!')");
+            ranking.append("(CASE WHEN case_title LIKE :q").append(i)
+                    .append(" ESCAPE '!' THEN 3 WHEN module_name LIKE :q").append(i)
+                    .append(" ESCAPE '!' THEN 2 WHEN case_no LIKE :q").append(i)
+                    .append(" ESCAPE '!' THEN 1 ELSE 0 END)");
+            params.put("q" + i, "%" + terms.get(i).replace("!", "!!").replace("%", "!%")
+                    .replace("_", "!_") + "%");
+        }
+        String sql = """
+                SELECT scope, asset_id, publication_id, source_project_id, version_no, case_no, case_title, module_name,
+                """ + ranking + " AS match_score " + """
+                FROM (
+                  SELECT 'PROJECT' scope, a.id asset_id, NULL publication_id, a.project_id source_project_id,
+                    a.current_version version_no, COALESCE(d.case_no,c.case_no) case_no,
+                    COALESCE(d.case_title,c.case_title) case_title, COALESCE(d.module_name,c.module_name) module_name,
+                    a.asset_type
+                  FROM automation_asset a
+                  LEFT JOIN test_case_draft d ON a.case_kind='DRAFT' AND d.id=a.case_id
+                  LEFT JOIN test_case_asset c ON a.case_kind='FORMAL' AND c.id=a.case_id
+                  JOIN automation_asset_version v ON v.asset_id=a.id AND v.version_no=a.current_version
+                  WHERE a.project_id=:projectId AND a.status='VERIFIED' AND v.review_status='APPROVED'
+                    AND ((a.case_kind='FORMAL' AND c.case_status='SUBMITTED' AND c.deprecated_at IS NULL
+                          AND c.version=a.source_case_version)
+                      OR (a.case_kind='DRAFT' AND a.created_by=:userId AND d.case_status='DRAFT'
+                          AND d.version_no=a.source_case_version))
+                  UNION ALL
+                  SELECT 'REUSABLE' scope, a.id asset_id, p.id publication_id, p.project_id source_project_id,
+                    p.version_no, c.case_no, c.case_title, c.module_name, a.asset_type
+                  FROM automation_publication p JOIN automation_asset a ON a.id=p.asset_id
+                  JOIN automation_asset_version v ON v.asset_id=a.id AND v.version_no=p.version_no
+                  JOIN test_case_asset c ON a.case_kind='FORMAL' AND c.id=a.case_id
+                  WHERE p.status='ACTIVE' AND p.scope IN ('REUSABLE','SYSTEM') AND v.status='VERIFIED'
+                    AND (p.scope='SYSTEM' OR NOT EXISTS (
+                        SELECT 1 FROM automation_publication newer
+                        WHERE newer.asset_id=p.asset_id AND newer.version_no=p.version_no
+                          AND newer.scope='SYSTEM' AND newer.status='ACTIVE'))
+                    AND c.case_status='SUBMITTED' AND c.deprecated_at IS NULL
+                    AND p.project_id<>:projectId
+                ) candidates WHERE asset_type=:assetType AND (""" + where + ") ORDER BY CASE scope WHEN 'PROJECT' THEN 0 WHEN 'SYSTEM' THEN 1 ELSE 2 END, match_score DESC, publication_id DESC, asset_id DESC LIMIT :limit OFFSET :offset";
+        var statement = jdbc.sql(sql).param("projectId", projectId).param("userId", user.id())
+                .param("assetType", assetType).param("limit", limit).param("offset", offset);
+        for (var entry : params.entrySet()) statement = statement.param(entry.getKey(), entry.getValue());
+        return statement.query((rs, row) -> {
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("scope", rs.getString("scope"));
+            item.put("assetId", rs.getLong("asset_id"));
+            item.put("publicationId", rs.getObject("publication_id", Long.class));
+            item.put("sourceProjectId", rs.getLong("source_project_id"));
+            item.put("versionNo", rs.getInt("version_no"));
+            item.put("caseNo", rs.getString("case_no"));
+            item.put("caseTitle", rs.getString("case_title"));
+            item.put("moduleName", rs.getString("module_name"));
+            item.put("matchScore", rs.getInt("match_score"));
+            return item;
+        }).list();
+    }
+
+    @Transactional
+    public Asset adoptReusable(Long projectId, Long publicationId, AdoptionInput input, CurrentUser user) {
+        access.ensureCanAccess(projectId, user);
+        if (input == null) throw new BusinessException("缺少目标用例与测试任务");
+        requireKey(input.requestKey());
+        var publication = reusableVersion(publicationId, user);
+        if (projectId.equals(publication.get("sourceProjectId")))
+            throw new BusinessException("同项目资产请直接复用当前版本");
+        String caseNo = caseNo(projectId, input.caseKind(), input.caseId(), user);
+        JsonNode mapping = ((JsonNode) publication.get("mapping")).deepCopy();
+        ((ObjectNode) mapping).put("caseNo", caseNo);
+        Asset saved = create(projectId, new CreateInput(input.workSessionId(), input.requestKey(),
+                input.caseKind(), input.caseId(), (String) publication.get("assetType"), mapping), user);
+        List<Long> existing = jdbc.sql("SELECT source_publication_id FROM automation_adoption WHERE target_asset_id = ?")
+                .param(saved.id()).query(Long.class).list();
+        if (!existing.isEmpty() && !existing.get(0).equals(publicationId))
+            throw new BusinessException("目标资产已从其他复用版创建");
+        if (existing.isEmpty()) template.update("""
+                INSERT INTO automation_adoption(target_asset_id, source_publication_id, source_asset_id,
+                    source_version_no, adopted_by, adopted_at) VALUES (?, ?, ?, ?, ?, ?)
+                """, saved.id(), publicationId, publication.get("assetId"), publication.get("frozenVersion"),
+                user.id(), clock.now());
+        return saved;
     }
 
     public List<Map<String, Object>> reusable(String query, CurrentUser user) {
@@ -638,7 +982,8 @@ public class AutomationAssetService {
                 FROM automation_publication p JOIN automation_asset a ON a.id = p.asset_id
                 LEFT JOIN test_case_draft d ON a.case_kind = 'DRAFT' AND d.id = a.case_id
                 LEFT JOIN test_case_asset c ON a.case_kind = 'FORMAL' AND c.id = a.case_id
-                WHERE p.status = 'ACTIVE' AND (d.case_no LIKE :pattern ESCAPE '!' OR c.case_no LIKE :pattern ESCAPE '!')
+                WHERE p.status = 'ACTIVE' AND c.case_status = 'SUBMITTED' AND c.deprecated_at IS NULL
+                  AND (d.case_no LIKE :pattern ESCAPE '!' OR c.case_no LIKE :pattern ESCAPE '!')
                 ORDER BY p.id DESC LIMIT 20
                 """).param("pattern", pattern).query((rs, row) -> {
                     Map<String, Object> item = new LinkedHashMap<>();
@@ -659,7 +1004,9 @@ public class AutomationAssetService {
                 FROM automation_publication p JOIN automation_asset_version v
                   ON v.asset_id = p.asset_id AND v.version_no = p.version_no
                 JOIN automation_asset a ON a.id = p.asset_id
+                JOIN test_case_asset c ON a.case_kind = 'FORMAL' AND c.id = a.case_id
                 WHERE p.id = :id AND p.status = 'ACTIVE' AND v.status = 'VERIFIED'
+                  AND c.case_status = 'SUBMITTED' AND c.deprecated_at IS NULL
                 """).param("id", publicationId).query((rs, row) -> Map.<String, Object>of(
                         "publicationId", rs.getLong("id"), "sourceProjectId", rs.getLong("project_id"),
                         "assetId", rs.getLong("asset_id"), "frozenVersion", rs.getInt("version_no"),
@@ -679,7 +1026,9 @@ public class AutomationAssetService {
                 caseMissing ? 0 : caseVersion, caseMissing || sourceCaseVersion != caseVersion, caseMissing,
                 rs.getString("review_status"), rs.getString("archive_reason"),
                 rs.getObject("archived_by", Long.class), rs.getObject("archived_at", LocalDateTime.class),
-                rs.getString("asset_type"));
+                rs.getString("asset_type"), rs.getObject("reusable_publication_id", Long.class),
+                rs.getObject("system_publication_id", Long.class), rs.getObject("system_request_id", Long.class),
+                rs.getInt("case_unavailable") == 1);
     }
 
     private Run mapRun(java.sql.ResultSet rs, int row) throws java.sql.SQLException {
@@ -766,7 +1115,8 @@ public class AutomationAssetService {
                         || (!dx.isMissingNode() && (!dx.isIntegralNumber() || !dx.canConvertToInt()
                             || dx.asInt() < -2000 || dx.asInt() > 2000))
                         || (!repeat.isMissingNode() && (!repeat.isIntegralNumber() || !repeat.canConvertToInt()
-                            || repeat.asInt() < 1 || repeat.asInt() > 10)))
+                            || repeat.asInt() < 1
+                            || repeat.asInt() > 10)))
                     throw new BusinessException("滚动步骤需要非零 deltaY（-2000 至 2000），deltaX 须在 ±2000 内，repeat 须为 1–10");
             }
             if ("drag".equals(text(step, "type"))) {

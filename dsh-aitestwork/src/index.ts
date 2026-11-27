@@ -83,7 +83,7 @@ export function apply(ctx: Context) {
   ctx.systemPrompt.section({
     name: 'aitestwork:reuse-before-ui-automation',
     order: 92,
-    text: '修改或复跑相似 UI 场景时，先用 aitestwork_find_auto_asset_candidates 检索并读取现有映射，再按差异复制修改；不能声称未检索的资产不存在。细节见 aitestwork Skill。',
+    text: '每次准备 UI/API 自动化先用 aitestwork_prepare_auto_execution 搜索目标项目、跨项目复用版和系统级版；修改相似 UI 场景再用 aitestwork_find_auto_asset_candidates 补查已有映射。确无适用候选才重新生成。细节见 aitestwork Skill。',
   })
   const skillFile = new URL('../skills/aitestwork/SKILL.md', import.meta.url)
   const skillText = readFileSync(skillFile, 'utf8')
@@ -1069,7 +1069,7 @@ export function apply(ctx: Context) {
 
   ctx.tools.register(defineTool({
     name: 'aitestwork_create_auto_asset',
-    description: '为用例创建执行映射 v1。UI 支持 click/fill/press/select/check/uncheck/waitFor/scroll/drag；滚轮用 scroll + locator + deltaY；拖拽用 drag + locator + 非零 deltaX/deltaY（可选 dragSteps=2–50）；随后用 waitFor 或断言核对选择结果。同名按钮用 locator.within 限定抽屉或弹窗。assetType=API 时使用 steps:[{method:"GET|POST|PUT|PATCH|DELETE|HEAD",path:"/相对路径",headers?:{},body?:{},extract?:{变量:"$.data.id"}}] 和 assertions:[{stepIndex:0,target:"STATUS|HEADER|JSON",path?:"$.data.id",operator:"EQ|CONTAINS|EXISTS",expected?:200}]。API 密钥只能用 {secretRef:"NAME"} 或 ${secret:NAME} 引用，不能写明文。caseNo 须等于归属用例编号。',
+    description: '为用例创建执行映射 v1。先检索目标项目及已发布的复用/系统级候选；有候选须先检查适配。UI 支持 click/fill/press/select/check/uncheck/waitFor/scroll/drag；滚轮用 scroll + locator + deltaY；拖拽用 drag + locator + 非零 deltaX/deltaY（可选 dragSteps=2–50）；随后用 waitFor 或断言核对选择结果。同名按钮用 locator.within 限定抽屉或弹窗。assetType=API 时使用 steps:[{method:"GET|POST|PUT|PATCH|DELETE|HEAD",path:"/相对路径",headers?:{},body?:{},extract?:{变量:"$.data.id"}}] 和 assertions:[{stepIndex:0,target:"STATUS|HEADER|JSON",path?:"$.data.id",operator:"EQ|CONTAINS|EXISTS",expected?:200}]。API 密钥只能用 {secretRef:"NAME"} 或 ${secret:NAME} 引用，不能写明文。caseNo 须等于归属用例编号。',
     parameters: {
       projectId: { type: 'number', required: true },
       workSessionId: { type: 'number', required: true },
@@ -1078,10 +1078,25 @@ export function apply(ctx: Context) {
       caseId: { type: 'number', required: true },
       assetType: { type: 'string', description: 'UI 或 API；省略时为 UI' },
       mapping: { type: 'object', required: true, additionalProperties: true },
+      freshReason: { type: 'string', description: '有候选但全部不适用时说明原因' },
     },
     output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] },
-    async execute({ projectId, workSessionId, requestKey, caseKind, caseId, assetType, mapping }) {
-      return asText(await callApi(await currentBinding(ctx), `${projectPath(projectId)}/automation-assets`, 'POST',
+    async execute({ projectId, workSessionId, requestKey, caseKind, caseId, assetType, mapping, freshReason }) {
+      const binding = await currentBinding(ctx)
+      const detail = caseKind === 'DRAFT'
+        ? await callUserApi<{ draft?: { caseTitle?: string; moduleName?: string }; caseTitle?: string; moduleName?: string }>(
+          binding, `/api/aitestwork/dsh/user/projects/${projectId}/drafts/${caseId}`)
+        : await callApi<{ caseTitle?: string; moduleName?: string }>(binding, `${projectPath(projectId)}/cases/${caseId}`)
+      const item = ('draft' in detail && detail.draft ? detail.draft : detail) as { caseTitle?: string; moduleName?: string }
+      const scenario = [item.caseTitle, item.moduleName].filter(Boolean).join(' · ')
+      if (!scenario) throw new Error('归属用例缺少标题，无法先查复用资产')
+      const params = new URLSearchParams({ projectId: String(projectId), query: scenario,
+        assetType: assetType || 'UI', offset: '0', limit: '50' })
+      const candidates = await callApi<Array<{ scope: string; assetId: number; publicationId?: number }>>(
+        binding, `/api/aitestwork/dsh/tools/automation-publications/candidates?${params}`)
+      if (candidates.length && (!freshReason || freshReason.trim().length < 20))
+        throw new Error(`发现 ${candidates.length} 个可复用候选，请先读取并验证。确实不适用时说明候选编号和原因再重新生成：${JSON.stringify(candidates.slice(0, 5))}`)
+      return asText(await callApi(binding, `${projectPath(projectId)}/automation-assets`, 'POST',
         { workSessionId, requestKey, caseKind, caseId, assetType, mapping }))
     },
   }))
@@ -1221,6 +1236,40 @@ export function apply(ctx: Context) {
     async execute({ query }) {
       const params = new URLSearchParams({ query: query || '' })
       return asText(await callApi(await currentBinding(ctx), `/api/aitestwork/dsh/tools/automation-publications?${params}`))
+    },
+  }))
+
+  ctx.tools.register(defineTool({
+    name: 'aitestwork_prepare_auto_execution',
+    description: '自动化任务的第一步：按自然语言场景查目标项目和所有已发布复用版，项目有效资产优先，支持 UI/API 分页。返回来源与冻结版本；有候选时先验证适配，不能直接从头生成。',
+    parameters: {
+      projectId: { type: 'number', required: true },
+      scenario: { type: 'string', required: true, description: '用户的测试场景原话，不需要用户提供关键词' },
+      assetType: { type: 'string', required: true, description: 'UI 或 API' },
+      offset: { type: 'number', description: '从 0 开始的分页偏移' },
+    },
+    output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] },
+    async execute({ projectId, scenario, assetType, offset }) {
+      const params = new URLSearchParams({ projectId: String(projectId), query: scenario,
+        assetType, offset: String(offset || 0), limit: '50' })
+      return asText(await callApi(await currentBinding(ctx), `/api/aitestwork/dsh/tools/automation-publications/candidates?${params}`))
+    },
+  }))
+
+  ctx.tools.register(defineTool({
+    name: 'aitestwork_adopt_reusable_automation',
+    description: '把已发布的冻结 UI/API 映射复制为目标项目用例的待验证资产。来源不变，目标必须真实执行、保存证据并经 Web 审核，不能复制后直接标记通过。',
+    parameters: {
+      projectId: { type: 'number', required: true }, publicationId: { type: 'number', required: true },
+      workSessionId: { type: 'number', required: true }, requestKey: { type: 'string', required: true },
+      caseKind: { type: 'string', required: true, description: 'DRAFT 或 FORMAL' },
+      caseId: { type: 'number', required: true, description: '目标项目中的用例 ID' },
+    },
+    output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] },
+    async execute({ projectId, publicationId, workSessionId, requestKey, caseKind, caseId }) {
+      return asText(await callApi(await currentBinding(ctx),
+        `/api/aitestwork/dsh/tools/automation-publications/${publicationId}/adopt?projectId=${projectId}`, 'POST',
+        { workSessionId, requestKey, caseKind, caseId }))
     },
   }))
 

@@ -117,6 +117,21 @@ class DshAutomationPublicationController {
         return ApiResponse.ok(assets.reusableVersion(publicationId, user(auth)));
     }
 
+    @GetMapping("/candidates")
+    public ApiResponse<List<Map<String, Object>>> candidates(@RequestParam Long projectId,
+            @RequestParam String query, @RequestParam(defaultValue = "UI") String assetType,
+            @RequestParam(defaultValue = "0") int offset, @RequestParam(defaultValue = "50") int limit,
+            Authentication auth) {
+        return ApiResponse.ok(assets.reuseCandidates(projectId, query, assetType, offset, limit, user(auth)));
+    }
+
+    @PostMapping("/{publicationId}/adopt")
+    public ApiResponse<AutomationAssetService.Asset> adopt(@PathVariable Long publicationId,
+            @RequestParam Long projectId, @RequestBody AutomationAssetService.AdoptionInput input,
+            Authentication auth) {
+        return ApiResponse.ok(assets.adoptReusable(projectId, publicationId, input, user(auth)));
+    }
+
     private static CurrentUser user(Authentication auth) {
         return ((DshConnectionService.DshPrincipal) auth.getPrincipal()).user();
     }

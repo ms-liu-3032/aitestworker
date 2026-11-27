@@ -28,6 +28,7 @@ public class AssetReviewInboxQuery {
         }
         if (type == null || type.isBlank() || "automation".equals(type)) {
             result.addAll(listAutomation(projectId, reviewStatus));
+            result.addAll(listSystemAutomation(projectId, reviewStatus));
         }
         return result;
     }
@@ -92,6 +93,27 @@ public class AssetReviewInboxQuery {
                     item.put("sourceType", "FORMAL_CASE");
                     item.put("sourceId", rs.getLong("case_id"));
                     item.put("versionNo", rs.getInt("current_version"));
+                    return item;
+                }).list();
+    }
+
+    private List<Map<String, Object>> listSystemAutomation(Long projectId, String reviewStatus) {
+        return jdbc.sql("""
+                SELECT p.id, p.asset_id, p.project_id, p.version_no, p.status, p.published_at
+                FROM automation_publication p
+                WHERE p.scope='SYSTEM' AND p.status=:status
+                  AND (:projectId=0 OR p.project_id=:projectId)
+                ORDER BY p.id DESC
+                """).param("status", "PENDING".equals(reviewStatus) ? "PENDING_REVIEW" : "REJECTED")
+                .param("projectId", projectId == null ? 0L : projectId)
+                .query((rs, row) -> {
+                    Map<String, Object> item = base("automation_system", rs.getLong("id"),
+                            rs.getLong("project_id"), reviewStatus, rs.getString("published_at"));
+                    item.put("name", "系统级自动化申请 #" + rs.getLong("id"));
+                    item.put("description", "来源资产 #" + rs.getLong("asset_id")
+                            + " · 冻结版本 v" + rs.getInt("version_no"));
+                    item.put("sourceType", "AUTOMATION");
+                    item.put("sourceId", rs.getLong("asset_id"));
                     return item;
                 }).list();
     }

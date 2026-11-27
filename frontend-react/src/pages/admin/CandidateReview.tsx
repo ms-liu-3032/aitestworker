@@ -51,12 +51,15 @@ type CandidateItem = {
 const pendingStatuses = new Set(['CANDIDATE', 'DRAFT', 'PENDING']);
 
 function canReviewHere(candidate: CandidateItem) {
-  return candidate.candidateType !== 'automation';
+  return candidate.candidateType !== 'automation' && candidate.candidateType !== 'automation_system';
 }
 
 function reviewDetailUrl(candidate: CandidateItem) {
   if (candidate.candidateType === 'automation' && candidate.projectId) {
     return `/projects/${candidate.projectId}/automation-assets?assetId=${candidate.id}`;
+  }
+  if (candidate.candidateType === 'automation_system' && candidate.projectId && candidate.sourceId) {
+    return `/projects/${candidate.projectId}/automation-assets?assetId=${candidate.sourceId}`;
   }
   if (candidate.candidateType === 'wiki_pack') {
     return `/admin/asset-center?tab=catalog&assetType=wiki&packId=${candidate.id}`;
@@ -248,7 +251,7 @@ export default function CandidateReview({ embedded = false }: { embedded?: boole
   };
 
   const getTypeLabel = (type: string) => {
-    const map: Record<string, string> = { tom: 'TOM', wiki_pack: 'Wiki 包', wiki_entry: 'Wiki 条目', automation: '自动化映射', summary: '摘要', correction: '修正', skill: 'Skill', tool: 'Tool' };
+    const map: Record<string, string> = { tom: 'TOM', wiki_pack: 'Wiki 包', wiki_entry: 'Wiki 条目', automation: '自动化映射', automation_system: '系统级自动化申请', summary: '摘要', correction: '修正', skill: 'Skill', tool: 'Tool' };
     return map[type] || type;
   };
 
@@ -414,7 +417,7 @@ export default function CandidateReview({ embedded = false }: { embedded?: boole
                   </div>
                   {reviewDetailUrl(candidate) && <Link to={reviewDetailUrl(candidate)!}
                     className="mt-2 inline-block text-xs font-medium text-blue-700 hover:underline">
-                    {candidate.candidateType === 'automation' ? '检查运行证据并审核' : '查看来源详情'}
+                    {candidate.candidateType === 'automation' || candidate.candidateType === 'automation_system' ? '检查发布记录并审核' : '查看来源详情'}
                   </Link>}
                   {candidate.candidateType === 'tool' && candidate.body ? (
                     <div className="mt-2">

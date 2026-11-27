@@ -44,8 +44,12 @@ public class AssetCatalogService {
                    NULL, created_at FROM test_case_asset
             UNION ALL
             SELECT 'AUTOMATION', a.id, a.project_id, CONCAT('自动化映射 #', a.id) COLLATE utf8mb4_unicode_ci,
-                   a.scope COLLATE utf8mb4_unicode_ci, a.status COLLATE utf8mb4_unicode_ci,
-                   v.review_status COLLATE utf8mb4_unicode_ci,
+                   (CASE WHEN EXISTS (SELECT 1 FROM automation_publication p WHERE p.asset_id=a.id
+                        AND p.scope='SYSTEM' AND p.status='ACTIVE') THEN 'SYSTEM'
+                     WHEN EXISTS (SELECT 1 FROM automation_publication p WHERE p.asset_id=a.id
+                        AND p.scope='REUSABLE' AND p.status='ACTIVE') THEN 'REUSABLE'
+                     ELSE a.scope END) COLLATE utf8mb4_unicode_ci,
+                   a.status COLLATE utf8mb4_unicode_ci, v.review_status COLLATE utf8mb4_unicode_ci,
                    a.case_kind COLLATE utf8mb4_unicode_ci, a.case_id, NULL, a.created_at
               FROM automation_asset a JOIN automation_asset_version v
                 ON v.asset_id = a.id AND v.version_no = a.current_version

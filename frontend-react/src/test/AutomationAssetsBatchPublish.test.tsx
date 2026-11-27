@@ -2,7 +2,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 const apiMocks = vi.hoisted(() => ({
-  listAutomationAssets: vi.fn(), listUiCoverageTasks: vi.fn(), listPendingUiExecutionRules: vi.fn(),
+  listAutomationAssetsPage: vi.fn(), getAutomationAsset: vi.fn(), getAutomationPermissions: vi.fn(),
+  listAutomationPublications: vi.fn(), listAutomationAdoptions: vi.fn(),
+  requestSystemAutomationPublication: vi.fn(), reviewSystemAutomationPublication: vi.fn(),
+  withdrawAutomationPublication: vi.fn(), listUiCoverageTasks: vi.fn(), listPendingUiExecutionRules: vi.fn(),
   batchPublishAutomationAssets: vi.fn(), batchApproveAutomationVersions: vi.fn(),
   getAutomationVersion: vi.fn(), listAutomationRuns: vi.fn(), getAutomationApiEvidence: vi.fn(),
   proposeAutomationVersion: vi.fn(), publishAutomationAsset: vi.fn(), unblockAutomationAsset: vi.fn(),
@@ -10,10 +13,11 @@ const apiMocks = vi.hoisted(() => ({
   confirmUiCoverageTask: vi.fn(), approveUiExecutionRule: vi.fn(),
 }));
 const showToast = vi.hoisted(() => vi.fn());
+const location = vi.hoisted(() => ({ search: '' }));
 
 vi.mock('../context/AppContext', () => ({ useApp: () => ({ showToast }) }));
 vi.mock('react-router-dom', () => ({
-  useParams: () => ({ projectId: '1' }), useSearchParams: () => [new URLSearchParams()],
+  useParams: () => ({ projectId: '1' }), useSearchParams: () => [new URLSearchParams(location.search)],
 }));
 vi.mock('../services/api', () => apiMocks);
 
@@ -28,9 +32,16 @@ const asset = (id: number, overrides: Record<string, unknown> = {}) => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
-  apiMocks.listAutomationAssets.mockResolvedValue([
-    asset(1), asset(2, { assetType: 'API' }), asset(3, { caseKind: 'DRAFT' }),
-  ]);
+  location.search = '';
+  apiMocks.listAutomationAssetsPage.mockResolvedValue({
+    items: [asset(1), asset(2, { assetType: 'API' }), asset(3, { caseKind: 'DRAFT' }),
+      asset(4, { reusablePublicationId: 44 })],
+    total: 4, page: 1, pageSize: 50,
+  });
+  apiMocks.listAutomationPublications.mockResolvedValue([]);
+  apiMocks.getAutomationVersion.mockResolvedValue({ versionNo: 2, mapping: { caseNo: 'CASE-251' } });
+  apiMocks.listAutomationRuns.mockResolvedValue([]);
+  apiMocks.getAutomationPermissions.mockResolvedValue({ canManage: true, canReviewSystem: true });
   apiMocks.listUiCoverageTasks.mockResolvedValue([]);
   apiMocks.listPendingUiExecutionRules.mockResolvedValue([]);
   apiMocks.batchPublishAutomationAssets.mockResolvedValue([
@@ -39,6 +50,34 @@ beforeEach(() => {
   ]);
 });
 
+describe('AutomationAssets detail navigation', () => {
+  it('opens an older asset by ID even when it is outside the current page', async () => {
+    location.search = 'assetId=251';
+    apiMocks.getAutomationAsset.mockResolvedValue(asset(251));
+    render(<AutomationAssets />);
+    await waitFor(() => expect(apiMocks.getAutomationAsset).toHaveBeenCalledWith(1, 251));
+    await screen.findByText(/CASE-251 · UI 映射 v2/);
+  });
+})
+
+describe('AutomationAssets system publication review', () => {
+  it('routes a pending system-level request to the admin review action', async () => {
+    const current = asset(5, { reusablePublicationId: 44, systemRequestId: 77 });
+    apiMocks.listAutomationAssetsPage.mockResolvedValue({ items: [current], total: 1, page: 1, pageSize: 50 });
+    apiMocks.listAutomationPublications.mockResolvedValue([{ id: 77, assetId: 5, projectId: 1,
+      versionNo: 2, scope: 'SYSTEM', status: 'PENDING_REVIEW', publishedBy: 1,
+      publishedAt: '2026-11-27T00:00:00', adoptionCount: 0 }]);
+    apiMocks.reviewSystemAutomationPublication.mockResolvedValue({ status: 'ACTIVE' });
+    apiMocks.getAutomationAsset.mockResolvedValue(asset(5, { reusablePublicationId: 44, systemPublicationId: 77 }));
+    render(<AutomationAssets />);
+    await screen.findByText('CASE-5');
+    fireEvent.click(screen.getByRole('button', { name: '查看详情' }));
+    fireEvent.click(await screen.findByRole('button', { name: '审核通过' }));
+    await waitFor(() => expect(apiMocks.reviewSystemAutomationPublication)
+      .toHaveBeenCalledWith(1, 5, 77, true, ''));
+  });
+})
+
 describe('AutomationAssets bulk reusable publication', () => {
   it('submits only approved formal versions in one batch', async () => {
     render(<AutomationAssets />);
@@ -46,6 +85,7 @@ describe('AutomationAssets bulk reusable publication', () => {
     fireEvent.change(screen.getByLabelText('批量操作'), { target: { value: 'PUBLISH' } });
     await screen.findByLabelText('选择全部可发布资产');
     expect(screen.getByLabelText('选择资产 CASE-3')).toBeDisabled();
+    expect(screen.getByLabelText('选择资产 CASE-4')).toBeDisabled();
     fireEvent.click(screen.getByLabelText('选择全部可发布资产'));
     fireEvent.click(screen.getByRole('button', { name: '批量发布复用版（2）' }));
     await waitFor(() => expect(apiMocks.batchPublishAutomationAssets).toHaveBeenCalledWith(1, [

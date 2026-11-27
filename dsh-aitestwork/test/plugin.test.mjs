@@ -385,6 +385,29 @@ test('automation edits and deletions use bound asset ID and keep review in Web',
   assert.equal(JSON.parse(requests[0].options.body).expectedVersion, 2)
 })
 
+test('reuse-first preparation and adoption use the bound project and reject a fresh mapping with candidates', async () => {
+  const { tools, commands } = harness()
+  const calls = []
+  globalThis.fetch = async (url, options) => {
+    const path = new URL(url).pathname
+    const respond = data => ({ ok: true, status: 200, json: async () => ({ success: true, data }) })
+    if (path.endsWith('/api/aitestwork/dsh/bind')) return respond({ userToken: 'user_secret', agentToken: 'agent_secret', userId: 9, connectionId: 3 })
+    calls.push({ path, method: options.method })
+    if (path.endsWith('/drafts/20')) return respond({ draft: { caseTitle: '访客预约', moduleName: '访客管理' } })
+    if (path.endsWith('/automation-publications/candidates')) return respond([{ scope: 'REUSABLE', assetId: 5, publicationId: 7 }])
+    return respond({ id: 19 })
+  }
+  await commands.get('aitestwork-bind').handler({ rawInput: `https://hub.example ${validBindCode}` })
+  await tools.get('aitestwork_prepare_auto_execution').execute({ projectId: 18, scenario: '访客预约', assetType: 'UI' })
+  await assert.rejects(() => tools.get('aitestwork_create_auto_asset').execute({ projectId: 18,
+    workSessionId: 6, requestKey: 'new-mapping', caseKind: 'DRAFT', caseId: 20, assetType: 'UI',
+    mapping: { caseNo: 'TC-20', page: '/test', steps: [], assertions: [] } }), /可复用候选/)
+  await tools.get('aitestwork_adopt_reusable_automation').execute({ projectId: 18,
+    publicationId: 7, workSessionId: 6, requestKey: 'adopt-7', caseKind: 'DRAFT', caseId: 20 })
+  assert.equal(calls.at(-1).path, '/api/aitestwork/dsh/tools/automation-publications/7/adopt')
+  assert.equal(calls.at(-1).method, 'POST')
+})
+
 test('API automation tools remain under the bound agent routes', async () => {
   const { tools, commands } = harness()
   const requests = []
@@ -392,6 +415,8 @@ test('API automation tools remain under the bound agent routes', async () => {
     const respond = data => ({ ok: true, status: 200, json: async () => ({ success: true, data }) })
     if (url.endsWith('/api/aitestwork/dsh/bind')) return respond({ userToken: 'user_secret', agentToken: 'agent_secret', userId: 9, connectionId: 3 })
     requests.push({ path: new URL(url).pathname, options })
+    if (url.includes('/user/projects/18/drafts/20')) return respond({ draft: { caseTitle: '接口自动化场景', moduleName: '通用模块' } })
+    if (url.includes('/automation-publications/candidates')) return respond([])
     return respond({ id: 17 })
   }
   await commands.get('aitestwork-bind').handler({ rawInput: `https://hub.example ${validBindCode}` })
@@ -403,12 +428,15 @@ test('API automation tools remain under the bound agent routes', async () => {
   await tools.get('aitestwork_get_api_evidence').execute({ projectId: 18, assetId: 17, evidenceId: 2 })
   assert.equal(tools.has('aitestwork_run_api_asset'), true)
   assert.deepEqual(requests.map(item => item.path), [
+    '/api/aitestwork/dsh/user/projects/18/drafts/20',
+    '/api/aitestwork/dsh/tools/automation-publications/candidates',
     '/api/aitestwork/dsh/tools/projects/18/automation-assets',
     '/api/aitestwork/dsh/tools/projects/18/automation-assets/17/api-evidence',
     '/api/aitestwork/dsh/tools/projects/18/automation-assets/17/api-evidence/2',
   ])
-  assert.equal(JSON.parse(requests[0].options.body).assetType, 'API')
-  assert.equal(requests.every(item => item.options.headers.Authorization === 'Bearer agent_secret'), true)
+  assert.equal(JSON.parse(requests[2].options.body).assetType, 'API')
+  assert.equal(requests[0].options.headers.Authorization, 'Bearer user_secret')
+  assert.equal(requests.slice(1).every(item => item.options.headers.Authorization === 'Bearer agent_secret'), true)
 })
 
 test('local case update uses the exact signed ID and expected version without creating a draft', async () => {

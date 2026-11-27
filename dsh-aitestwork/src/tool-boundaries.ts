@@ -21,6 +21,7 @@ export const TOOL_BOUNDARIES: Record<string, ToolBoundary> = {
   aitestwork_record_auto_run: 'RUNNER_EVIDENCE',
   // BACKEND_ROUTE
   aitestwork_add_ui_rule_check: 'BACKEND_ROUTE',
+  aitestwork_adopt_reusable_automation: 'BACKEND_ROUTE',
   aitestwork_copy_ui_asset_version: 'BACKEND_ROUTE',
   aitestwork_create_auto_asset: 'BACKEND_ROUTE',
   aitestwork_create_project: 'BACKEND_ROUTE',
@@ -72,6 +73,7 @@ export const TOOL_BOUNDARIES: Record<string, ToolBoundary> = {
   aitestwork_get_my_style: 'READ_ONLY',
   aitestwork_get_project_context: 'READ_ONLY',
   aitestwork_get_reusable_automation: 'READ_ONLY',
+  aitestwork_prepare_auto_execution: 'READ_ONLY',
   aitestwork_get_test_case_detail: 'READ_ONLY',
   aitestwork_get_test_cases: 'READ_ONLY',
   aitestwork_get_tom_context: 'READ_ONLY',

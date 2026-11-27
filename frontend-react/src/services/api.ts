@@ -875,7 +875,8 @@ export type AutomationAsset = {
   status: string; currentVersion: number; latestVersion: number; healCount: number;
   blockedReason?: string | null; createdBy: number;
   sourceCaseVersion: number; caseVersion: number; caseStale: boolean; caseMissing: boolean;
-  reviewStatus: string;
+  reviewStatus: string; caseUnavailable?: boolean;
+  reusablePublicationId?: number | null; systemPublicationId?: number | null; systemRequestId?: number | null;
   archiveReason?: string | null; archivedBy?: number | null; archivedAt?: string | null;
 }
 
@@ -927,6 +928,45 @@ export function confirmUiCoverageTask(projectId: number, taskId: number) {
 export function listAutomationAssets(projectId: number) {
   return api<AutomationAsset[]>(`/api/projects/${projectId}/automation-assets`)
 }
+export type AutomationPublication = {
+  id: number; assetId: number; projectId: number; versionNo: number; scope: 'REUSABLE' | 'SYSTEM';
+  status: string; publishedBy: number; publishedAt: string; reviewedBy?: number | null;
+  reviewedAt?: string | null; retiredBy?: number | null; retiredAt?: string | null;
+  retirementReason?: string | null; supersededBy?: number | null; adoptionCount: number;
+}
+export function getAutomationPermissions(projectId: number) {
+  return api<{ canManage: boolean; canReviewSystem: boolean }>(`/api/projects/${projectId}/automation-assets/permissions`)
+}
+export function listAutomationAssetsPage(projectId: number, page: number, size = 50,
+  scope = 'ALL', type = 'ALL') {
+  const params = new URLSearchParams({ page: String(page), size: String(size), scope, type })
+  return api<PageResult<AutomationAsset>>(`/api/projects/${projectId}/automation-assets/page?${params}`)
+}
+export function getAutomationAsset(projectId: number, assetId: number) {
+  return api<AutomationAsset>(`/api/projects/${projectId}/automation-assets/${assetId}`)
+}
+export function listAutomationPublications(projectId: number, assetId: number) {
+  return api<AutomationPublication[]>(`/api/projects/${projectId}/automation-assets/${assetId}/publications`)
+}
+export type AutomationAdoption = {
+  targetAssetId: number; targetProjectId: number; targetStatus: string; targetVersion: number; adoptedAt: string;
+}
+export function listAutomationAdoptions(projectId: number, assetId: number, publicationId: number) {
+  return api<AutomationAdoption[]>(`/api/projects/${projectId}/automation-assets/${assetId}/publications/${publicationId}/adoptions`)
+}
+export function requestSystemAutomationPublication(projectId: number, assetId: number, versionNo: number) {
+  return api<AutomationPublication>(`/api/projects/${projectId}/automation-assets/${assetId}/versions/${versionNo}/request-system`, { method: 'POST' })
+}
+export function reviewSystemAutomationPublication(projectId: number, assetId: number, publicationId: number, approve: boolean, reason?: string) {
+  return api<AutomationPublication>(`/api/projects/${projectId}/automation-assets/${assetId}/publications/${publicationId}/${approve ? 'approve-system' : 'reject-system'}`, {
+    method: 'POST', ...(approve ? {} : { body: JSON.stringify({ reason }) }),
+  })
+}
+export function withdrawAutomationPublication(projectId: number, assetId: number, publicationId: number, reason: string) {
+  return api<AutomationPublication>(`/api/projects/${projectId}/automation-assets/${assetId}/publications/${publicationId}/withdraw`, {
+    method: 'POST', body: JSON.stringify({ reason }),
+  })
+}
 export function getAutomationVersion(projectId: number, assetId: number, versionNo: number) {
   return api<AutomationVersion>(`/api/projects/${projectId}/automation-assets/${assetId}/versions/${versionNo}`)
 }
@@ -946,8 +986,8 @@ export function proposeAutomationVersion(projectId: number, assetId: number, inp
 export function unblockAutomationAsset(projectId: number, assetId: number) {
   return api<AutomationAsset>(`/api/projects/${projectId}/automation-assets/${assetId}/unblock`, { method: 'POST' })
 }
-export function publishAutomationAsset(projectId: number, assetId: number) {
-  return api<number>(`/api/projects/${projectId}/automation-assets/${assetId}/publish-reusable`, { method: 'POST' })
+export function publishAutomationAsset(projectId: number, assetId: number, versionNo: number) {
+  return api<number>(`/api/projects/${projectId}/automation-assets/${assetId}/versions/${versionNo}/publish-reusable`, { method: 'POST' })
 }
 export function batchPublishAutomationAssets(projectId: number, targets: { assetId: number; versionNo: number }[]) {
   return api<{ assetId: number; versionNo: number; publicationId: number }[]>(
